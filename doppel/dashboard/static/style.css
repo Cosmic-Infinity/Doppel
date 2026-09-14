@@ -898,7 +898,7 @@ html.init-dashboard #view-launch {
   display: none !important;
 }
 html.init-dashboard #view-dashboard {
-  display: grid !important;
+  display: flex !important;
 }
 
 .report-empty {
