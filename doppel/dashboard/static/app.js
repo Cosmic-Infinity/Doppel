@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentDiagnostics = null;
   let activeView = savedView;
   let pingInterval = null;
+  let eventSource = null;
+  let wsActive = false;
 
   // Plain-English Explanations for Info Buttons
   const INFO_DEFINITIONS = {
@@ -227,7 +229,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   fetchStatus();
   fetchDiagnostics();
   fetchSessions();
-  connectWebSocket();
+  connectStream();
 
   // --- API Calls ---
 
@@ -548,39 +550,83 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
-  // --- WebSocket Telemetry & Keep-Alive ---
+  // --- Real-Time Telemetry Streaming: WebSocket with Automatic SSE Fallback ---
 
-  function connectWebSocket() {
+  function connectStream() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/stream`;
-    ws = new WebSocket(wsUrl);
 
-    ws.onopen = () => {
-      if (pingInterval) clearInterval(pingInterval);
-      pingInterval = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send('ping');
+    try {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        wsActive = true;
+        // If SSE fallback was running, close it now that WS is connected
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
         }
-      }, 25000);
-    };
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send('ping');
+          }
+        }, 25000);
+      };
 
-    ws.onmessage = (event) => {
-      try {
-        if (event.data === 'pong') return;
-        const msg = JSON.parse(event.data);
-        handleWebSocketMessage(msg);
-      } catch (e) {
-        console.error('WebSocket parse error:', e);
-      }
-    };
+      ws.onmessage = (event) => {
+        try {
+          if (event.data === 'pong') return;
+          const msg = JSON.parse(event.data);
+          handleStreamMessage(msg);
+        } catch (e) {
+          console.error('WebSocket parse error:', e);
+        }
+      };
 
-    ws.onclose = () => {
-      if (pingInterval) clearInterval(pingInterval);
-      setTimeout(connectWebSocket, 2000);
-    };
+      ws.onerror = () => {
+        // If WS failed to upgrade/connect (e.g. 404 No WebSocket library in Uvicorn), fallback to SSE
+        if (!wsActive) {
+          fallbackToSSE();
+        }
+      };
+
+      ws.onclose = () => {
+        if (pingInterval) clearInterval(pingInterval);
+        const wasActive = wsActive;
+        wsActive = false;
+        if (wasActive) {
+          setTimeout(connectStream, 3000);
+        } else {
+          fallbackToSSE();
+        }
+      };
+    } catch (err) {
+      fallbackToSSE();
+    }
   }
 
-  function handleWebSocketMessage(msg) {
+  function fallbackToSSE() {
+    if (eventSource) return;
+    try {
+      eventSource = new EventSource('/api/stream');
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleStreamMessage(msg);
+        } catch (e) {
+          console.error('SSE parse error:', e);
+        }
+      };
+      eventSource.onerror = () => {
+        // Native EventSource auto-reconnects with backoff
+      };
+    } catch (e) {
+      console.error('Failed to initialize EventSource stream fallback:', e);
+    }
+  }
+
+  function handleStreamMessage(msg) {
     if (msg.type === 'status_update') {
       updateStatusUI(msg.status, msg.config);
       if (msg.active_sessions && msg.active_sessions.length > 0) {

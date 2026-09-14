@@ -1,10 +1,12 @@
 import os
+import json
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -191,6 +193,42 @@ async def websocket_endpoint(websocket: WebSocket):
         controller.disconnect_ws(websocket)
     except Exception:
         controller.disconnect_ws(websocket)
+
+
+@app.get("/api/stream")
+async def sse_stream(request: Request):
+    """Resilient Server-Sent Events (SSE) telemetry stream when WebSockets are unavailable."""
+    async def event_generator():
+        q: asyncio.Queue = asyncio.Queue()
+        controller.active_sse_queues.add(q)
+        try:
+            # Yield initial snapshot immediately upon connection
+            init_payload = controller.get_initial_snapshot()
+            yield f"data: {json.dumps(init_payload)}\n\n"
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Keep-alive heartbeat comment for SSE
+                    yield ": ping\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            controller.active_sse_queues.discard(q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # Mount static directory for frontend

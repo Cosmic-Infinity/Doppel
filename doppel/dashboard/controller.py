@@ -34,6 +34,7 @@ class HoneypotController:
         self.ssh_server = None
         self._server_task: Optional[asyncio.Task] = None
         self.active_websockets: Set[WebSocket] = set()
+        self.active_sse_queues: Set[asyncio.Queue] = set()
 
         # Telemetry DB instance for dashboard queries even when honeypot is stopped
         self.db = TelemetryDB(db_path=self.config.analytics.db_path)
@@ -42,11 +43,8 @@ class HoneypotController:
         """Initialize database so historical telemetry is accessible immediately."""
         await self.db.initialize()
 
-    async def connect_ws(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_websockets.add(websocket)
-        
-        # Build active sessions snapshot
+    def get_initial_snapshot(self) -> Dict[str, Any]:
+        """Build initial status and fleet snapshot payload."""
         active_list = []
         if self.session_manager:
             for s_id, s in self.session_manager.sessions.items():
@@ -63,32 +61,47 @@ class HoneypotController:
                     "cwd": s.cwd,
                 })
 
-        # Send current status and fleet snapshot on initial connection
-        await websocket.send_json({
+        return {
             "type": "status_update",
             "status": self.status,
             "start_time": self.start_time,
             "config": self.get_config_dict(),
             "active_sessions": active_list,
-        })
+        }
+
+    async def connect_ws(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_websockets.add(websocket)
+        await websocket.send_json(self.get_initial_snapshot())
 
     def disconnect_ws(self, websocket: WebSocket):
         self.active_websockets.discard(websocket)
 
     async def broadcast(self, event: Dict[str, Any]):
-        """Push an event to all connected dashboard WebSocket clients."""
-        if not self.active_websockets:
-            return
+        """Push an event to all connected dashboard WebSocket and SSE clients."""
+        # WebSocket broadcast
+        if self.active_websockets:
+            dead_sockets = set()
+            for ws in list(self.active_websockets):
+                try:
+                    await ws.send_json(event)
+                except Exception:
+                    dead_sockets.add(ws)
 
-        dead_sockets = set()
-        for ws in list(self.active_websockets):
-            try:
-                await ws.send_json(event)
-            except Exception:
-                dead_sockets.add(ws)
+            for ws in dead_sockets:
+                self.active_websockets.discard(ws)
 
-        for ws in dead_sockets:
-            self.active_websockets.discard(ws)
+        # SSE broadcast
+        if self.active_sse_queues:
+            dead_queues = set()
+            for q in list(self.active_sse_queues):
+                try:
+                    q.put_nowait(event)
+                except Exception:
+                    dead_queues.add(q)
+
+            for q in dead_queues:
+                self.active_sse_queues.discard(q)
 
     def _on_session_event(self, event_type: str, data: Dict[str, Any]):
         """Callback invoked by SessionManager on honeypot events."""
