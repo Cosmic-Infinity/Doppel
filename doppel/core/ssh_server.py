@@ -23,6 +23,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self.session: Optional[SessionState] = None
         self.chan = None
         self._input_buffer = ""
+        self._last_char_was_cr = False
+        self._execution_lock = asyncio.Lock()
 
     def pty_requested(self, term_type, term_size, term_modes):
         return True
@@ -67,45 +69,59 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             # Ctrl+C
             if char == "\x03":
                 self._input_buffer = ""
+                self._last_char_was_cr = False
                 self.chan.write("^C\r\n")
                 self._write_prompt()
             # Ctrl+D
             elif char == "\x04":
+                self._last_char_was_cr = False
                 if not self._input_buffer:
                     self.chan.write("exit\r\n")
                     self.chan.close()
             # Backspace / Delete
             elif char in ("\x08", "\x7f"):
+                self._last_char_was_cr = False
                 if self._input_buffer:
                     self._input_buffer = self._input_buffer[:-1]
                     self.chan.write("\b \b")
-            # Enter / Return
+            # Enter / Return (handle CR, LF, and CRLF cleanly)
             elif char in ("\r", "\n"):
+                if char == "\n" and self._last_char_was_cr:
+                    self._last_char_was_cr = False
+                    continue
+                self._last_char_was_cr = (char == "\r")
+
                 cmd = self._input_buffer
                 self._input_buffer = ""
                 self.chan.write("\r\n")
                 asyncio.create_task(self._execute_line(cmd))
             else:
+                self._last_char_was_cr = False
                 # Printable ASCII characters
                 if ord(char) >= 32:
                     self._input_buffer += char
                     self.chan.write(char)
 
     async def _execute_line(self, command: str):
-        cmd_clean = command.strip()
-        if cmd_clean in ("exit", "logout"):
-            self.chan.write("logout\r\n")
-            self.chan.close()
-            return
+        async with self._execution_lock:
+            cmd_clean = command.strip()
+            if not cmd_clean:
+                self._write_prompt()
+                return
 
-        if self.session:
-            output = await self.session_manager.process_command(self.session.session_id, command)
-            if output:
-                # Format newlines for terminal carriage returns
-                formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
-                self.chan.write(formatted + "\r\n")
+            if cmd_clean in ("exit", "logout"):
+                self.chan.write("logout\r\n")
+                self.chan.close()
+                return
 
-        self._write_prompt()
+            if self.session:
+                output = await self.session_manager.process_command(self.session.session_id, command)
+                if output:
+                    # Format newlines for terminal carriage returns and strip trailing excess newlines
+                    formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
+                    self.chan.write(formatted.rstrip("\r\n") + "\r\n")
+
+            self._write_prompt()
 
     def connection_lost(self, exc):
         if self.session:

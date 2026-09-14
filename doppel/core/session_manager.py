@@ -118,6 +118,7 @@ class SessionManager:
                 container_id=session.container_id,
                 command=cmd_clean,
                 workdir=session.cwd,
+                user=session.username,
             )
             output = res.stdout if res.stdout else res.stderr
         else:

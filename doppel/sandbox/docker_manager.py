@@ -76,22 +76,41 @@ class DockerSandboxManager:
                 command="/bin/sh",
                 remove=True,
             )
+
+            # Bootstrap standard Linux filesystem layout and ubuntu user (uid 1000)
+            try:
+                container.exec_run(
+                    "/bin/sh -c 'mkdir -p /home/ubuntu /var/www/html /root && "
+                    "(id -u ubuntu >/dev/null 2>&1 || adduser -D -u 1000 ubuntu 2>/dev/null || true) && "
+                    "chown -R 1000:1000 /home/ubuntu 2>/dev/null || true'"
+                )
+            except Exception as init_err:
+                logger.debug(f"Container bootstrap notice: {init_err}")
+
             logger.info(f"Created sandbox container {container.short_id} for session {session_id}")
             return container.id
         except Exception as e:
             logger.error(f"Failed to spawn container for session {session_id}: {e}")
             return None
 
-    def execute_in_sandbox(self, container_id: str, command: str, workdir: str = "/root") -> ExecutionResult:
+    def execute_in_sandbox(
+        self,
+        container_id: str,
+        command: str,
+        workdir: str = "/root",
+        user: str = "ubuntu",
+    ) -> ExecutionResult:
         """Run a command inside the session's container."""
         if not self.is_available or not self.client or not container_id:
             return ExecutionResult(stdout="", stderr="Sandbox unavailable", exit_code=1)
 
         try:
             container = self.client.containers.get(container_id)
+            # Safe execution: ensure target directory exists, navigate inside shell rather than failing OCI
+            safe_script = f"mkdir -p '{workdir}' 2>/dev/null; cd '{workdir}' 2>/dev/null || cd /; {command}"
             exec_res = container.exec_run(
-                cmd=["/bin/sh", "-c", command],
-                workdir=workdir,
+                cmd=["/bin/sh", "-c", safe_script],
+                user=user if user != "root" else "0:0",
                 demux=True,
             )
             stdout_bytes, stderr_bytes = exec_res.output
