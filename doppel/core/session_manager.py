@@ -53,6 +53,19 @@ class SessionManager:
         self.reporter = reporter
         self.sessions: Dict[str, SessionState] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self.event_callbacks: List[Any] = []
+
+    def register_event_listener(self, callback: Any):
+        self.event_callbacks.append(callback)
+
+    def _notify(self, event_type: str, data: Dict[str, Any]):
+        for cb in self.event_callbacks:
+            try:
+                res = cb(event_type, data)
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception as e:
+                logger.debug(f"Event callback notification error: {e}")
 
     async def create_session(
         self,
@@ -88,6 +101,14 @@ class SessionManager:
             password=password,
         )
         logger.info(f"Initialized session {sess_id[:8]} for {username}@{remote_ip}:{remote_port}")
+        self._notify("session_created", {
+            "session_id": sess_id,
+            "remote_ip": remote_ip,
+            "remote_port": remote_port,
+            "username": username,
+            "start_time": session.start_time,
+            "cwd": session.cwd,
+        })
         return session
 
     def get_session(self, session_id: str) -> Optional[SessionState]:
@@ -153,6 +174,15 @@ class SessionManager:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+        self._notify("command_executed", {
+            "session_id": session_id,
+            "command": cmd_clean,
+            "cwd": session.cwd,
+            "output": output,
+            "decision": decision.value,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
         return output
 
     def _handle_builtin(self, session: SessionState, command: str) -> str:
@@ -197,6 +227,11 @@ class SessionManager:
             )
             if threat_meta:
                 session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
+                self._notify("threat_analyzed", {
+                    "session_id": session.session_id,
+                    "threat": threat_meta,
+                    "threat_score": session.threat_score,
+                })
 
         await self.db.log_command(
             session_id=session.session_id,
@@ -225,4 +260,8 @@ class SessionManager:
         logger.info(f"Session {session_id[:8]} closed. Generating incident report...")
 
         report_path = await self.reporter.generate_session_report(session_id)
+        self._notify("session_closed", {
+            "session_id": session_id,
+            "report_path": str(report_path) if report_path else None,
+        })
         return str(report_path) if report_path else None

@@ -1,0 +1,706 @@
+// Doppel Dashboard Client - Minimalist & Proactive
+document.addEventListener('DOMContentLoaded', () => {
+  let activeSessionId = null;
+  let honeypotStatus = 'STOPPED';
+  let ws = null;
+  let sessionsCache = {};
+  let currentDiagnostics = null;
+  let activeView = 'launch'; // 'launch' or 'dashboard'
+
+  // Plain-English Explanations for Info Buttons
+  const INFO_DEFINITIONS = {
+    llm: `<strong>AI Deception Model</strong><br><br>
+The AI engine dynamically synthesizes authentic Linux terminal outputs, fake system files, and realistic honeytokens (like database passwords and API keys) on the fly. It also acts as your automated SOC analyst, tagging every attacker command with MITRE ATT&CK techniques.<br><br>
+<strong>What is Mock Mode?</strong><br>
+Mock Mode runs Doppel using built-in, realistic pre-programmed responses without connecting to an actual AI model. This is useful for offline testing, code review, or when your GPU / Ollama server is offline.`,
+    
+    docker: `<strong>Execution Sandbox (Docker)</strong><br><br>
+Runs standard, safe Linux commands (such as <code>ls</code>, <code>pwd</code>, <code>id</code>) inside an isolated, disposable micro-container with zero network egress (<code>--network none</code>).<br><br>
+<strong>Do I need Docker?</strong><br>
+No! Docker is completely optional. If Docker Desktop is closed, Doppel automatically operates in pure AI simulation mode—the LLM simulates the entire bash environment with zero risk to your host machine.`,
+    
+    port: `<strong>SSH Listener Port</strong><br><br>
+The TCP network port where Doppel waits for incoming attacker SSH connections. The default is <code>2222</code> so it does not conflict with your host machine's standard SSH daemon (port 22).<br><br>
+<strong>Port Conflicts:</strong><br>
+If port 2222 is already in use by another program, click one of our 1-click alternative buttons (like 2223 or 22222) to switch ports instantly.`,
+    
+    persona: `<strong>Deception Persona</strong><br><br>
+Controls the honeypot's camouflage identity. When an attacker probes with <code>uname</code>, inspects <code>/etc/os-release</code>, or searches for configurations, all responses authentically match this persona (e.g. an Ubuntu 22.04 Web Server vs. an AWS EC2 Worker Node).`
+  };
+
+  // DOM Elements - Views
+  const viewLaunch = document.getElementById('view-launch');
+  const viewDashboard = document.getElementById('view-dashboard');
+  const btnViewSwitch = document.getElementById('btn-view-switch');
+  const btnViewSwitchLabel = document.getElementById('btn-view-switch-label');
+
+  // DOM Elements - Top Bar
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const metaPort = document.getElementById('nav-meta-port');
+  const metaModel = document.getElementById('nav-meta-model');
+  const btnToggle = document.getElementById('btn-toggle-honeypot');
+  const btnToggleLabel = document.getElementById('btn-toggle-label');
+
+  // DOM Elements - Launch Screen Diagnostics
+  const pillLlm = document.getElementById('pill-llm');
+  const descLlm = document.getElementById('desc-llm');
+  const selectLlmModel = document.getElementById('select-llm-model');
+  const actionBarLlm = document.getElementById('action-bar-llm');
+
+  const pillDocker = document.getElementById('pill-docker');
+  const descDocker = document.getElementById('desc-docker');
+  const actionBarDocker = document.getElementById('action-bar-docker');
+
+  const pillPort = document.getElementById('pill-port');
+  const descPort = document.getElementById('desc-port');
+  const actionBarPort = document.getElementById('action-bar-port');
+  const inputCustomPort = document.getElementById('input-custom-port');
+  const btnApplyCustomPort = document.getElementById('btn-apply-custom-port');
+
+  const pillPersona = document.getElementById('pill-persona');
+  const personaRadios = document.querySelectorAll('input[name="persona-select"]');
+
+  const launchSummaryDot = document.getElementById('launch-summary-dot');
+  const launchSummaryText = document.getElementById('launch-summary-text');
+  const btnLaunchPrimary = document.getElementById('btn-launch-primary');
+
+  // DOM Elements - Dashboard Fleet & Inspector
+  const sessionCountPill = document.getElementById('session-count-pill');
+  const sessionsContainer = document.getElementById('sessions-container');
+  const sessionsEmpty = document.getElementById('sessions-empty');
+  const emptyInspector = document.getElementById('empty-inspector');
+  const sessionDetail = document.getElementById('session-detail');
+  const detailLivePill = document.getElementById('detail-live-pill');
+  const detailIp = document.getElementById('detail-ip');
+  const detailUser = document.getElementById('detail-user');
+  const detailSessionId = document.getElementById('detail-session-id');
+  const detailThreatScore = document.getElementById('detail-threat-score');
+  const detailCmdCount = document.getElementById('detail-cmd-count');
+  const detailCwd = document.getElementById('detail-cwd');
+  const terminalOutput = document.getElementById('terminal-output');
+  const terminalWindow = document.getElementById('terminal-window');
+  const telemetryTableBody = document.getElementById('telemetry-table-body');
+  const reportEmpty = document.getElementById('report-empty');
+  const reportContent = document.getElementById('report-content');
+
+  // DOM Elements - Info Modal
+  const infoModal = document.getElementById('info-modal');
+  const infoModalTitle = document.getElementById('info-modal-title');
+  const infoModalBody = document.getElementById('info-modal-body');
+  const btnCloseInfo = document.getElementById('btn-close-info');
+
+  // --- Initialize ---
+  fetchStatus();
+  fetchDiagnostics();
+  fetchSessions();
+  connectWebSocket();
+
+  // --- View Management ---
+
+  function switchView(viewName) {
+    activeView = viewName;
+    if (viewName === 'launch') {
+      viewLaunch.classList.remove('hidden');
+      viewDashboard.classList.add('hidden');
+      btnViewSwitchLabel.textContent = 'Live Dashboard';
+    } else {
+      viewLaunch.classList.add('hidden');
+      viewDashboard.classList.remove('hidden');
+      btnViewSwitchLabel.textContent = 'Setup & Config';
+    }
+  }
+
+  btnViewSwitch.addEventListener('click', () => {
+    switchView(activeView === 'launch' ? 'dashboard' : 'launch');
+  });
+
+  // --- API Calls ---
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      updateStatusUI(data.status, data.config);
+    } catch (e) {
+      console.error('Error fetching status:', e);
+    }
+  }
+
+  async function fetchDiagnostics() {
+    try {
+      const res = await fetch('/api/diagnostics');
+      const data = await res.json();
+      currentDiagnostics = data;
+      renderDiagnosticsUI(data);
+    } catch (e) {
+      console.error('Error fetching diagnostics:', e);
+    }
+  }
+
+  async function fetchSessions() {
+    try {
+      const res = await fetch('/api/sessions');
+      const data = await res.json();
+      renderSessionsList(data.sessions || []);
+    } catch (e) {
+      console.error('Error fetching sessions:', e);
+    }
+  }
+
+  async function applyQuickFix(action, value) {
+    try {
+      const res = await fetch('/api/quick-fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, value })
+      });
+      const data = await res.json();
+      if (data.diagnostics) {
+        renderDiagnosticsUI(data.diagnostics);
+      }
+      fetchStatus();
+    } catch (e) {
+      console.error('Error applying quick fix:', e);
+    }
+  }
+
+  // --- Render Diagnostics on Launch Screen ---
+
+  function renderDiagnosticsUI(diag) {
+    if (!diag) return;
+
+    // 1. LLM Diagnostics
+    const llm = diag.llm;
+    if (llm.status === 'ready') {
+      pillLlm.className = 'diag-pill ready';
+      pillLlm.textContent = `Ready (${llm.latency_ms}ms)`;
+      descLlm.textContent = llm.detail;
+      actionBarLlm.innerHTML = '';
+    } else if (llm.status === 'mock_mode') {
+      pillLlm.className = 'diag-pill neutral';
+      pillLlm.textContent = 'Mock Mode';
+      descLlm.textContent = llm.detail;
+      actionBarLlm.innerHTML = `
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-mock">Switch to Live LLM</button>
+      `;
+      document.getElementById('btn-fix-disable-mock')?.addEventListener('click', () => {
+        applyQuickFix('toggle_mock', false);
+      });
+    } else if (llm.status === 'model_missing') {
+      pillLlm.className = 'diag-pill warning';
+      pillLlm.textContent = 'Model Missing';
+      descLlm.textContent = llm.detail;
+      actionBarLlm.innerHTML = `
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">⚡ Use Mock Mode Instead</button>
+      `;
+      document.getElementById('btn-fix-enable-mock')?.addEventListener('click', () => {
+        applyQuickFix('toggle_mock', true);
+      });
+    } else {
+      pillLlm.className = 'diag-pill error';
+      pillLlm.textContent = 'Offline';
+      descLlm.textContent = `${llm.detail} ${llm.suggestion || ''}`;
+      actionBarLlm.innerHTML = `
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">⚡ Switch to Mock Mode (No GPU Needed)</button>
+      `;
+      document.getElementById('btn-fix-enable-mock')?.addEventListener('click', () => {
+        applyQuickFix('toggle_mock', true);
+      });
+    }
+
+    // Populate model select with installed models if available
+    if (llm.models_available && llm.models_available.length > 0) {
+      selectLlmModel.innerHTML = '';
+      llm.models_available.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m.toLowerCase() === (llm.configured_model || '').toLowerCase()) {
+          opt.selected = true;
+        }
+        selectLlmModel.appendChild(opt);
+      });
+    }
+
+    // 2. Docker Diagnostics
+    const docker = diag.docker;
+    if (docker.status === 'ready') {
+      pillDocker.className = 'diag-pill ready';
+      pillDocker.textContent = 'Container Sandbox Active';
+      descDocker.textContent = docker.detail;
+      actionBarDocker.innerHTML = `
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-sandbox">Switch to AI Simulation</button>
+      `;
+      document.getElementById('btn-fix-disable-sandbox')?.addEventListener('click', () => {
+        applyQuickFix('toggle_sandbox', false);
+      });
+    } else if (docker.status === 'disabled') {
+      pillDocker.className = 'diag-pill neutral';
+      pillDocker.textContent = 'AI Simulation';
+      descDocker.textContent = docker.detail;
+      actionBarDocker.innerHTML = `
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-sandbox">Enable Docker Sandbox</button>
+      `;
+      document.getElementById('btn-fix-enable-sandbox')?.addEventListener('click', () => {
+        applyQuickFix('toggle_sandbox', true);
+      });
+    } else {
+      pillDocker.className = 'diag-pill neutral';
+      pillDocker.textContent = 'Simulated Mode';
+      descDocker.textContent = docker.detail;
+      actionBarDocker.innerHTML = `
+        <span style="font-size:11px;color:var(--text-muted)">Zero-risk simulation enabled automatically.</span>
+      `;
+    }
+
+    // 3. Port Diagnostics
+    const port = diag.port;
+    inputCustomPort.value = port.port;
+    if (port.available) {
+      pillPort.className = 'diag-pill ready';
+      pillPort.textContent = `Port ${port.port} Free`;
+      descPort.textContent = port.detail;
+      actionBarPort.innerHTML = '';
+    } else {
+      pillPort.className = 'diag-pill error';
+      pillPort.textContent = `Port ${port.port} Busy!`;
+      descPort.textContent = port.detail;
+      
+      let alternativesHtml = '<span style="font-size:11px;margin-right:4px;">Quick-switch:</span>';
+      (port.suggested_alternatives || [2223, 22222]).forEach(alt => {
+        alternativesHtml += `<button type="button" class="btn-quick-fix btn-alt-port" data-port="${alt}">Use Port ${alt}</button> `;
+      });
+      actionBarPort.innerHTML = alternativesHtml;
+
+      document.querySelectorAll('.btn-alt-port').forEach(btn => {
+        btn.addEventListener('click', () => {
+          applyQuickFix('set_port', btn.dataset.port);
+        });
+      });
+    }
+
+    // 4. Persona
+    if (diag.persona) {
+      const currentPersona = diag.persona.current || 'ubuntu_web_server';
+      personaRadios.forEach(radio => {
+        radio.checked = (radio.value === currentPersona);
+      });
+      const names = {
+        ubuntu_web_server: 'Ubuntu Web Server',
+        cloud_worker: 'AWS Cloud Worker',
+        fintech_api: 'Fintech Gateway'
+      };
+      pillPersona.textContent = names[currentPersona] || currentPersona;
+    }
+
+    // Summary bar
+    if (port.available && (llm.status === 'ready' || llm.status === 'mock_mode')) {
+      launchSummaryDot.className = 'summary-dot ready';
+      launchSummaryText.textContent = `Ready to listen on port ${port.port} with persona: ${pillPersona.textContent}.`;
+    } else if (!port.available) {
+      launchSummaryDot.className = 'summary-dot warning';
+      launchSummaryText.textContent = `Port ${port.port} is busy. Use a quick-switch alternative above or change ports.`;
+    } else {
+      launchSummaryDot.className = 'summary-dot warning';
+      launchSummaryText.textContent = `LLM is offline. Click 'Switch to Mock Mode' above for zero-compute testing.`;
+    }
+  }
+
+  // --- Event Listeners for Controls on Launch Screen ---
+
+  selectLlmModel.addEventListener('change', (e) => {
+    applyQuickFix('set_model', e.target.value);
+  });
+
+  btnApplyCustomPort.addEventListener('click', () => {
+    const val = parseInt(inputCustomPort.value, 10);
+    if (val > 0 && val < 65536) {
+      applyQuickFix('set_port', val);
+    }
+  });
+
+  personaRadios.forEach(radio => {
+    radio.addEventListener('change', async (e) => {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persona: e.target.value })
+      });
+      fetchDiagnostics();
+      fetchStatus();
+    });
+  });
+
+  // Launch Button (Both primary on launch screen and nav button)
+  async function launchHoneypot() {
+    btnLaunchPrimary.disabled = true;
+    btnToggle.disabled = true;
+    try {
+      await fetch('/api/start', { method: 'POST' });
+    } catch (e) {
+      console.error('Error starting honeypot:', e);
+    } finally {
+      btnLaunchPrimary.disabled = false;
+      btnToggle.disabled = false;
+      fetchStatus();
+      fetchDiagnostics();
+    }
+  }
+
+  async function stopHoneypot() {
+    btnToggle.disabled = true;
+    try {
+      await fetch('/api/stop', { method: 'POST' });
+    } catch (e) {
+      console.error('Error stopping honeypot:', e);
+    } finally {
+      btnToggle.disabled = false;
+      fetchStatus();
+      fetchDiagnostics();
+    }
+  }
+
+  btnLaunchPrimary.addEventListener('click', launchHoneypot);
+
+  btnToggle.addEventListener('click', () => {
+    if (honeypotStatus === 'RUNNING') {
+      stopHoneypot();
+    } else {
+      launchHoneypot();
+    }
+  });
+
+  // --- Info Tooltips Handler ---
+  document.querySelectorAll('.info-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const topic = btn.dataset.info;
+      const content = INFO_DEFINITIONS[topic];
+      if (content) {
+        const titles = {
+          llm: 'AI Deception Model & Mock Mode',
+          docker: 'Docker Sandbox vs AI Simulation',
+          port: 'SSH Listener Port & Conflicts',
+          persona: 'Deception Personas'
+        };
+        infoModalTitle.textContent = titles[topic] || 'Explanation';
+        infoModalBody.innerHTML = content;
+        infoModal.classList.remove('hidden');
+      }
+    });
+  });
+
+  btnCloseInfo.addEventListener('click', () => {
+    infoModal.classList.add('hidden');
+  });
+
+  infoModal.addEventListener('click', (e) => {
+    if (e.target === infoModal) {
+      infoModal.classList.add('hidden');
+    }
+  });
+
+  // --- Status UI & Auto-Switching ---
+
+  function updateStatusUI(status, config) {
+    honeypotStatus = status;
+    statusDot.className = 'status-dot ' + status.toLowerCase();
+    statusText.textContent = status === 'RUNNING' ? 'Active' : status;
+
+    if (config) {
+      metaPort.textContent = `Port: ${config.honeypot_port}`;
+      metaModel.textContent = `Model: ${config.llm_model}`;
+    }
+
+    if (status === 'RUNNING') {
+      btnToggleLabel.textContent = 'Stop Honeypot';
+      btnToggle.className = 'btn btn-primary danger';
+      btnViewSwitch.classList.remove('hidden');
+
+      // Auto-switch to live dashboard view if we were on launch screen
+      if (activeView === 'launch') {
+        switchView('dashboard');
+      }
+    } else {
+      btnToggleLabel.textContent = 'Start Honeypot';
+      btnToggle.className = 'btn btn-primary';
+
+      // If stopped, auto-switch to launch/setup screen
+      if (activeView === 'dashboard' && Object.keys(sessionsCache).length === 0) {
+        switchView('launch');
+      }
+    }
+  }
+
+  // --- WebSocket Telemetry ---
+
+  function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/stream`;
+    ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleWebSocketMessage(msg);
+      } catch (e) {
+        console.error('WebSocket parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(connectWebSocket, 2000);
+    };
+  }
+
+  function handleWebSocketMessage(msg) {
+    if (msg.type === 'status_update') {
+      updateStatusUI(msg.status, msg.config);
+      fetchDiagnostics();
+    } else if (msg.type === 'session_created') {
+      const sess = msg.data;
+      sess.is_active = true;
+      sess.command_count = 0;
+      sess.max_threat_score = 0;
+      sessionsCache[sess.session_id] = sess;
+      renderSessionsList(Object.values(sessionsCache));
+      if (!activeSessionId) {
+        selectSession(sess.session_id);
+      }
+      // Switch to dashboard view automatically when attack begins
+      switchView('dashboard');
+    } else if (msg.type === 'command_executed') {
+      const data = msg.data;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].command_count = (sessionsCache[data.session_id].command_count || 0) + 1;
+        sessionsCache[data.session_id].last_command = data.command;
+        renderSessionsList(Object.values(sessionsCache));
+      }
+
+      if (activeSessionId === data.session_id) {
+        appendTerminalCommand(data.cwd, data.command, data.output, data.decision);
+        appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
+        detailCwd.textContent = data.cwd;
+        detailCmdCount.textContent = (parseInt(detailCmdCount.textContent, 10) || 0) + 1;
+      }
+    } else if (msg.type === 'threat_analyzed') {
+      const data = msg.data;
+      const score = data.threat_score || 0;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].max_threat_score = Math.max(
+          sessionsCache[data.session_id].max_threat_score || 0,
+          score
+        );
+        renderSessionsList(Object.values(sessionsCache));
+      }
+
+      if (activeSessionId === data.session_id) {
+        detailThreatScore.textContent = `${score} / 100`;
+        updateLastTelemetryRow(data.threat);
+      }
+    } else if (msg.type === 'session_closed') {
+      const data = msg.data;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].is_active = false;
+        renderSessionsList(Object.values(sessionsCache));
+      }
+      if (activeSessionId === data.session_id) {
+        detailLivePill.textContent = 'ENDED';
+        detailLivePill.classList.add('ended');
+        fetchSessionReport(data.session_id);
+      }
+    }
+  }
+
+  // --- Session List & Inspector Logic ---
+
+  function renderSessionsList(sessions) {
+    sessions.forEach(s => {
+      sessionsCache[s.session_id] = s;
+    });
+
+    sessionCountPill.textContent = sessions.length;
+
+    if (sessions.length === 0) {
+      sessionsEmpty.classList.remove('hidden');
+      return;
+    }
+
+    sessionsEmpty.classList.add('hidden');
+    Array.from(sessionsContainer.children).forEach(child => {
+      if (child.id !== 'sessions-empty') child.remove();
+    });
+
+    sessions.forEach(sess => {
+      const card = document.createElement('div');
+      card.className = `session-card ${sess.session_id === activeSessionId ? 'selected' : ''}`;
+      card.dataset.sessionId = sess.session_id;
+
+      const isLive = sess.is_active || !sess.end_time;
+      const score = sess.max_threat_score || sess.threat_score || 0;
+      const scoreClass = score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low');
+
+      card.innerHTML = `
+        <div class="card-top">
+          <div class="card-status">
+            <span class="card-status-dot ${isLive ? 'live' : 'ended'}"></span>
+            <span class="card-ip">${escapeHtml(sess.remote_ip || 'unknown')}</span>
+          </div>
+          <span class="card-score ${scoreClass}">${score}</span>
+        </div>
+        <div class="card-bottom">
+          <span>${escapeHtml(sess.username || 'user')}</span>
+          <span class="card-last-cmd">${escapeHtml(sess.last_command || 'connected')}</span>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        selectSession(sess.session_id);
+      });
+
+      sessionsContainer.appendChild(card);
+    });
+  }
+
+  function selectSession(sessionId) {
+    activeSessionId = sessionId;
+    document.querySelectorAll('.session-card').forEach(card => {
+      card.classList.toggle('selected', card.dataset.sessionId === sessionId);
+    });
+
+    fetchSessionDetails(sessionId);
+    fetchSessionReport(sessionId);
+  }
+
+  async function fetchSessionDetails(sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`);
+      if (!res.ok) return;
+      const details = await res.json();
+      renderSessionDetail(details);
+    } catch (e) {
+      console.error('Error fetching session details:', e);
+    }
+  }
+
+  async function fetchSessionReport(sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/report`);
+      if (res.ok) {
+        const markdown = await res.text();
+        reportEmpty.classList.add('hidden');
+        reportContent.classList.remove('hidden');
+        reportContent.textContent = markdown;
+      } else {
+        reportEmpty.classList.remove('hidden');
+        reportContent.classList.add('hidden');
+      }
+    } catch (e) {
+      reportEmpty.classList.remove('hidden');
+      reportContent.classList.add('hidden');
+    }
+  }
+
+  function renderSessionDetail(session) {
+    emptyInspector.classList.add('hidden');
+    sessionDetail.classList.remove('hidden');
+
+    const isLive = session.is_active || !session.end_time;
+    detailLivePill.textContent = isLive ? 'LIVE' : 'ENDED';
+    detailLivePill.className = `live-pill ${isLive ? '' : 'ended'}`;
+
+    detailIp.textContent = `${session.remote_ip}:${session.remote_port || 0}`;
+    detailUser.textContent = `user: ${session.username}`;
+    detailSessionId.textContent = `ID: ${session.session_id}`;
+    detailThreatScore.textContent = `${session.max_threat_score || 0} / 100`;
+    detailCmdCount.textContent = (session.commands || []).length;
+    detailCwd.textContent = session.cwd || '/home/ubuntu';
+
+    terminalOutput.innerHTML = '';
+    (session.commands || []).forEach(cmd => {
+      appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision);
+    });
+
+    telemetryTableBody.innerHTML = '';
+    (session.commands || []).forEach(cmd => {
+      appendTelemetryRow(
+        cmd.timestamp,
+        cmd.command,
+        cmd.route_decision,
+        cmd.technique_id || '—',
+        cmd.technique_name || '—',
+        cmd.threat_score || 0
+      );
+    });
+  }
+
+  function appendTerminalCommand(cwd, command, output, decision) {
+    const line = document.createElement('div');
+    line.className = 'terminal-line';
+
+    const routeClass = decision === 'sandbox' ? 'sandbox' : 'deception';
+    const routeLabel = decision === 'sandbox' ? 'Sandbox' : (decision === 'builtin' ? 'Builtin' : 'Deception');
+    const formattedOutput = output ? escapeHtml(output).replace(/\r\n/g, '\n') : '';
+
+    line.innerHTML = `
+      <div>
+        <span class="terminal-prompt">ubuntu@prod-api-node-01:${escapeHtml(cwd || '~')}$ </span>
+        <span class="terminal-cmd">${escapeHtml(command)}</span>
+        <span class="terminal-route-tag ${routeClass}">${routeLabel}</span>
+      </div>
+      ${formattedOutput ? `<div class="terminal-output-block">${formattedOutput}</div>` : ''}
+    `;
+
+    terminalOutput.appendChild(line);
+    terminalWindow.scrollTop = terminalWindow.scrollHeight;
+  }
+
+  function appendTelemetryRow(timestamp, command, decision, techId, techName, score) {
+    const tr = document.createElement('tr');
+    const timeStr = timestamp ? timestamp.split('T')[1]?.substring(0, 8) : '—';
+    tr.innerHTML = `
+      <td>${timeStr}</td>
+      <td><code>${escapeHtml(command)}</code></td>
+      <td><span class="badge-tag">${escapeHtml(decision || '—')}</span></td>
+      <td><span class="badge-tag">${escapeHtml(techId || '—')}</span></td>
+      <td>${escapeHtml(techName || '—')}</td>
+      <td>${score}</td>
+    `;
+    telemetryTableBody.appendChild(tr);
+  }
+
+  function updateLastTelemetryRow(threat) {
+    if (!threat || !telemetryTableBody.lastElementChild) return;
+    const lastRow = telemetryTableBody.lastElementChild;
+    const cells = lastRow.querySelectorAll('td');
+    if (cells.length >= 6) {
+      cells[3].innerHTML = `<span class="badge-tag">${escapeHtml(threat.technique_id || '—')}</span>`;
+      cells[4].textContent = threat.technique_name || '—';
+      cells[5].textContent = threat.threat_score || 0;
+    }
+  }
+
+  // Tabs switching
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      btn.classList.add('active');
+      const tabId = `tab-${btn.dataset.tab}`;
+      const targetContent = document.getElementById(tabId);
+      if (targetContent) targetContent.classList.add('active');
+    });
+  });
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+});

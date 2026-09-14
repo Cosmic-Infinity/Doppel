@@ -187,3 +187,26 @@ pytest tests/
   ```bash
   python -m doppel.cli report <session_id>
   ```
+
+---
+
+## 🗺️ Roadmap & Feature Suggestions
+
+> **Agent Instruction**: Keep this roadmap updated whenever features are initiated, modified, or completed. Mark completed features with `[x]` and add brief operational notes.
+
+- [ ] **Minimalist Web SOC Dashboard & Control Center** `[In Progress]`
+  - GUI-driven lifecycle control: start, stop, and configure the honeypot without manual CLI commands.
+  - Multi-instance attack monitor with individual session drilldown and real-time terminal inspection.
+  - Live WebSocket telemetry and MITRE ATT&CK breakdown.
+- [ ] **Active AI Tar-Pit & Decoy Breadcrumbs**
+  - Dynamic latency scaling based on attacker threat score to exhaust attacker resources.
+  - Contextual decoy breadcrumbs (fake internal subnets, mock Git repositories, decoy backup archives).
+- [ ] **Canarytoken Integration (Real-World Attribution & Tracking)**
+  - Dynamic injection of verifiable Canarytokens (AWS API keys, DNS tokens, webhooks) into honeytoken files.
+  - External alerts when exfiltrated credentials are tested on the public internet.
+- [ ] **Multi-Protocol Deception / Web Sensor (Port 80/8080)**
+  - HTTP honeypot simulating internal administrative panels and REST APIs.
+  - LLM-synthesized responses to web exploit probes (SQLi, path traversal, unauthenticated endpoints).
+- [ ] **Automated Adversary Profiling**
+  - Behavioral classification distinguishing automated mass-scanners, brute-force bots, and interactive human operators.
+

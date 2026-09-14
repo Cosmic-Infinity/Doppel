@@ -204,5 +204,33 @@ def report(
     asyncio.run(run_report())
 
 
+@app.command()
+def dashboard(
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host to bind dashboard to"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to serve dashboard on"),
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config.yaml"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose debug logging"),
+):
+    """Start the Doppel Web SOC Dashboard & GUI Control Center."""
+    setup_logging(verbose)
+    import uvicorn
+    from doppel.dashboard.app import app as fastapi_app, controller
+
+    if config_path:
+        controller.config_path = config_path
+        controller.config = get_config(config_path)
+
+    console.print(Panel.fit(
+        f"[bold green]Doppel Control Center[/bold green]\n"
+        f"[cyan]Dashboard URL:[/cyan] http://{host if host != '0.0.0.0' else 'localhost'}:{port}\n"
+        f"[cyan]Controls:[/cyan] Start/Stop honeypot & configure directly via browser\n"
+        f"[cyan]Telemetry:[/cyan] Live multi-session fleet monitor and terminal streams",
+        title="🖥️ Web Dashboard",
+        border_style="cyan"
+    ))
+
+    uvicorn.run(fastapi_app, host=host, port=port, log_level="debug" if verbose else "info")
+
+
 if __name__ == "__main__":
     app()

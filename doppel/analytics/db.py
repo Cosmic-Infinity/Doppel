@@ -145,3 +145,26 @@ class TelemetryDB:
                 session_dict["commands"] = [dict(r) for r in cmd_rows]
 
             return session_dict
+
+    async def get_all_sessions(self) -> List[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM sessions ORDER BY start_time DESC") as cur:
+                rows = await cur.fetchall()
+                sessions = [dict(r) for r in rows]
+
+            for s in sessions:
+                async with db.execute(
+                    "SELECT COUNT(*) FROM commands WHERE session_id = ?", (s["session_id"],)
+                ) as cur:
+                    c_row = await cur.fetchone()
+                    s["command_count"] = c_row[0] if c_row else 0
+
+                async with db.execute(
+                    "SELECT command FROM commands WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                    (s["session_id"],),
+                ) as cur:
+                    last_cmd_row = await cur.fetchone()
+                    s["last_command"] = last_cmd_row[0] if last_cmd_row else ""
+
+            return sessions

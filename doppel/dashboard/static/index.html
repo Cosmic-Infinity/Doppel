@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doppel - AI Honeypot Control</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Navigation Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <span class="logo-mark">D</span>
+        <div class="brand-text">
+          <span class="brand-title">Doppel</span>
+          <span class="brand-subtitle">AI Deception Honeypot</span>
+        </div>
+      </div>
+
+      <div class="nav-center">
+        <div class="status-indicator" id="system-status-indicator">
+          <span class="status-dot stopped" id="status-dot"></span>
+          <span class="status-text" id="status-text">Stopped</span>
+        </div>
+        <div class="meta-badge" id="nav-meta-port">Port: 2222</div>
+        <div class="meta-badge" id="nav-meta-model">Model: qwen2.5-coder:7b</div>
+      </div>
+
+      <div class="nav-actions">
+        <button id="btn-view-switch" class="btn btn-secondary hidden">
+          <span id="btn-view-switch-label">Live Dashboard</span>
+        </button>
+        <button id="btn-toggle-honeypot" class="btn btn-primary">
+          <span class="btn-icon">▶</span>
+          <span id="btn-toggle-label">Start Honeypot</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- VIEW 1: Pre-Flight Launch & Setup Screen (Shown when Stopped) -->
+    <section class="launch-view" id="view-launch">
+      <div class="launch-container">
+        <div class="launch-header">
+          <h1>System Setup & Diagnostics</h1>
+          <p class="subtitle">Review environment readiness and configure deception parameters before launching.</p>
+        </div>
+
+        <div class="diag-grid">
+          <!-- Card 1: LLM Inference & Model -->
+          <div class="diag-card" id="card-llm">
+            <div class="card-header">
+              <div class="card-title-wrap">
+                <span class="card-title">AI Deception Model</span>
+                <button class="info-btn" data-info="llm" title="What is this?">ⓘ</button>
+              </div>
+              <span class="diag-pill" id="pill-llm">Checking...</span>
+            </div>
+            <p class="card-desc" id="desc-llm">Probing local Ollama / vLLM endpoint...</p>
+            
+            <div class="card-controls">
+              <div class="control-row">
+                <label for="select-llm-model">Active Model</label>
+                <select id="select-llm-model" class="select-input">
+                  <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
+                </select>
+              </div>
+              <div class="card-action-bar" id="action-bar-llm">
+                <!-- 1-Click Fixes dynamically inserted -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Execution Sandbox (Docker) -->
+          <div class="diag-card" id="card-docker">
+            <div class="card-header">
+              <div class="card-title-wrap">
+                <span class="card-title">Execution Sandbox</span>
+                <button class="info-btn" data-info="docker" title="What is this?">ⓘ</button>
+              </div>
+              <span class="diag-pill" id="pill-docker">Checking...</span>
+            </div>
+            <p class="card-desc" id="desc-docker">Checking Docker Engine named pipe...</p>
+
+            <div class="card-controls">
+              <div class="card-action-bar" id="action-bar-docker">
+                <!-- Docker switch buttons -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3: SSH Port & Network -->
+          <div class="diag-card" id="card-port">
+            <div class="card-header">
+              <div class="card-title-wrap">
+                <span class="card-title">SSH Listener Port</span>
+                <button class="info-btn" data-info="port" title="What is this?">ⓘ</button>
+              </div>
+              <span class="diag-pill" id="pill-port">Port 2222</span>
+            </div>
+            <p class="card-desc" id="desc-port">Testing port availability...</p>
+
+            <div class="card-controls">
+              <div class="card-action-bar" id="action-bar-port">
+                <!-- Quick port alternatives if conflict -->
+              </div>
+              <div class="control-row inline-row">
+                <label for="input-custom-port">Custom Port:</label>
+                <input type="number" id="input-custom-port" class="text-input-sm" value="2222">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-custom-port">Set</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 4: Deception Persona -->
+          <div class="diag-card" id="card-persona">
+            <div class="card-header">
+              <div class="card-title-wrap">
+                <span class="card-title">Deception Persona</span>
+                <button class="info-btn" data-info="persona" title="What is this?">ⓘ</button>
+              </div>
+              <span class="diag-pill neutral" id="pill-persona">Ubuntu Web Server</span>
+            </div>
+            <p class="card-desc">Defines system files, bash history, services, and bait credentials.</p>
+
+            <div class="persona-selector">
+              <label class="persona-option">
+                <input type="radio" name="persona-select" value="ubuntu_web_server" checked>
+                <div class="persona-box">
+                  <span class="persona-name">Ubuntu 22.04 LTS Web Server</span>
+                  <span class="persona-detail">Nginx, PHP 8.1, MySQL, .env honeytoken keys</span>
+                </div>
+              </label>
+              <label class="persona-option">
+                <input type="radio" name="persona-select" value="cloud_worker">
+                <div class="persona-box">
+                  <span class="persona-name">AWS EC2 Cloud Worker Node</span>
+                  <span class="persona-detail">Kubernetes, IMDSv2 metadata, mock AWS credentials</span>
+                </div>
+              </label>
+              <label class="persona-option">
+                <input type="radio" name="persona-select" value="fintech_api">
+                <div class="persona-box">
+                  <span class="persona-name">Fintech Payment Gateway</span>
+                  <span class="persona-detail">Debian 12, PostgreSQL, Stripe webhook secret tokens</span>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Launch Action Strip -->
+        <div class="launch-footer">
+          <div class="launch-summary">
+            <span class="summary-dot ready" id="launch-summary-dot"></span>
+            <span class="summary-text" id="launch-summary-text">Ready to launch honeypot.</span>
+          </div>
+          <button id="btn-launch-primary" class="btn btn-primary btn-large">
+            <span>▶ Launch Honeypot Listener</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: Main Live Attack Dashboard (Shown when Active) -->
+    <main class="workspace hidden" id="view-dashboard">
+      <!-- Left Panel: Attack Sessions List -->
+      <aside class="sidebar-panel">
+        <div class="panel-header">
+          <h2>Attack Instances</h2>
+          <span class="count-pill" id="session-count-pill">0</span>
+        </div>
+
+        <div class="sessions-list" id="sessions-container">
+          <div class="empty-state" id="sessions-empty">
+            <p>No active attack probes.</p>
+            <span class="hint">Connect via SSH to observe live attacker sessions here.</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Panel: Session Inspector & Live Terminal -->
+      <section class="inspector-panel" id="inspector-panel">
+        <div class="empty-inspector" id="empty-inspector">
+          <div class="empty-message">
+            <h3>No Attack Instance Selected</h3>
+            <p>Select a session from the left to inspect its live terminal state, commands, and telemetry.</p>
+          </div>
+        </div>
+
+        <div class="session-detail hidden" id="session-detail">
+          <!-- Session Header Strip -->
+          <div class="detail-header">
+            <div class="detail-title-group">
+              <div class="detail-badge-group">
+                <span class="live-pill" id="detail-live-pill">LIVE</span>
+                <span class="detail-ip" id="detail-ip">127.0.0.1:0</span>
+                <span class="detail-user" id="detail-user">user: ubuntu</span>
+              </div>
+              <div class="detail-session-id" id="detail-session-id">ID: —</div>
+            </div>
+
+            <div class="detail-stats-group">
+              <div class="stat-box">
+                <span class="stat-label">Threat Score</span>
+                <span class="stat-value" id="detail-threat-score">0 / 100</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label">Commands</span>
+                <span class="stat-value" id="detail-cmd-count">0</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label">Directory</span>
+                <span class="stat-value" id="detail-cwd">/home/ubuntu</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab Bar -->
+          <div class="tabs-bar">
+            <button class="tab-btn active" data-tab="terminal">Terminal Feed</button>
+            <button class="tab-btn" data-tab="telemetry">MITRE Telemetry</button>
+            <button class="tab-btn" data-tab="report">Incident Report</button>
+          </div>
+
+          <!-- Tab 1: Terminal View -->
+          <div class="tab-content active" id="tab-terminal">
+            <div class="terminal-window" id="terminal-window">
+              <div class="terminal-body" id="terminal-output">
+                <!-- Streamed terminal commands and outputs -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 2: MITRE Telemetry -->
+          <div class="tab-content" id="tab-telemetry">
+            <div class="telemetry-view">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Command</th>
+                    <th>Route</th>
+                    <th>Technique ID</th>
+                    <th>Name</th>
+                    <th>Score</th>
+                  </tr>
+                </thead>
+                <tbody id="telemetry-table-body">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab 3: Incident Report -->
+          <div class="tab-content" id="tab-report">
+            <div class="report-view" id="report-view">
+              <div class="report-empty" id="report-empty">
+                Report will be compiled automatically when the session terminates.
+              </div>
+              <pre class="report-content hidden" id="report-content"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Info Explanation Modal (Plain English for all technical terms) -->
+    <div class="modal-backdrop hidden" id="info-modal">
+      <div class="info-card">
+        <div class="info-card-header">
+          <h3 id="info-modal-title">Explanation</h3>
+          <button class="btn-close" id="btn-close-info">&times;</button>
+        </div>
+        <div class="info-card-body">
+          <p id="info-modal-body"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
