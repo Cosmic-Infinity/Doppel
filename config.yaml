@@ -1,0 +1,52 @@
+# Doppel Configuration File
+honeypot:
+  host: "0.0.0.0"
+  port: 2222
+  server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+  hostname: "prod-api-node-01"
+  default_user: "ubuntu"
+  accept_any_password: true
+  motd: |
+    Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)
+     * Documentation:  https://help.ubuntu.com
+     * Management:     https://landscape.canonical.com
+     * Support:        https://ubuntu.com/pro
+
+    System information as of current session:
+      System load:  0.18               Processes:             112
+      Usage of /:   34.2% of 48.29GB   Users logged in:       1
+      Memory usage: 28%                IPv4 address for eth0: 10.0.4.15
+
+    0 updates can be applied immediately.
+
+llm:
+  # Remote or local endpoint (e.g. over Tailscale: http://100.x.y.z:11434/v1)
+  base_url: "http://127.0.0.1:11434/v1"
+  # Any model supported by Ollama, vLLM, or LM Studio (e.g., qwen2.5-coder:7b, llama3.1:8b, mistral-nemo:12b)
+  model: "qwen2.5-coder:7b"
+  api_key: "ollama"
+  timeout_seconds: 15.0
+  temperature: 0.2
+  # When true, runs deterministic simulated responses without needing an active LLM
+  mock_mode: false
+
+deception:
+  persona: "ubuntu_web_server"
+  tar_pit_delay_ms: 0
+  intercept_sensitive_files: true
+  intercept_missing_tools: true
+  dynamic_honeytokens: true
+
+sandbox:
+  # When true, benign commands run in an ephemeral container.
+  # If Docker is unavailable or enabled=false, falls back to full LLM simulation.
+  enabled: true
+  image: "alpine:latest"
+  network_disabled: true
+  memory_limit: "256m"
+  cpu_quota: 50000
+
+analytics:
+  db_path: "doppel_telemetry.db"
+  enable_mitre_tagging: true
+  reports_dir: "reports"
