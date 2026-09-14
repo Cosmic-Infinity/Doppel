@@ -1,11 +1,15 @@
 // Doppel Dashboard Client - Minimalist & Proactive
 document.addEventListener('DOMContentLoaded', () => {
-  let activeSessionId = null;
-  let honeypotStatus = 'STOPPED';
+  // Read saved state immediately to avoid FOUC (screen flash on reload)
+  const savedStatus = localStorage.getItem('doppel_last_status') || 'STOPPED';
+  const savedView = localStorage.getItem('doppel_active_view') || (savedStatus === 'RUNNING' ? 'dashboard' : 'launch');
+  let activeSessionId = localStorage.getItem('doppel_active_session_id') || null;
+  let honeypotStatus = savedStatus;
   let ws = null;
   let sessionsCache = {};
   let currentDiagnostics = null;
-  let activeView = 'launch'; // 'launch' or 'dashboard'
+  let activeView = savedView;
+  let pingInterval = null;
 
   // Plain-English Explanations for Info Buttons
   const INFO_DEFINITIONS = {
@@ -90,30 +94,140 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const infoModalBody = document.getElementById('info-modal-body');
   const btnCloseInfo = document.getElementById('btn-close-info');
 
-  // --- Initialize ---
-  fetchStatus();
-  fetchDiagnostics();
-  fetchSessions();
-  connectWebSocket();
-
   // --- View Management ---
 
-  function switchView(viewName) {
+  function switchView(viewName, manual = false) {
     activeView = viewName;
+    localStorage.setItem('doppel_active_view', viewName);
+    if (manual) {
+      localStorage.setItem('doppel_user_clicked_view', 'true');
+    }
+
     if (viewName === 'launch') {
       viewLaunch.classList.remove('hidden');
       viewDashboard.classList.add('hidden');
+      document.documentElement.classList.remove('init-dashboard');
       btnViewSwitchLabel.textContent = 'Live Dashboard';
     } else {
       viewLaunch.classList.add('hidden');
       viewDashboard.classList.remove('hidden');
+      document.documentElement.classList.add('init-dashboard');
       btnViewSwitchLabel.textContent = 'Setup & Config';
     }
   }
 
+  // Restore initial view instantly on DOM load
+  switchView(activeView);
+
   btnViewSwitch.addEventListener('click', () => {
-    switchView(activeView === 'launch' ? 'dashboard' : 'launch');
+    switchView(activeView === 'launch' ? 'dashboard' : 'launch', true);
   });
+
+  // --- Robust Offline Markdown Parser ---
+  function renderMarkdown(md) {
+    if (!md) return '';
+
+    // Extract code blocks first to protect formatting
+    const codeBlocks = [];
+    let text = md.replace(/```([a-zA-Z0-9_\-]*)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre class="md-code-block"><code class="language-${lang || 'bash'}">${escapeHtml(code.trim())}</code></pre>`);
+      return `@@@CODEBLOCK_${idx}@@@`;
+    });
+
+    // Escape raw HTML entities
+    text = escapeHtml(text);
+
+    // Headings
+    text = text.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+    text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+    // Horizontal Rule
+    text = text.replace(/^---$/gim, '<hr>');
+
+    // Blockquotes
+    text = text.replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>');
+
+    // Bold and Italic
+    text = text.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
+    text = text.replace(/\*(.*?)\*/gim, '<em>$1</em>');
+
+    // Inline Code
+    text = text.replace(/`([^`]+)`/gim, '<code>$1</code>');
+
+    // Parse lines for Lists, Tables, and Paragraphs
+    const lines = text.split('\n');
+    const output = [];
+    let inList = false;
+    let inTable = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Table row: | a | b | c |
+      if (/^\|(.+)\|$/.test(line)) {
+        if (line.includes('---')) {
+          continue; // Separator row
+        }
+        const cols = line.split('|').slice(1, -1).map(c => c.trim());
+        if (!inTable) {
+          inTable = true;
+          output.push('<table><thead><tr>');
+          cols.forEach(c => output.push(`<th>${c}</th>`));
+          output.push('</tr></thead><tbody>');
+        } else {
+          output.push('<tr>');
+          cols.forEach(c => output.push(`<td>${c}</td>`));
+          output.push('</tr>');
+        }
+        continue;
+      } else if (inTable) {
+        inTable = false;
+        output.push('</tbody></table>');
+      }
+
+      // Unordered list: - item or * item
+      if (/^[\-\*]\s+(.*)$/.test(line)) {
+        const content = line.replace(/^[\-\*]\s+/, '');
+        if (!inList) {
+          inList = true;
+          output.push('<ul>');
+        }
+        output.push(`<li>${content}</li>`);
+        continue;
+      } else if (inList) {
+        inList = false;
+        output.push('</ul>');
+      }
+
+      // Headers, HR, Codeblocks, Blockquotes
+      if (line.startsWith('<h') || line.startsWith('<hr') || line.startsWith('<blockquote') || line.startsWith('@@@CODEBLOCK_')) {
+        output.push(line);
+      } else if (line.length > 0) {
+        output.push(`<p>${line}</p>`);
+      }
+    }
+
+    if (inList) output.push('</ul>');
+    if (inTable) output.push('</tbody></table>');
+
+    let result = output.join('\n');
+
+    // Restore Code Blocks
+    codeBlocks.forEach((cb, idx) => {
+      result = result.replace(`@@@CODEBLOCK_${idx}@@@`, cb);
+    });
+
+    return result;
+  }
+
+  // --- Initialize Telemetry ---
+  fetchStatus();
+  fetchDiagnostics();
+  fetchSessions();
+  connectWebSocket();
 
   // --- API Calls ---
 
@@ -405,6 +519,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   function updateStatusUI(status, config) {
     honeypotStatus = status;
+    localStorage.setItem('doppel_last_status', status);
     statusDot.className = 'status-dot ' + status.toLowerCase();
     statusText.textContent = status === 'RUNNING' ? 'Active' : status;
 
@@ -418,30 +533,40 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       btnToggle.className = 'btn btn-primary danger';
       btnViewSwitch.classList.remove('hidden');
 
-      // Auto-switch to live dashboard view if we were on launch screen
-      if (activeView === 'launch') {
+      // Auto-switch to live dashboard view if we were on launch screen unless explicitly clicked
+      if (activeView === 'launch' && !localStorage.getItem('doppel_user_clicked_view')) {
         switchView('dashboard');
       }
     } else {
       btnToggleLabel.textContent = 'Start Honeypot';
       btnToggle.className = 'btn btn-primary';
 
-      // If stopped, auto-switch to launch/setup screen
+      // If stopped and no sessions exist, return to setup screen
       if (activeView === 'dashboard' && Object.keys(sessionsCache).length === 0) {
         switchView('launch');
       }
     }
   }
 
-  // --- WebSocket Telemetry ---
+  // --- WebSocket Telemetry & Keep-Alive ---
 
   function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/stream`;
     ws = new WebSocket(wsUrl);
 
+    ws.onopen = () => {
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send('ping');
+        }
+      }, 25000);
+    };
+
     ws.onmessage = (event) => {
       try {
+        if (event.data === 'pong') return;
         const msg = JSON.parse(event.data);
         handleWebSocketMessage(msg);
       } catch (e) {
@@ -450,6 +575,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     };
 
     ws.onclose = () => {
+      if (pingInterval) clearInterval(pingInterval);
       setTimeout(connectWebSocket, 2000);
     };
   }
@@ -457,6 +583,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   function handleWebSocketMessage(msg) {
     if (msg.type === 'status_update') {
       updateStatusUI(msg.status, msg.config);
+      if (msg.active_sessions && msg.active_sessions.length > 0) {
+        renderSessionsList(msg.active_sessions);
+      }
       fetchDiagnostics();
     } else if (msg.type === 'session_created') {
       const sess = msg.data;
@@ -465,17 +594,36 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       sess.max_threat_score = 0;
       sessionsCache[sess.session_id] = sess;
       renderSessionsList(Object.values(sessionsCache));
-      if (!activeSessionId) {
-        selectSession(sess.session_id);
-      }
-      // Switch to dashboard view automatically when attack begins
+      selectSession(sess.session_id);
       switchView('dashboard');
     } else if (msg.type === 'command_executed') {
       const data = msg.data;
-      if (sessionsCache[data.session_id]) {
-        sessionsCache[data.session_id].command_count = (sessionsCache[data.session_id].command_count || 0) + 1;
-        sessionsCache[data.session_id].last_command = data.command;
+      if (!sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id] = {
+          session_id: data.session_id,
+          remote_ip: 'active',
+          username: 'ubuntu',
+          is_active: true,
+          command_count: 0,
+          max_threat_score: 0,
+        };
+      }
+      sessionsCache[data.session_id].command_count = (sessionsCache[data.session_id].command_count || 0) + 1;
+      sessionsCache[data.session_id].last_command = data.command;
+      sessionsCache[data.session_id].is_active = true;
+
+      // Update card in DOM if present without wiping the list
+      const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
+      if (card) {
+        const lastCmdEl = card.querySelector('.card-last-cmd');
+        if (lastCmdEl) lastCmdEl.textContent = data.command;
+      } else {
         renderSessionsList(Object.values(sessionsCache));
+      }
+
+      // Auto-latch if no session is currently selected
+      if (!activeSessionId) {
+        selectSession(data.session_id);
       }
 
       if (activeSessionId === data.session_id) {
@@ -492,7 +640,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           sessionsCache[data.session_id].max_threat_score || 0,
           score
         );
-        renderSessionsList(Object.values(sessionsCache));
+        const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
+        if (card) {
+          const scoreEl = card.querySelector('.card-score');
+          if (scoreEl) {
+            scoreEl.textContent = score;
+            scoreEl.className = `card-score ${score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low')}`;
+          }
+        }
       }
 
       if (activeSessionId === data.session_id) {
@@ -503,7 +658,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const data = msg.data;
       if (sessionsCache[data.session_id]) {
         sessionsCache[data.session_id].is_active = false;
-        renderSessionsList(Object.values(sessionsCache));
+        const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
+        if (card) {
+          const dot = card.querySelector('.card-status-dot');
+          if (dot) {
+            dot.classList.remove('live');
+            dot.classList.add('ended');
+          }
+        }
       }
       if (activeSessionId === data.session_id) {
         detailLivePill.textContent = 'ENDED';
@@ -517,7 +679,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   function renderSessionsList(sessions) {
     sessions.forEach(s => {
-      sessionsCache[s.session_id] = s;
+      sessionsCache[s.session_id] = Object.assign(sessionsCache[s.session_id] || {}, s);
     });
 
     sessionCountPill.textContent = sessions.length;
@@ -528,6 +690,16 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     sessionsEmpty.classList.add('hidden');
+
+    // Auto-select active or most recent session if nothing is selected or activeSessionId is not in list
+    if (!activeSessionId || !sessionsCache[activeSessionId]) {
+      const liveSession = sessions.find(s => s.is_active || !s.end_time);
+      const targetSession = liveSession || sessions[0];
+      if (targetSession) {
+        selectSession(targetSession.session_id);
+      }
+    }
+
     Array.from(sessionsContainer.children).forEach(child => {
       if (child.id !== 'sessions-empty') child.remove();
     });
@@ -565,6 +737,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   function selectSession(sessionId) {
     activeSessionId = sessionId;
+    localStorage.setItem('doppel_active_session_id', sessionId);
+
     document.querySelectorAll('.session-card').forEach(card => {
       card.classList.toggle('selected', card.dataset.sessionId === sessionId);
     });
@@ -591,7 +765,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         const markdown = await res.text();
         reportEmpty.classList.add('hidden');
         reportContent.classList.remove('hidden');
-        reportContent.textContent = markdown;
+        reportContent.innerHTML = renderMarkdown(markdown);
       } else {
         reportEmpty.classList.remove('hidden');
         reportContent.classList.add('hidden');

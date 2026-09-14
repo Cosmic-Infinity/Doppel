@@ -893,17 +893,138 @@ body {
   padding: 24px;
 }
 
+/* Immediate view state initialization - prevents FOUC */
+html.init-dashboard #view-launch {
+  display: none !important;
+}
+html.init-dashboard #view-dashboard {
+  display: grid !important;
+}
+
 .report-empty {
   color: var(--text-muted);
   font-size: 13px;
 }
 
-.report-content {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
+/* Rich Markdown Report Styling */
+.report-content.markdown-body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.7;
   color: var(--text-secondary);
-  white-space: pre-wrap;
+  max-width: 880px;
+  white-space: normal;
+}
+
+.report-content.markdown-body h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 0;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.report-content.markdown-body h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 22px;
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.report-content.markdown-body h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.report-content.markdown-body p {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.report-content.markdown-body ul, 
+.report-content.markdown-body ol {
+  margin-top: 0;
+  margin-bottom: 14px;
+  padding-left: 20px;
+}
+
+.report-content.markdown-body li {
+  margin-bottom: 6px;
+}
+
+.report-content.markdown-body strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.report-content.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--accent-cyan);
+}
+
+.report-content.markdown-body pre {
+  margin-top: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: var(--bg-terminal);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.report-content.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+}
+
+.report-content.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 12px;
+}
+
+.report-content.markdown-body th, 
+.report-content.markdown-body td {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.report-content.markdown-body th {
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.report-content.markdown-body blockquote {
+  margin: 12px 0;
+  padding: 8px 16px;
+  border-left: 3px solid var(--accent-blue);
+  background: rgba(59, 130, 246, 0.05);
+  color: var(--text-secondary);
+}
+
+.report-content.markdown-body hr {
+  border: 0;
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 20px 0;
 }
 
 /* Info Tooltip Card Modal */

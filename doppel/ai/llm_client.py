@@ -116,6 +116,43 @@ class LLMClient:
                 "3306/tcp open  mysql\n"
                 "Nmap done: 1 IP address (1 host up) scanned in 0.42 seconds"
             )
+        elif "uname" in user_msg:
+            return "Linux prod-api-node-01 5.15.0-105-generic #115-Ubuntu SMP Mon Apr 15 17:33:04 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux"
+        elif "os-release" in user_msg or "issue" in user_msg or "lsb_release" in user_msg:
+            return (
+                "PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\n"
+                "NAME=\"Ubuntu\"\n"
+                "VERSION_ID=\"22.04\"\n"
+                "VERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\n"
+                "VERSION_CODENAME=jammy\n"
+                "ID=ubuntu\n"
+                "ID_LIKE=debian"
+            )
+        elif "ps" in user_msg or "top" in user_msg:
+            return (
+                "USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n"
+                "root           1  0.0  0.1 167528 11648 ?        Ss   01:10   0:01 /sbin/init\n"
+                "root         412  0.0  0.1  89240  8912 ?        Ss   01:10   0:00 /lib/systemd/systemd-journald\n"
+                "root         788  0.0  0.1  15428  7124 ?        Ss   01:10   0:00 /usr/sbin/sshd -D\n"
+                "root         890  0.0  0.2 245120 18450 ?        Ss   01:10   0:00 nginx: master process /usr/sbin/nginx\n"
+                "www-data     891  0.0  0.1 245780 12340 ?        S    01:10   0:01 nginx: worker process\n"
+                "mysql       1040  0.1  3.2 1894200 240120 ?      Ssl  01:10   0:15 /usr/sbin/mysqld\n"
+                "ubuntu      2450  0.0  0.0  14500  4210 pts/0    Ss   02:15   0:00 -bash\n"
+                "ubuntu      2810  0.0  0.0  18900  3120 pts/0    R+   02:30   0:00 ps aux"
+            )
+        elif "shutdown" in user_msg or "reboot" in user_msg or "poweroff" in user_msg:
+            return "Failed to set wall message, ignoring: Access denied\nFailed to call org.freedesktop.login1.Manager.PowerOff: Access denied"
+        elif "ip a" in user_msg or "ifconfig" in user_msg or "ip addr" in user_msg:
+            return (
+                "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000\n"
+                "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n"
+                "    inet 127.0.0.1/8 scope host lo\n"
+                "       valid_lft forever preferred_lft forever\n"
+                "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000\n"
+                "    link/ether 02:42:0a:00:04:0f brd ff:ff:ff:ff:ff:ff\n"
+                "    inet 10.0.4.15/24 brd 10.0.4.255 scope global dynamic eth0\n"
+                "       valid_lft 86350sec preferred_lft 86350sec"
+            )
         elif "history" in user_msg:
             return (
                 "    1  cd /var/www/html\n"

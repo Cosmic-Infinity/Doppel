@@ -59,3 +59,19 @@ def test_sandbox_vs_simulation_fallback():
     router_without_sandbox = HybridRouter(sandbox_available=False)
     decision, reason = router_without_sandbox.classify_command("ls -la /tmp")
     assert decision == RouteDecision.LLM_DECEPTION
+
+
+def test_system_discovery_and_fingerprinting_routing():
+    router = HybridRouter(sandbox_available=True)
+
+    # System queries must intercept to LLM deception
+    for cmd in ["uname -a", "ps aux", "shutdown", "reboot", "ip a", "netstat -tlpn", "apt update"]:
+        decision, reason = router.classify_command(cmd)
+        assert decision == RouteDecision.LLM_DECEPTION
+        assert "system_discovery" in reason
+
+    # Release / container file targets must intercept to LLM deception
+    for target in ["cat /etc/os-release", "cat /proc/version", "cat /.dockerenv"]:
+        decision, reason = router.classify_command(target)
+        assert decision == RouteDecision.LLM_DECEPTION
+        assert "sensitive_file" in reason

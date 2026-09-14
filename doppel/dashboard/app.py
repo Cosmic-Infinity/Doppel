@@ -184,8 +184,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await controller.connect_ws(websocket)
     try:
         while True:
-            # Keep-alive ping
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
         controller.disconnect_ws(websocket)
     except Exception:

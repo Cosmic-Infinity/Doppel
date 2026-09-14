@@ -45,12 +45,31 @@ class HoneypotController:
     async def connect_ws(self, websocket: WebSocket):
         await websocket.accept()
         self.active_websockets.add(websocket)
-        # Send current status on initial connection
+        
+        # Build active sessions snapshot
+        active_list = []
+        if self.session_manager:
+            for s_id, s in self.session_manager.sessions.items():
+                active_list.append({
+                    "session_id": s.session_id,
+                    "remote_ip": s.remote_ip,
+                    "remote_port": s.remote_port,
+                    "username": s.username,
+                    "start_time": s.start_time,
+                    "is_active": True,
+                    "threat_score": s.threat_score,
+                    "command_count": len(s.history),
+                    "last_command": s.history[-1]["command"] if s.history else "",
+                    "cwd": s.cwd,
+                })
+
+        # Send current status and fleet snapshot on initial connection
         await websocket.send_json({
             "type": "status_update",
             "status": self.status,
             "start_time": self.start_time,
             "config": self.get_config_dict(),
+            "active_sessions": active_list,
         })
 
     def disconnect_ws(self, websocket: WebSocket):

@@ -16,6 +16,14 @@ class RouteDecision(Enum):
 SENSITIVE_TARGETS: Set[str] = {
     "/etc/shadow",
     "/etc/passwd",
+    "/etc/os-release",
+    "/etc/issue",
+    "/etc/lsb-release",
+    "/proc/version",
+    "/proc/cpuinfo",
+    "/proc/meminfo",
+    "/proc/1/cgroup",
+    "/.dockerenv",
     ".env",
     "wp-config.php",
     "config.json",
@@ -49,6 +57,41 @@ DECEPTION_TOOLS: Set[str] = {
     "msfconsole",
 }
 
+# System fingerprinting, kernel inspection, network config, and admin commands
+# that could betray container isolation or host kernel details
+SYSTEM_DISCOVERY_COMMANDS: Set[str] = {
+    "uname",
+    "ps",
+    "top",
+    "htop",
+    "ip",
+    "ifconfig",
+    "route",
+    "netstat",
+    "ss",
+    "uptime",
+    "w",
+    "who",
+    "last",
+    "lsof",
+    "dpkg",
+    "apt",
+    "apt-get",
+    "systemctl",
+    "service",
+    "journalctl",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "init",
+    "sudo",
+    "su",
+    "crontab",
+    "lsb_release",
+    "hostnamectl",
+    "dmesg",
+}
+
 
 class HybridRouter:
     """Classifies commands and routes them either to the real isolated sandbox or the LLM deception engine."""
@@ -80,7 +123,11 @@ class HybridRouter:
         if self.intercept_missing_tools and any(tool in binary for tool in DECEPTION_TOOLS):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
 
-        # 3. Check if command touches sensitive files or honeytokens
+        # 3. Check for system discovery & fingerprinting queries (routed to deception to prevent container telltales)
+        if binary in SYSTEM_DISCOVERY_COMMANDS:
+            return RouteDecision.LLM_DECEPTION, f"system_discovery:{binary}"
+
+        # 4. Check if command touches sensitive files or honeytokens
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
 
@@ -92,13 +139,13 @@ class HybridRouter:
                 if pattern in cmd_lower:
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
-        # 4. Check for payload downloaders (curl ... | sh, wget)
+        # 5. Check for payload downloaders (curl ... | sh, wget)
         if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
             return RouteDecision.LLM_DECEPTION, "payload_download"
 
-        # 5. If sandbox is active and available, execute real command safely
+        # 6. If sandbox is active and available, execute real command safely
         if self.sandbox_available:
             return RouteDecision.SANDBOX, "standard_execution"
 
-        # 6. Fallback to full LLM terminal simulation
+        # 7. Fallback to full LLM terminal simulation
         return RouteDecision.LLM_DECEPTION, "simulated_terminal"

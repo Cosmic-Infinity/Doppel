@@ -47,13 +47,14 @@ class DeceptionEngine:
         ]
 
         # Add recent conversation turns for terminal state continuity (last 5 commands)
+        prompt_symbol = "#" if user == "root" else "$"
         if session_history:
             for turn in session_history[-5:]:
-                messages.append({"role": "user", "content": f"{user}:{turn.get('cwd', '/')}# {turn.get('command')}"})
+                messages.append({"role": "user", "content": f"{user}:{turn.get('cwd', '/')}{prompt_symbol} {turn.get('command')}"})
                 messages.append({"role": "assistant", "content": turn.get("output", "")})
 
         # Add current command
-        messages.append({"role": "user", "content": f"{user}:{cwd}# {command}"})
+        messages.append({"role": "user", "content": f"{user}:{cwd}{prompt_symbol} {command}"})
 
         try:
             raw_response = await self.llm_client.chat_completion(messages=messages, temperature=0.2)

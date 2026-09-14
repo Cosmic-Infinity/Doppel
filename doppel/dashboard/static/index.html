@@ -8,6 +8,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    (function() {
+      try {
+        var v = localStorage.getItem('doppel_active_view');
+        var s = localStorage.getItem('doppel_last_status');
+        if (v === 'dashboard' || s === 'RUNNING') {
+          document.documentElement.classList.add('init-dashboard');
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -262,7 +273,7 @@
               <div class="report-empty" id="report-empty">
                 Report will be compiled automatically when the session terminates.
               </div>
-              <pre class="report-content hidden" id="report-content"></pre>
+              <div class="report-content markdown-body hidden" id="report-content"></div>
             </div>
           </div>
         </div>

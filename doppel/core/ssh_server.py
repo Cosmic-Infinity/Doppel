@@ -34,6 +34,10 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
 
     def connection_made(self, chan):
         self.chan = chan
+        if hasattr(chan, "set_echo"):
+            chan.set_echo(False)
+        if hasattr(chan, "set_line_mode"):
+            chan.set_line_mode(False)
 
     async def _start_shell(self):
         self.session = await self.session_manager.create_session(
@@ -180,6 +184,7 @@ async def start_ssh_server(session_manager: SessionManager, config: DoppelConfig
         port=config.honeypot.port,
         server_host_keys=[str(host_key_path)],
         server_version=config.honeypot.server_banner,
+        line_editor=False,
     )
     logger.info(f"Doppel SSH honeypot listening on {config.honeypot.host}:{config.honeypot.port}")
     return server
