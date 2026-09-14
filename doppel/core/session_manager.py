@@ -52,6 +52,7 @@ class SessionManager:
         self.observer = observer
         self.reporter = reporter
         self.sessions: Dict[str, SessionState] = {}
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def create_session(
         self,
@@ -140,7 +141,7 @@ class SessionManager:
         })
 
         # 5. Background MITRE analysis & database logging
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._analyze_and_record(
                 session=session,
                 command=cmd_clean,
@@ -148,6 +149,8 @@ class SessionManager:
                 decision=decision.value,
             )
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         return output
 
@@ -212,6 +215,10 @@ class SessionManager:
 
         if session.container_id:
             self.sandbox_manager.destroy_sandbox_session(session.container_id)
+
+        # Wait for all background tasks to complete database writes before closing session
+        if self._background_tasks:
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
         await self.db.log_session_end(session_id)
         logger.info(f"Session {session_id[:8]} closed. Generating incident report...")

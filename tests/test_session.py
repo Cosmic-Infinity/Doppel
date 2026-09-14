@@ -14,7 +14,7 @@ from doppel.core.session_manager import SessionManager
 
 @pytest.mark.asyncio
 async def test_session_lifecycle_and_navigation():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "test_telemetry.db")
         reports_dir = os.path.join(tmpdir, "reports")
 

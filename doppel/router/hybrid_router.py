@@ -83,13 +83,14 @@ class HybridRouter:
         # 3. Check if command touches sensitive files or honeytokens
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
+
+            # Regex search for active credential harvesting attempts (e.g. grep -i password)
+            if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or ("find" in binary and ("perm" in cmd_lower or "pass" in cmd_lower)):
+                return RouteDecision.LLM_DECEPTION, "credential_harvesting"
+
             for pattern in SENSITIVE_TARGETS:
                 if pattern in cmd_lower:
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
-
-            # Regex search for credential harvesting attempts (e.g. grep -i password)
-            if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or "find" in binary and "perm" in cmd_lower:
-                return RouteDecision.LLM_DECEPTION, "credential_harvesting"
 
         # 4. Check for payload downloaders (curl ... | sh, wget)
         if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
