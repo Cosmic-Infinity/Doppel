@@ -6,20 +6,25 @@ from pathlib import Path
 
 from doppel.config import DoppelConfig
 from doppel.core.session_manager import SessionManager, SessionState
+from doppel.core.credential_analyzer import CredentialAnalyzer
 
 logger = logging.getLogger("doppel.ssh")
+
+# One shared analyzer instance — stateless, safe to reuse across connections
+_credential_analyzer = CredentialAnalyzer()
 
 
 class DoppelSSHServerSession(asyncssh.SSHServerSession):
     """Handles an interactive PTY shell session for an SSH client."""
 
-    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str):
+    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str, credential_analysis: dict | None = None):
         self.session_manager = session_manager
         self.config = config
         self.remote_ip = remote_ip
         self.remote_port = remote_port
         self.username = username
         self.password = password
+        self.credential_analysis = credential_analysis or {}
         self.session: Optional[SessionState] = None
         self.chan = None
         self._input_buffer = ""
@@ -45,6 +50,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             remote_port=self.remote_port,
             username=self.username,
             password=self.password,
+            credential_analysis=self.credential_analysis,
         )
         # Send Ubuntu MOTD
         if self.config.honeypot.motd:
@@ -161,15 +167,32 @@ class DoppelSSHServer(asyncssh.SSHServer):
         return True
 
     def validate_password(self, username, password):
-        logger.info(f"Auth attempt: user='{username}', pass='{password}' from {self.remote_ip}")
+        # Run credential pattern analysis before accepting
+        analysis = _credential_analyzer.analyze(username, password)
         self._client_creds["user"] = username
         self._client_creds["pass"] = password
-        # Always accept password to bait the attacker inside
+        self._client_creds["credential_analysis"] = analysis
+
+        logger.info(
+            f"Auth attempt: user='{username}' from {self.remote_ip} | "
+            f"risk={analysis['risk_level']} | label={analysis['primary_label']} | "
+            f"note={analysis['notes']}"
+        )
+
+        # Emit a structured alert for high/critical risk credential patterns
+        if analysis["risk_level"] in ("high", "critical"):
+            logger.warning(
+                f"[CRED ALERT] {analysis['risk_level'].upper()} risk credential from "
+                f"{self.remote_ip} — {analysis['primary_label']}: {analysis['notes']}"
+            )
+
+        # Always accept to bait the attacker inside
         return self.config.honeypot.accept_any_password
 
     def session_requested(self):
         user = self._client_creds.get("user", self.config.honeypot.default_user)
         pw = self._client_creds.get("pass", "")
+        cred_analysis = self._client_creds.get("credential_analysis", {})
         return DoppelSSHServerSession(
             session_manager=self.session_manager,
             config=self.config,
@@ -177,6 +200,7 @@ class DoppelSSHServer(asyncssh.SSHServer):
             remote_port=self.remote_port,
             username=user,
             password=pw,
+            credential_analysis=cred_analysis,
         )
 
 

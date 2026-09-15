@@ -71,6 +71,7 @@ class DoppelConfig(BaseSettings):
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     access: AccessSettings = Field(default_factory=AccessSettings)
     benign_commands: list[str] = Field(default_factory=list)
+    http_sensor_port: int = 8080  # 0 = disabled
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DoppelConfig":

@@ -47,6 +47,22 @@ class TelemetryDB:
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             """)
+            # Web probe events from the HTTP sensor
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS web_probes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    remote_ip TEXT,
+                    remote_port INTEGER,
+                    method TEXT,
+                    path TEXT,
+                    query TEXT,
+                    user_agent TEXT,
+                    probe_label TEXT,
+                    status_code INTEGER,
+                    response_snippet TEXT
+                )
+            """)
             await db.commit()
             logger.info(f"Telemetry database initialized at {self.db_path}")
 

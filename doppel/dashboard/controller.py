@@ -16,6 +16,7 @@ from doppel.analytics.observer import ThreatObserver
 from doppel.analytics.reporter import IncidentReporter
 from doppel.core.session_manager import SessionManager
 from doppel.core.ssh_server import start_ssh_server
+from doppel.http_sensor.sensor import create_http_sensor
 
 logger = logging.getLogger("doppel.dashboard.controller")
 
@@ -32,6 +33,8 @@ class HoneypotController:
 
         self.session_manager: Optional[SessionManager] = None
         self.ssh_server = None
+        self.http_server = None          # uvicorn server for HTTP sensor
+        self._http_server_task: Optional[asyncio.Task] = None
         self._server_task: Optional[asyncio.Task] = None
         self.active_websockets: Set[WebSocket] = set()
         self.active_sse_queues: Set[asyncio.Queue] = set()
@@ -164,6 +167,12 @@ class HoneypotController:
             self.session_manager.register_event_listener(self._on_session_event)
 
             self.ssh_server = await start_ssh_server(self.session_manager, self.config)
+
+            # Start HTTP sensor on a background task
+            self._http_server_task = asyncio.create_task(
+                self._run_http_sensor(deception_engine)
+            )
+
             self.status = "RUNNING"
             self.start_time = datetime.now(timezone.utc).isoformat()
             logger.info(f"Honeypot daemon started successfully on port {self.config.honeypot.port}")
@@ -199,6 +208,14 @@ class HoneypotController:
                 self.ssh_server.close()
                 await self.ssh_server.wait_closed()
                 self.ssh_server = None
+
+            if self._http_server_task and not self._http_server_task.done():
+                self._http_server_task.cancel()
+                try:
+                    await self._http_server_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._http_server_task = None
 
             if self.session_manager:
                 active_ids = list(self.session_manager.sessions.keys())
@@ -250,6 +267,34 @@ class HoneypotController:
                 "model": self.config.llm.model,
                 "endpoint": self.config.llm.base_url,
             }
+
+    async def _run_http_sensor(self, deception_engine) -> None:
+        """Run the HTTP honeypot sensor on port 8080 using uvicorn."""
+        import uvicorn
+        http_port = getattr(self.config, "http_sensor_port", 8080)
+
+        async def _event_cb(event_type: str, data: dict) -> None:
+            self._on_session_event(event_type, data)
+
+        sensor_app = create_http_sensor(
+            deception_engine=deception_engine,
+            db=self.db,
+            persona=self.config.deception.persona,
+            event_callback=_event_cb,
+        )
+        cfg = uvicorn.Config(
+            app=sensor_app,
+            host=self.config.honeypot.host,
+            port=http_port,
+            log_level="warning",
+            access_log=False,
+        )
+        server = uvicorn.Server(cfg)
+        logger.info(f"HTTP honeypot sensor starting on port {http_port}")
+        try:
+            await server.serve()
+        except asyncio.CancelledError:
+            logger.info("HTTP honeypot sensor stopped")
 
     def get_config_dict(self) -> Dict[str, Any]:
         return {

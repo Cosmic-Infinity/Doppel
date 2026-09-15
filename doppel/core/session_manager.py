@@ -12,6 +12,7 @@ from doppel.router.hybrid_router import HybridRouter, RouteDecision
 from doppel.analytics.db import TelemetryDB
 from doppel.analytics.observer import ThreatObserver
 from doppel.analytics.reporter import IncidentReporter
+from doppel.core.fake_filesystem import FakeFilesystem
 
 logger = logging.getLogger("doppel.core.session")
 
@@ -29,6 +30,8 @@ class SessionState:
     history: List[Dict[str, str]] = field(default_factory=list)
     threat_score: int = 0
     is_active: bool = True
+    credential_analysis: dict = field(default_factory=dict)
+    fake_fs: object = field(default=None)  # FakeFilesystem, typed as object to avoid circular
 
 
 class SessionManager:
@@ -74,6 +77,7 @@ class SessionManager:
         username: str,
         password: str = "",
         session_id: Optional[str] = None,
+        credential_analysis: Optional[dict] = None,
     ) -> SessionState:
         sess_id = session_id or str(uuid.uuid4())
         initial_cwd = "/root" if username == "root" else f"/home/{username}"
@@ -90,6 +94,8 @@ class SessionManager:
             password=password,
             cwd=initial_cwd,
             container_id=container_id,
+            credential_analysis=credential_analysis or {},
+            fake_fs=FakeFilesystem(),
         )
         self.sessions[sess_id] = session
 
@@ -108,6 +114,7 @@ class SessionManager:
             "username": username,
             "start_time": session.start_time,
             "cwd": session.cwd,
+            "credential_analysis": session.credential_analysis,
         })
         return session
 
@@ -147,13 +154,18 @@ class SessionManager:
             )
             output = res.stdout if res.stdout else res.stderr
         else:
-            # LLM Deception
+            # LLM Deception — inject fake filesystem context so the model
+            # knows about files the attacker created this session
             output = await self.deception_engine.generate_command_output(
                 command=cmd_clean,
                 cwd=session.cwd,
                 user=session.username,
                 session_history=session.history,
+                fake_fs=session.fake_fs,
             )
+            # After LLM responds, update the fake filesystem from this command
+            if session.fake_fs:
+                session.fake_fs.update_from_command(cmd_clean, output)
 
         # 3. Simulate configured tar-pit delay if specified
         if self.config.deception.tar_pit_delay_ms > 0:

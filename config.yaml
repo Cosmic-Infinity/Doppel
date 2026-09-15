@@ -139,3 +139,7 @@ benign_commands:
   - "vim"
   - "nano"
   - "diff"
+
+# HTTP honeypot sensor — listens for web probes (/.env, /wp-admin, SQLi, etc.)
+# Set to 0 to disable.
+http_sensor_port: 8080

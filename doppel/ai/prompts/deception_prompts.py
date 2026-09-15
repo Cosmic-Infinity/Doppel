@@ -45,4 +45,77 @@ TERMINAL_SYSTEM_INSTRUCTION = """CRITICAL RULES:
 
 def build_deception_system_prompt(persona_name: str = "ubuntu_web_server") -> str:
     persona_desc = PERSONA_PROMPTS.get(persona_name, PERSONA_PROMPTS["ubuntu_web_server"])
-    return f"{persona_desc}\n{TERMINAL_SYSTEM_INSTRUCTION}"
+    port_context = _build_port_context(persona_name)
+    return f"{persona_desc}\n{port_context}\n{TERMINAL_SYSTEM_INSTRUCTION}"
+
+
+# ---------------------------------------------------------------------------
+# Per-persona port inventory used to make internal nmap / ss / netstat output
+# consistent with the external-facing port profile.  This prevents an attacker
+# who does both an external scan and an internal nmap from spotting discrepancies.
+# ---------------------------------------------------------------------------
+PERSONA_PORTS: dict[str, dict] = {
+    "ubuntu_web_server": {
+        "open_ports": [
+            {"port": 22,   "service": "ssh",   "version": "OpenSSH 8.9p1"},
+            {"port": 80,   "service": "http",  "version": "nginx 1.18.0"},
+            {"port": 443,  "service": "https", "version": "nginx 1.18.0"},
+            {"port": 3306, "service": "mysql", "version": "MySQL 8.0.36"},
+        ],
+        "internal_only": [
+            {"port": 6379,  "service": "redis",      "version": "Redis 6.0.16"},
+            {"port": 9000,  "service": "php-fpm",     "version": "PHP 8.1 FPM"},
+            {"port": 32768, "service": "rpc-unknown", "version": ""},
+        ],
+    },
+    "cloud_worker": {
+        "open_ports": [
+            {"port": 22,   "service": "ssh",    "version": "OpenSSH 8.9p1"},
+        ],
+        "internal_only": [
+            {"port": 10250, "service": "kubelet",   "version": "1.29.3"},
+            {"port": 10256, "service": "kube-proxy", "version": ""},
+            {"port": 2376,  "service": "docker",    "version": "24.0.7"},
+        ],
+    },
+    "fintech_api": {
+        "open_ports": [
+            {"port": 22,   "service": "ssh",   "version": "OpenSSH 8.9p1"},
+            {"port": 443,  "service": "https", "version": "uvicorn/FastAPI"},
+        ],
+        "internal_only": [
+            {"port": 5432, "service": "postgresql", "version": "15.6"},
+            {"port": 6379, "service": "redis",      "version": "7.2.4"},
+            {"port": 5555, "service": "celery",     "version": "Flower 2.0"},
+        ],
+    },
+}
+
+
+def _build_port_context(persona_name: str) -> str:
+    """
+    Build a deterministic port-awareness block injected into the system prompt.
+    Ensures nmap/ss/netstat/netstat output always matches the persona's real
+    exposed ports rather than being hallucinated inconsistently.
+    """
+    ports = PERSONA_PORTS.get(persona_name, PERSONA_PORTS["ubuntu_web_server"])
+    all_ports = ports["open_ports"] + ports.get("internal_only", [])
+
+    lines = [
+        "AUTHORITATIVE PORT STATE (always use these exact ports for nmap, ss, netstat, lsof -i output):",
+        "External (publicly reachable):",
+    ]
+    for p in ports["open_ports"]:
+        ver = f"  version={p['version']}" if p.get("version") else ""
+        lines.append(f"  {p['port']}/tcp  OPEN  {p['service']}{ver}")
+
+    if ports.get("internal_only"):
+        lines.append("Internal / loopback only (127.0.0.1):")
+        for p in ports["internal_only"]:
+            ver = f"  version={p['version']}" if p.get("version") else ""
+            lines.append(f"  {p['port']}/tcp  LISTEN  {p['service']}{ver}")
+
+    lines.append(
+        "All other ports are CLOSED or FILTERED.  Never invent ports not listed above."
+    )
+    return "\n".join(lines)
