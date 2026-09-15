@@ -127,6 +127,10 @@ class SessionManager:
         # Update router sandbox availability status
         self.router.sandbox_available = bool(session.container_id and self.sandbox_manager.is_available)
 
+        # Check whether this session's IP is in the safe allowlist
+        safe_ips = self.config.access.safe_ips
+        self.router.safe_ip_mode = session.remote_ip in safe_ips
+
         # 1. Routing classification
         decision, route_reason = self.router.classify_command(cmd_clean)
         output = ""

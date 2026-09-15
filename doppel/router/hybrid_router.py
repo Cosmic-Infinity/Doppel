@@ -101,10 +101,16 @@ class HybridRouter:
         intercept_sensitive_files: bool = True,
         intercept_missing_tools: bool = True,
         sandbox_available: bool = False,
+        benign_commands: Optional[Set[str]] = None,
+        safe_ip_mode: bool = False,
     ):
         self.intercept_sensitive_files = intercept_sensitive_files
         self.intercept_missing_tools = intercept_missing_tools
         self.sandbox_available = sandbox_available
+        # Commands always routed to the real sandbox (never deception)
+        self.benign_commands: Set[str] = benign_commands or set()
+        # When True, ALL commands go to sandbox — no deception at all
+        self.safe_ip_mode = safe_ip_mode
 
     def classify_command(self, raw_cmd: str) -> Tuple[RouteDecision, str]:
         """Determine whether to handle internally, execute in sandbox, or intercept with LLM."""
@@ -114,6 +120,16 @@ class HybridRouter:
 
         tokens = cmd_clean.split()
         binary = tokens[0].lower()
+
+        # 0a. Safe-IP mode: bypass all deception, execute everything in sandbox
+        if self.safe_ip_mode and self.sandbox_available:
+            if binary in {"cd", "exit", "logout", "clear"}:
+                return RouteDecision.BUILTIN, binary
+            return RouteDecision.SANDBOX, "safe_ip_passthrough"
+
+        # 0b. Explicitly benign commands: always route to real sandbox, never to LLM
+        if binary in self.benign_commands and self.sandbox_available:
+            return RouteDecision.SANDBOX, "benign_command"
 
         # 1. Shell built-ins that modify state directly
         if binary in {"cd", "exit", "logout", "clear"}:

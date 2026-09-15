@@ -52,6 +52,11 @@ class AnalyticsSettings(BaseModel):
     reports_dir: str = "reports"
 
 
+class AccessSettings(BaseModel):
+    """IPs that bypass all deception and get a real sandbox shell."""
+    safe_ips: list[str] = Field(default_factory=list)
+
+
 class DoppelConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOPPEL_",
@@ -64,6 +69,8 @@ class DoppelConfig(BaseSettings):
     deception: DeceptionSettings = Field(default_factory=DeceptionSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
+    access: AccessSettings = Field(default_factory=AccessSettings)
+    benign_commands: list[str] = Field(default_factory=list)
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DoppelConfig":

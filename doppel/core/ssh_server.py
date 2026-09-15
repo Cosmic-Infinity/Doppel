@@ -145,7 +145,17 @@ class DoppelSSHServer(asyncssh.SSHServer):
         peer = conn.get_extra_info("peername")
         self.remote_ip = peer[0] if peer else "unknown"
         self.remote_port = peer[1] if peer else 0
-        logger.info(f"Incoming SSH connection from {self.remote_ip}:{self.remote_port}")
+        safe_ips = self.config.access.safe_ips
+        if self.remote_ip in safe_ips:
+            logger.info(
+                f"[SAFE IP] Trusted connection from {self.remote_ip}:{self.remote_port} — "
+                "deception bypassed, real sandbox shell granted."
+            )
+        else:
+            logger.warning(
+                f"[ALERT] Untrusted SSH connection from {self.remote_ip}:{self.remote_port} — "
+                "honeypot deception active."
+            )
 
     def password_auth_supported(self):
         return True
