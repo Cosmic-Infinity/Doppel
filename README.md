@@ -4,7 +4,6 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Hybrid%20Sandbox%20%2B%20LLM-purple.svg)]()
 [![Web SOC](https://img.shields.io/badge/Web%20SOC-FastAPI%20%2B%20WebSockets-009688.svg)]()
 [![MITRE ATT&CK](https://img.shields.io/badge/MITRE%20ATT%26CK-Real--time%20Mapping-red.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Doppel** is an intelligent, high-interaction honeypot system designed to deceive, monitor, and profile cyber adversaries in real time. By combining an **isolated Docker execution sandbox** with a **generative LLM deception layer**, Doppel achieves authentic Linux behavior while dynamically synthesizing contextual honeytokens, simulating missing penetration testing tools, and generating real-time MITRE ATT&CK telemetry.
 
