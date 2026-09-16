@@ -143,3 +143,10 @@ benign_commands:
 # HTTP honeypot sensor — listens for web probes (/.env, /wp-admin, SQLi, etc.)
 # Set to 0 to disable.
 http_sensor_port: 8080
+
+# GeoIP enrichment — download free GeoLite2 databases from MaxMind:
+#   https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+# Leave paths empty to run without GeoIP (enrichment returns null fields).
+geoip:
+  city_db_path: ""   # e.g. /opt/geoip/GeoLite2-City.mmdb
+  asn_db_path:  ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb

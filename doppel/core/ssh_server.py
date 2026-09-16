@@ -7,6 +7,7 @@ from pathlib import Path
 from doppel.config import DoppelConfig
 from doppel.core.session_manager import SessionManager, SessionState
 from doppel.core.credential_analyzer import CredentialAnalyzer
+from doppel.core.geoip import enrich as geoip_enrich, format_summary as geoip_summary
 
 logger = logging.getLogger("doppel.ssh")
 
@@ -17,7 +18,7 @@ _credential_analyzer = CredentialAnalyzer()
 class DoppelSSHServerSession(asyncssh.SSHServerSession):
     """Handles an interactive PTY shell session for an SSH client."""
 
-    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str, credential_analysis: dict | None = None):
+    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str, credential_analysis: dict | None = None, geoip: dict | None = None):
         self.session_manager = session_manager
         self.config = config
         self.remote_ip = remote_ip
@@ -25,6 +26,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self.username = username
         self.password = password
         self.credential_analysis = credential_analysis or {}
+        self.geoip = geoip or {}
         self.session: Optional[SessionState] = None
         self.chan = None
         self._input_buffer = ""
@@ -51,6 +53,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             username=self.username,
             password=self.password,
             credential_analysis=self.credential_analysis,
+            geoip=self.geoip,
         )
         # Send Ubuntu MOTD
         if self.config.honeypot.motd:
@@ -146,20 +149,31 @@ class DoppelSSHServer(asyncssh.SSHServer):
         self.session_manager = session_manager
         self.config = config
         self._client_creds = {}
+        self._geoip_cache: dict = {}  # ip → enrichment result, reused per connection
 
     def connection_made(self, conn):
         peer = conn.get_extra_info("peername")
         self.remote_ip = peer[0] if peer else "unknown"
         self.remote_port = peer[1] if peer else 0
+
+        # GeoIP enrichment — synchronous, sub-millisecond against local mmdb
+        geo_cfg = getattr(self.config, "geoip", None)
+        city_db = getattr(geo_cfg, "city_db_path", "") if geo_cfg else ""
+        asn_db  = getattr(geo_cfg, "asn_db_path",  "") if geo_cfg else ""
+        geo = geoip_enrich(self.remote_ip, city_db_path=city_db, asn_db_path=asn_db)
+        self._client_creds["geoip"] = geo
+
+        geo_str = geoip_summary(geo)
+        dc_flag = " [DATACENTER/CLOUD]" if geo.get("is_datacenter") else ""
+
         safe_ips = self.config.access.safe_ips
         if self.remote_ip in safe_ips:
             logger.info(
-                f"[SAFE IP] Trusted connection from {self.remote_ip}:{self.remote_port} — "
-                "deception bypassed, real sandbox shell granted."
+                f"[SAFE IP] Trusted connection from {self.remote_ip}:{self.remote_port} | {geo_str}"
             )
         else:
             logger.warning(
-                f"[ALERT] Untrusted SSH connection from {self.remote_ip}:{self.remote_port} — "
+                f"[ALERT] SSH probe from {self.remote_ip}:{self.remote_port}{dc_flag} | {geo_str} — "
                 "honeypot deception active."
             )
 
@@ -193,6 +207,7 @@ class DoppelSSHServer(asyncssh.SSHServer):
         user = self._client_creds.get("user", self.config.honeypot.default_user)
         pw = self._client_creds.get("pass", "")
         cred_analysis = self._client_creds.get("credential_analysis", {})
+        geoip_data    = self._client_creds.get("geoip", {})
         return DoppelSSHServerSession(
             session_manager=self.session_manager,
             config=self.config,
@@ -201,6 +216,7 @@ class DoppelSSHServer(asyncssh.SSHServer):
             username=user,
             password=pw,
             credential_analysis=cred_analysis,
+            geoip=geoip_data,
         )
 
 
