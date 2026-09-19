@@ -50,3 +50,103 @@ analytics:
   db_path: "doppel_telemetry.db"
   enable_mitre_tagging: true
   reports_dir: "reports"
+
+# IPs that bypass honeypot entirely and get a real sandbox shell.
+# Alert/logging still fires so you know they connected, but no deception.
+access:
+  safe_ips:
+    - "127.0.0.1"
+    - "192.168.1.10"   # replace with your actual admin IP(s)
+
+# Commands considered normal/benign for this server persona.
+# These are always routed to the real sandbox (never to LLM deception),
+# so they look authentic even to a careful attacker.
+benign_commands:
+  - "ls"
+  - "ll"
+  - "la"
+  - "pwd"
+  - "whoami"
+  - "id"
+  - "echo"
+  - "cat"
+  - "head"
+  - "tail"
+  - "grep"
+  - "find"
+  - "date"
+  - "env"
+  - "printenv"
+  - "df"
+  - "du"
+  - "free"
+  - "mkdir"
+  - "touch"
+  - "cp"
+  - "mv"
+  - "rm"
+  - "chmod"
+  - "chown"
+  - "wc"
+  - "sort"
+  - "uniq"
+  - "awk"
+  - "sed"
+  - "cut"
+  - "tr"
+  - "tee"
+  - "less"
+  - "more"
+  - "file"
+  - "stat"
+  - "basename"
+  - "dirname"
+  - "realpath"
+  - "which"
+  - "type"
+  - "man"
+  - "help"
+  - "alias"
+  - "history"
+  - "export"
+  - "set"
+  - "unset"
+  - "true"
+  - "false"
+  - "test"
+  - "[[" 
+  - "read"
+  - "printf"
+  - "sleep"
+  - "xargs"
+  - "tee"
+  - "tar"
+  - "gzip"
+  - "gunzip"
+  - "zip"
+  - "unzip"
+  - "ssh"
+  - "scp"
+  - "rsync"
+  - "python"
+  - "python3"
+  - "pip"
+  - "pip3"
+  - "node"
+  - "npm"
+  - "git"
+  - "make"
+  - "vim"
+  - "nano"
+  - "diff"
+
+# HTTP honeypot sensor — listens for web probes (/.env, /wp-admin, SQLi, etc.)
+# Set to 0 to disable.
+http_sensor_port: 8080
+
+# GeoIP enrichment — download free GeoLite2 databases from MaxMind:
+#   https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+# Leave paths empty to run without GeoIP (enrichment returns null fields).
+geoip:
+  city_db_path: ""   # e.g. /opt/geoip/GeoLite2-City.mmdb
+  asn_db_path:  ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb

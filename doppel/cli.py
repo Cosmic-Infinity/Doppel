@@ -52,6 +52,7 @@ def build_system_stack(config: DoppelConfig) -> SessionManager:
         intercept_sensitive_files=config.deception.intercept_sensitive_files,
         intercept_missing_tools=config.deception.intercept_missing_tools,
         sandbox_available=sandbox_manager.is_available,
+        benign_commands=set(config.benign_commands),
     )
     db = TelemetryDB(db_path=config.analytics.db_path)
     observer = ThreatObserver(llm_client=llm_client, db=db)

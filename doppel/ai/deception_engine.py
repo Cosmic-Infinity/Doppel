@@ -1,8 +1,10 @@
 import re
 import logging
-from typing import List, Dict, Any, Optional
+from typing import TYPE_CHECKING, List, Dict, Any, Optional
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.prompts.deception_prompts import build_deception_system_prompt
+if TYPE_CHECKING:
+    from doppel.core.fake_filesystem import FakeFilesystem
 
 logger = logging.getLogger("doppel.ai.deception")
 
@@ -40,10 +42,18 @@ class DeceptionEngine:
         cwd: str,
         user: str,
         session_history: Optional[List[Dict[str, str]]] = None,
+        fake_fs: Optional["FakeFilesystem"] = None,
     ) -> str:
         """Generate authentic simulated output for a command in the current session context."""
+        # Build system prompt — append fake filesystem state when it exists
+        system_prompt = self.system_prompt
+        if fake_fs:
+            fs_block = fake_fs.build_context_block()
+            if fs_block:
+                system_prompt = system_prompt + "\n\n" + fs_block
+
         messages: List[Dict[str, str]] = [
-            {"role": "system", "content": self.system_prompt}
+            {"role": "system", "content": system_prompt}
         ]
 
         # Add recent conversation turns for terminal state continuity (last 5 commands)

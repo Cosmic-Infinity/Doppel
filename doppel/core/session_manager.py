@@ -12,6 +12,8 @@ from doppel.router.hybrid_router import HybridRouter, RouteDecision
 from doppel.analytics.db import TelemetryDB
 from doppel.analytics.observer import ThreatObserver
 from doppel.analytics.reporter import IncidentReporter
+from doppel.core.fake_filesystem import FakeFilesystem
+from doppel.analytics.profiler import AttackerProfiler, ProfilerState
 
 logger = logging.getLogger("doppel.core.session")
 
@@ -29,6 +31,10 @@ class SessionState:
     history: List[Dict[str, str]] = field(default_factory=list)
     threat_score: int = 0
     is_active: bool = True
+    credential_analysis: dict = field(default_factory=dict)
+    fake_fs: object = field(default=None)  # FakeFilesystem, typed as object to avoid circular
+    geoip: dict = field(default_factory=dict)
+    profiler_state: object = field(default=None)  # ProfilerState, typed as object
 
 
 class SessionManager:
@@ -54,6 +60,7 @@ class SessionManager:
         self.sessions: Dict[str, SessionState] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self.event_callbacks: List[Any] = []
+        self._profiler = AttackerProfiler()
 
     def register_event_listener(self, callback: Any):
         self.event_callbacks.append(callback)
@@ -74,6 +81,8 @@ class SessionManager:
         username: str,
         password: str = "",
         session_id: Optional[str] = None,
+        credential_analysis: Optional[dict] = None,
+        geoip: Optional[dict] = None,
     ) -> SessionState:
         sess_id = session_id or str(uuid.uuid4())
         initial_cwd = "/root" if username == "root" else f"/home/{username}"
@@ -90,6 +99,10 @@ class SessionManager:
             password=password,
             cwd=initial_cwd,
             container_id=container_id,
+            credential_analysis=credential_analysis or {},
+            fake_fs=FakeFilesystem(),
+            geoip=geoip or {},
+            profiler_state=ProfilerState(),
         )
         self.sessions[sess_id] = session
 
@@ -99,6 +112,8 @@ class SessionManager:
             remote_port=remote_port,
             username=username,
             password=password,
+            geoip=session.geoip,
+            credential_risk=(session.credential_analysis.get("risk_level") if session.credential_analysis else None),
         )
         logger.info(f"Initialized session {sess_id[:8]} for {username}@{remote_ip}:{remote_port}")
         self._notify("session_created", {
@@ -108,6 +123,8 @@ class SessionManager:
             "username": username,
             "start_time": session.start_time,
             "cwd": session.cwd,
+            "credential_analysis": session.credential_analysis,
+            "geoip": session.geoip,
         })
         return session
 
@@ -127,6 +144,10 @@ class SessionManager:
         # Update router sandbox availability status
         self.router.sandbox_available = bool(session.container_id and self.sandbox_manager.is_available)
 
+        # Check whether this session's IP is in the safe allowlist
+        safe_ips = self.config.access.safe_ips
+        self.router.safe_ip_mode = session.remote_ip in safe_ips
+
         # 1. Routing classification
         decision, route_reason = self.router.classify_command(cmd_clean)
         output = ""
@@ -143,23 +164,43 @@ class SessionManager:
             )
             output = res.stdout if res.stdout else res.stderr
         else:
-            # LLM Deception
+            # LLM Deception — inject fake filesystem context so the model
+            # knows about files the attacker created this session
             output = await self.deception_engine.generate_command_output(
                 command=cmd_clean,
                 cwd=session.cwd,
                 user=session.username,
                 session_history=session.history,
+                fake_fs=session.fake_fs,
             )
+            # After LLM responds, update the fake filesystem from this command
+            if session.fake_fs:
+                session.fake_fs.update_from_command(cmd_clean, output)
 
-        # 3. Simulate configured tar-pit delay if specified
-        if self.config.deception.tar_pit_delay_ms > 0:
-            await asyncio.sleep(self.config.deception.tar_pit_delay_ms / 1000.0)
+        # 3. Adaptive tar-pit delay — scales with attacker type
+        base_delay_ms = self.config.deception.tar_pit_delay_ms
+        if base_delay_ms > 0:
+            attacker_type = (
+                session.profiler_state.attacker_type
+                if session.profiler_state else "unknown"
+            )
+            # Bots get max delay to waste their resources;
+            # humans get a fraction so deception feels like real I/O.
+            multipliers = {"bot": 3.0, "semi-automated": 1.5, "human": 0.3, "unknown": 1.0}
+            multiplier = multipliers.get(attacker_type, 1.0)
+            effective_ms = base_delay_ms * multiplier
+            # Add ±20 % jitter so automated tools cannot fingerprint the constant delay
+            import random as _random
+            jitter = _random.uniform(0.8, 1.2)
+            await asyncio.sleep(effective_ms * jitter / 1000.0)
 
-        # 4. Record turn in session memory
+        # 4. Record turn in session memory (with wall-clock timestamp for timing analysis)
+        import time as _time
         session.history.append({
             "command": cmd_clean,
             "cwd": session.cwd,
             "output": output,
+            "ts": _time.monotonic(),
         })
 
         # 5. Background MITRE analysis & database logging
@@ -174,6 +215,7 @@ class SessionManager:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+        _prof = session.profiler_state
         self._notify("command_executed", {
             "session_id": session_id,
             "command": cmd_clean,
@@ -181,6 +223,8 @@ class SessionManager:
             "output": output,
             "decision": decision.value,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "attacker_type": _prof.attacker_type if _prof else "unknown",
+            "current_phase": _prof.current_phase if _prof else "Reconnaissance",
         })
 
         return output
@@ -232,6 +276,48 @@ class SessionManager:
                     "threat": threat_meta,
                     "threat_score": session.threat_score,
                 })
+
+        # ── Attacker profiler (timing + phase) ──────────────────────────────
+        if session.profiler_state is not None:
+            tactics_list = threat_meta.get("tactics", []) if threat_meta else []
+            # Use the monotonic ts we stored in history for accurate gap measurement
+            cmd_ts = session.history[-1].get("ts") if session.history else None
+            updated_state, phase_event = self._profiler.record_command(
+                state=session.profiler_state,
+                command=command,
+                tactics=tactics_list,
+                now=cmd_ts,
+            )
+            session.profiler_state = updated_state
+
+            from doppel.analytics.profiler import AttackerProfiler
+            profile_summary = AttackerProfiler.summary(updated_state)
+            self._notify("profile_updated", {
+                "session_id": session.session_id,
+                "profile": profile_summary,
+            })
+
+            if phase_event:
+                self._notify("phase_transition", {
+                    "session_id": session.session_id,
+                    **phase_event,
+                })
+                # Persist phase transition to DB (fire-and-forget; errors logged inside)
+                asyncio.create_task(self.db.log_phase_transition(
+                    session_id=session.session_id,
+                    from_phase=phase_event["from_phase"],
+                    to_phase=phase_event["to_phase"],
+                    phase_index=phase_event["phase_index"],
+                    triggered_by=phase_event["triggered_by"],
+                ))
+
+            # Persist live profile columns to DB (non-blocking)
+            asyncio.create_task(self.db.update_session_profile(
+                session_id=session.session_id,
+                attacker_type=updated_state.attacker_type,
+                type_confidence=updated_state.type_confidence,
+                current_phase=updated_state.current_phase,
+            ))
 
         await self.db.log_command(
             session_id=session.session_id,

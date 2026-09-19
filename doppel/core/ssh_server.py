@@ -6,20 +6,27 @@ from pathlib import Path
 
 from doppel.config import DoppelConfig
 from doppel.core.session_manager import SessionManager, SessionState
+from doppel.core.credential_analyzer import CredentialAnalyzer
+from doppel.core.geoip import enrich as geoip_enrich, format_summary as geoip_summary
 
 logger = logging.getLogger("doppel.ssh")
+
+# One shared analyzer instance — stateless, safe to reuse across connections
+_credential_analyzer = CredentialAnalyzer()
 
 
 class DoppelSSHServerSession(asyncssh.SSHServerSession):
     """Handles an interactive PTY shell session for an SSH client."""
 
-    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str):
+    def __init__(self, session_manager: SessionManager, config: DoppelConfig, remote_ip: str, remote_port: int, username: str, password: str, credential_analysis: dict | None = None, geoip: dict | None = None):
         self.session_manager = session_manager
         self.config = config
         self.remote_ip = remote_ip
         self.remote_port = remote_port
         self.username = username
         self.password = password
+        self.credential_analysis = credential_analysis or {}
+        self.geoip = geoip or {}
         self.session: Optional[SessionState] = None
         self.chan = None
         self._input_buffer = ""
@@ -45,6 +52,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             remote_port=self.remote_port,
             username=self.username,
             password=self.password,
+            credential_analysis=self.credential_analysis,
+            geoip=self.geoip,
         )
         # Send Ubuntu MOTD
         if self.config.honeypot.motd:
@@ -140,26 +149,65 @@ class DoppelSSHServer(asyncssh.SSHServer):
         self.session_manager = session_manager
         self.config = config
         self._client_creds = {}
+        self._geoip_cache: dict = {}  # ip → enrichment result, reused per connection
 
     def connection_made(self, conn):
         peer = conn.get_extra_info("peername")
         self.remote_ip = peer[0] if peer else "unknown"
         self.remote_port = peer[1] if peer else 0
-        logger.info(f"Incoming SSH connection from {self.remote_ip}:{self.remote_port}")
+
+        # GeoIP enrichment — synchronous, sub-millisecond against local mmdb
+        geo_cfg = getattr(self.config, "geoip", None)
+        city_db = getattr(geo_cfg, "city_db_path", "") if geo_cfg else ""
+        asn_db  = getattr(geo_cfg, "asn_db_path",  "") if geo_cfg else ""
+        geo = geoip_enrich(self.remote_ip, city_db_path=city_db, asn_db_path=asn_db)
+        self._client_creds["geoip"] = geo
+
+        geo_str = geoip_summary(geo)
+        dc_flag = " [DATACENTER/CLOUD]" if geo.get("is_datacenter") else ""
+
+        safe_ips = self.config.access.safe_ips
+        if self.remote_ip in safe_ips:
+            logger.info(
+                f"[SAFE IP] Trusted connection from {self.remote_ip}:{self.remote_port} | {geo_str}"
+            )
+        else:
+            logger.warning(
+                f"[ALERT] SSH probe from {self.remote_ip}:{self.remote_port}{dc_flag} | {geo_str} — "
+                "honeypot deception active."
+            )
 
     def password_auth_supported(self):
         return True
 
     def validate_password(self, username, password):
-        logger.info(f"Auth attempt: user='{username}', pass='{password}' from {self.remote_ip}")
+        # Run credential pattern analysis before accepting
+        analysis = _credential_analyzer.analyze(username, password)
         self._client_creds["user"] = username
         self._client_creds["pass"] = password
-        # Always accept password to bait the attacker inside
+        self._client_creds["credential_analysis"] = analysis
+
+        logger.info(
+            f"Auth attempt: user='{username}' from {self.remote_ip} | "
+            f"risk={analysis['risk_level']} | label={analysis['primary_label']} | "
+            f"note={analysis['notes']}"
+        )
+
+        # Emit a structured alert for high/critical risk credential patterns
+        if analysis["risk_level"] in ("high", "critical"):
+            logger.warning(
+                f"[CRED ALERT] {analysis['risk_level'].upper()} risk credential from "
+                f"{self.remote_ip} — {analysis['primary_label']}: {analysis['notes']}"
+            )
+
+        # Always accept to bait the attacker inside
         return self.config.honeypot.accept_any_password
 
     def session_requested(self):
         user = self._client_creds.get("user", self.config.honeypot.default_user)
         pw = self._client_creds.get("pass", "")
+        cred_analysis = self._client_creds.get("credential_analysis", {})
+        geoip_data    = self._client_creds.get("geoip", {})
         return DoppelSSHServerSession(
             session_manager=self.session_manager,
             config=self.config,
@@ -167,6 +215,8 @@ class DoppelSSHServer(asyncssh.SSHServer):
             remote_port=self.remote_port,
             username=user,
             password=pw,
+            credential_analysis=cred_analysis,
+            geoip=geoip_data,
         )
 
 

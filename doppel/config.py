@@ -52,6 +52,17 @@ class AnalyticsSettings(BaseModel):
     reports_dir: str = "reports"
 
 
+class AccessSettings(BaseModel):
+    """IPs that bypass all deception and get a real sandbox shell."""
+    safe_ips: list[str] = Field(default_factory=list)
+
+
+class GeoIPSettings(BaseModel):
+    """Paths to local MaxMind GeoLite2 .mmdb files.  Leave empty to disable enrichment."""
+    city_db_path: str = ""   # e.g. /opt/geoip/GeoLite2-City.mmdb
+    asn_db_path:  str = ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb
+
+
 class DoppelConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOPPEL_",
@@ -64,6 +75,10 @@ class DoppelConfig(BaseSettings):
     deception: DeceptionSettings = Field(default_factory=DeceptionSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
+    access: AccessSettings = Field(default_factory=AccessSettings)
+    benign_commands: list[str] = Field(default_factory=list)
+    http_sensor_port: int = 8080  # 0 = disabled
+    geoip: GeoIPSettings = Field(default_factory=GeoIPSettings)
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DoppelConfig":
