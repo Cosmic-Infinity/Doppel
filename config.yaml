@@ -55,17 +55,26 @@ analytics:
 # Alert/logging still fires so you know they connected, but no deception.
 access:
   safe_ips:
-    - "127.0.0.1"
-    - "192.168.1.10"   # replace with your actual admin IP(s)
+    - "127.0.0.1"   # localhost
+    - "100.81.22.95" #silverstar
+    - "100.119.167.91" # youknow
+    - "100.118.57.70" #blackbird
+    - "100.117.47.14" #vibhatsu
 
   # Firewall for the web dashboard (port 8000). Only these IPs / CIDR ranges can
   # open it (HTTP, SSE and WebSocket). Everyone else gets 403.
   # Leave empty to allow loopback (127.0.0.1 / ::1) only.
   dashboard_allowed_ips:
-    - "127.0.0.1"
-    - "::1"
-    - "192.168.1.10"      # replace with your admin IP
+    #- "127.0.0.1"
+    #- "::1"
+    #- "192.168.1.10"      # replace with your admin IP
     # - "10.0.0.0/24"     # CIDR ranges work too
+    - "127.0.0.1"   # localhost
+    - "100.81.22.95" #silverstar
+    - "100.119.167.91" # youknow
+    - "100.118.57.70" #blackbird
+    - "100.117.47.14" #vibhatsu
+
 
 # Commands considered normal/benign for this server persona.
 # These are always routed to the real sandbox (never to LLM deception),
