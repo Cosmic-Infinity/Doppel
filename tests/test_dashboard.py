@@ -7,7 +7,8 @@ from doppel.dashboard.app import app, controller
 def client():
     # Force mock mode for test
     controller.config.llm.mock_mode = True
-    return TestClient(app)
+    controller.config.access.dashboard_allowed_ips = ["testclient", "127.0.0.1"]
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_dashboard_status_endpoint(client):
@@ -70,3 +71,15 @@ def test_dashboard_quick_fix_endpoint(client):
     # Revert back to 2222
     client.post("/api/quick-fix", json={"action": "set_port", "value": 2222})
 
+
+
+def test_dashboard_firewall_blocks_unlisted_ip():
+    controller.config.access.dashboard_allowed_ips = ["10.0.0.0/24"]
+    try:
+        allowed = TestClient(app, client=("10.0.0.7", 5000))
+        denied = TestClient(app, client=("203.0.113.9", 5000))
+        assert allowed.get("/api/status").status_code == 200
+        assert denied.get("/api/status").status_code == 403
+        assert denied.get("/").status_code == 403
+    finally:
+        controller.config.access.dashboard_allowed_ips = []

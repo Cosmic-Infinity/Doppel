@@ -58,6 +58,15 @@ access:
     - "127.0.0.1"
     - "192.168.1.10"   # replace with your actual admin IP(s)
 
+  # Firewall for the web dashboard (port 8000). Only these IPs / CIDR ranges can
+  # open it (HTTP, SSE and WebSocket). Everyone else gets 403.
+  # Leave empty to allow loopback (127.0.0.1 / ::1) only.
+  dashboard_allowed_ips:
+    - "127.0.0.1"
+    - "::1"
+    - "192.168.1.10"      # replace with your admin IP
+    # - "10.0.0.0/24"     # CIDR ranges work too
+
 # Commands considered normal/benign for this server persona.
 # These are always routed to the real sandbox (never to LLM deception),
 # so they look authentic even to a careful attacker.

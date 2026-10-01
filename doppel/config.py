@@ -55,6 +55,8 @@ class AnalyticsSettings(BaseModel):
 class AccessSettings(BaseModel):
     """IPs that bypass all deception and get a real sandbox shell."""
     safe_ips: list[str] = Field(default_factory=list)
+    # IPs / CIDR ranges allowed to reach the web dashboard. Empty = loopback only.
+    dashboard_allowed_ips: list[str] = Field(default_factory=list)
 
 
 class GeoIPSettings(BaseModel):

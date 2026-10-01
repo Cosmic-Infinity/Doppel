@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from doppel.dashboard.controller import HoneypotController
+from doppel.dashboard.ip_filter import IPAllowlistMiddleware
 
 logger = logging.getLogger("doppel.dashboard.api")
 
@@ -25,6 +26,12 @@ app.add_middleware(
 )
 
 controller = HoneypotController()
+
+# Firewall: added last so it is the outermost layer and runs before CORS/routes.
+app.add_middleware(
+    IPAllowlistMiddleware,
+    get_allowed=lambda: controller.config.access.dashboard_allowed_ips,
+)
 
 
 class ConfigUpdateRequest(BaseModel):

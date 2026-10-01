@@ -322,6 +322,23 @@ flowchart LR
 
     F --> J
     B -->|"All Systems Healthy"| J
+    ### 🔒 Dashboard Firewall (IP Allow-List)
+
+Restrict who can open the dashboard (HTTP, SSE, and WebSocket) by listing allowed IPs or CIDR ranges in `config.yaml`:
+
+```yaml
+access:
+  dashboard_allowed_ips:
+    - "127.0.0.1"
+    - "::1"
+    - "192.168.1.10"
+    - "10.0.0.0/24"
+```
+
+- Any IP not listed receives `403 Forbidden`.
+- If the list is empty, only loopback (`127.0.0.1` / `::1`) is allowed.
+- This is separate from `access.safe_ips`, which controls honeypot deception bypass.
+- Behind a reverse proxy, configure uvicorn's `--forwarded-allow-ips` so the real client IP is seen.
 ```
 
 ### Live event stream
