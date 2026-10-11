@@ -36,3 +36,46 @@ async def test_mock_llm_unknown_command_fallback():
 
     assert "bash: foobar123: command not found" in output
     assert "Simulated output for:" not in output
+
+
+def test_deception_clean_output_collapses_repeats():
+    from doppel.ai.deception_engine import DeceptionEngine
+    engine = DeceptionEngine(LLMClient(mock_mode=True))
+
+    raw = "Sorry, try again.\n" * 50
+    cleaned = engine._clean_output(raw, command="sudo passwd")
+    lines = cleaned.strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0] == "Sorry, try again."
+    assert lines[1] == "Sorry, try again."
+
+
+def test_deception_clean_output_truncates_hallucinated_prompts():
+    from doppel.ai.deception_engine import DeceptionEngine
+    engine = DeceptionEngine(LLMClient(mock_mode=True))
+
+    raw = (
+        "[sudo] password for ubuntu: \n"
+        "Sorry, try again.\n"
+        "ubuntu@prod-api-node-01:~$ sudo shutdown\n"
+        "Failed to set wall message\n"
+    )
+    cleaned = engine._clean_output(raw, command="sudo passwd")
+    assert "[sudo] password for ubuntu:" in cleaned
+    assert "Sorry, try again." in cleaned
+    assert "sudo shutdown" not in cleaned
+    assert "Failed to set wall message" not in cleaned
+
+
+def test_deception_clean_output_strips_echoed_first_line():
+    from doppel.ai.deception_engine import DeceptionEngine
+    engine = DeceptionEngine(LLMClient(mock_mode=True))
+
+    raw = (
+        "ubuntu@prod-api-node-01:~$ sudo psswd\n"
+        "[sudo] password for ubuntu: "
+    )
+    cleaned = engine._clean_output(raw, command="sudo psswd")
+    assert "ubuntu@prod-api-node-01:~$" not in cleaned
+    assert cleaned.strip() == "[sudo] password for ubuntu:"
+
