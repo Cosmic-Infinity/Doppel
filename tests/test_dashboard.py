@@ -26,17 +26,19 @@ def test_dashboard_config_endpoints(client):
     assert get_res.status_code == 200
     cfg = get_res.json()
     assert "honeypot_port" in cfg
+    assert "http_sensor_port" in cfg
     assert "persona" in cfg
 
     # 2. Update config
-    post_res = client.post("/api/config", json={"honeypot_port": 2223, "persona": "cloud_worker"})
+    post_res = client.post("/api/config", json={"honeypot_port": 2223, "persona": "cloud_worker", "http_sensor_port": 8088})
     assert post_res.status_code == 200
     updated = post_res.json()["config"]
     assert updated["honeypot_port"] == 2223
     assert updated["persona"] == "cloud_worker"
+    assert updated["http_sensor_port"] == 8088
 
     # Revert back to 2222
-    client.post("/api/config", json={"honeypot_port": 2222, "persona": "ubuntu_web_server"})
+    client.post("/api/config", json={"honeypot_port": 2222, "persona": "ubuntu_web_server", "http_sensor_port": 8080})
 
 
 def test_dashboard_sessions_endpoint(client):
@@ -145,3 +147,78 @@ def test_dashboard_firewall_blocks_unlisted_ip():
         assert denied.get("/").status_code == 403
     finally:
         controller.config.access.dashboard_allowed_ips = []
+
+
+def test_dashboard_chat_assistant_benchmark(client):
+    res = client.post("/api/chat-assistant", json={"message": "Run a model speed benchmark test"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert "reply" in data and len(data["reply"]) > 0
+    assert "latency_seconds" in data and data["latency_seconds"] >= 0
+    assert "tokens_generated" in data and data["tokens_generated"] > 0
+    assert "tokens_per_second" in data and data["tokens_per_second"] > 0
+    assert "model" in data
+    assert "system_state" in data
+    assert data["system_state"]["status"] == controller.status
+
+
+def test_dashboard_chat_assistant_model_override_and_state(client):
+    res = client.post("/api/chat-assistant", json={
+        "message": "What was the last attack like and what are your suggestions?",
+        "model": "qwen3.6:35b-a3b"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["model"] == "qwen3.6:35b-a3b"
+    assert "reply" in data and len(data["reply"]) > 0
+    assert "system_state" in data
+    assert data["system_state"]["port"] == controller.config.honeypot.port
+
+
+def test_index_html_has_assistant_elements(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert "btn-open-assistant" in html
+    assert "assistant-modal" in html
+    assert "assistant-model-select" in html
+    assert "assistant-chips-bar" in html
+
+
+@pytest.mark.asyncio
+async def test_http_sensor_port_conflict_resilience():
+    import socket
+    # Pre-occupy a port to simulate another service running on it (like port 8080)
+    conflict_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    conflict_sock.bind(("127.0.0.1", 0))
+    conflict_port = conflict_sock.getsockname()[1]
+    conflict_sock.listen(1)
+
+    orig_port = controller.config.http_sensor_port
+    orig_mock = controller.config.llm.mock_mode
+    orig_host = controller.config.honeypot.host
+    orig_hp_port = controller.config.honeypot.port
+    controller.config.honeypot.host = "127.0.0.1"
+    controller.config.honeypot.port = 2229
+    controller.config.http_sensor_port = conflict_port
+    controller.config.llm.mock_mode = True
+
+    try:
+        # Start honeypot while HTTP sensor port is occupied
+        res = await controller.start()
+        # Honeypot must successfully start without crashing or sys.exit
+        assert res["status"] == "RUNNING"
+        assert controller.status == "RUNNING"
+        # Stop honeypot cleanly
+        stop_res = await controller.stop()
+        assert stop_res["status"] == "STOPPED"
+    finally:
+        conflict_sock.close()
+        controller.config.http_sensor_port = orig_port
+        controller.config.llm.mock_mode = orig_mock
+        controller.config.honeypot.host = orig_host
+        controller.config.honeypot.port = orig_hp_port
+
+

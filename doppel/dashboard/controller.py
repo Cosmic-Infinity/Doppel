@@ -35,6 +35,7 @@ class HoneypotController:
         self.ssh_server = None
         self.http_server = None          # uvicorn server for HTTP sensor
         self._http_server_task: Optional[asyncio.Task] = None
+        self._http_sock = None
         self._server_task: Optional[asyncio.Task] = None
         self.active_websockets: Set[WebSocket] = set()
         self.active_sse_queues: Set[asyncio.Queue] = set()
@@ -210,13 +211,27 @@ class HoneypotController:
                 await self.ssh_server.wait_closed()
                 self.ssh_server = None
 
+            if self.http_server:
+                self.http_server.should_exit = True
+
             if self._http_server_task and not self._http_server_task.done():
-                self._http_server_task.cancel()
                 try:
-                    await self._http_server_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                    await asyncio.wait_for(asyncio.shield(self._http_server_task), timeout=1.5)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    self._http_server_task.cancel()
+                    try:
+                        await self._http_server_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
                 self._http_server_task = None
+
+            if hasattr(self, "_http_sock") and self._http_sock:
+                try:
+                    self._http_sock.close()
+                except Exception:
+                    pass
+                self._http_sock = None
+            self.http_server = None
 
             if self.session_manager:
                 active_ids = list(self.session_manager.sessions.keys())
@@ -269,10 +284,144 @@ class HoneypotController:
                 "endpoint": self.config.llm.base_url,
             }
 
+    async def query_assistant(self, message: str, model_override: Optional[str] = None) -> Dict[str, Any]:
+        """Query the in-built security assistant with live telemetry, state context, and benchmark metrics."""
+        target_model = model_override or self.config.llm.model
+        client = LLMClient(
+            base_url=self.config.llm.base_url,
+            model=target_model,
+            api_key=self.config.llm.api_key,
+            timeout=self.config.llm.timeout_seconds,
+            mock_mode=self.config.llm.mock_mode,
+        )
+
+        # 1. Gather live software state
+        docker_available = False
+        if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
+            docker_available = getattr(self.session_manager.sandbox_manager, "is_available", False)
+
+        active_sessions_list = []
+        if self.session_manager and self.session_manager.sessions:
+            for s in self.session_manager.sessions.values():
+                active_sessions_list.append({
+                    "session_id": s.session_id[:8],
+                    "remote_ip": s.remote_ip,
+                    "username": s.username,
+                    "cwd": s.cwd,
+                    "threat_score": s.threat_score,
+                    "command_count": len(s.history),
+                })
+
+        # 2. Gather recent attacker telemetry from DB
+        recent_sessions = []
+        try:
+            all_sessions = await self.db.get_all_sessions()
+            for s in all_sessions[:5]:
+                sess_info = {
+                    "session_id": s["session_id"][:8],
+                    "remote_ip": s.get("remote_ip", "unknown"),
+                    "city": s.get("city") or "unknown",
+                    "country": s.get("country_name") or "unknown",
+                    "username": s.get("username", "ubuntu"),
+                    "start_time": s.get("start_time", ""),
+                    "max_threat_score": s.get("max_threat_score", 0),
+                    "command_count": s.get("command_count", 0),
+                    "last_command": s.get("last_command", ""),
+                    "credential_risk": s.get("credential_risk", "none"),
+                }
+                if len(recent_sessions) < 2:
+                    try:
+                        details = await self.db.get_session_details(s["session_id"])
+                        cmds = [c.get("command", "") for c in details.get("commands", [])[-5:]]
+                        sess_info["recent_commands"] = cmds
+                    except Exception:
+                        pass
+                recent_sessions.append(sess_info)
+        except Exception as e:
+            logger.warning(f"Could not load recent telemetry for assistant: {e}")
+
+        # 3. Build system prompt with live state
+        system_prompt = (
+            "You are the Doppel AI Security Intelligence Assistant and Live Benchmark Tool.\n"
+            "You assist cybersecurity analysts by monitoring this honeypot system, testing model generation performance, "
+            "analyzing live attacker telemetry, and evaluating defensive postures.\n\n"
+            "CURRENT DOPPEL SYSTEM STATE:\n"
+            f"- Honeypot Status: {self.status}\n"
+            f"- SSH Port: {self.config.honeypot.port}\n"
+            f"- Persona Profile: {self.config.deception.persona}\n"
+            f"- Hostname: {self.config.honeypot.hostname}\n"
+            f"- Docker Execution Sandbox: {'Ready' if docker_available else 'Offline (Pure AI Simulation)'}\n"
+            f"- Active Inference Model: {target_model}\n"
+            f"- Active Sessions ({len(active_sessions_list)}): {json.dumps(active_sessions_list)}\n\n"
+            f"RECENT ATTACKER SESSIONS (Last {len(recent_sessions)}):\n"
+            f"{json.dumps(recent_sessions, indent=2)}\n\n"
+            "INSTRUCTIONS:\n"
+            "- Answer directly, technically, and concisely in clean Markdown.\n"
+            "- When asked about attacks or telemetry, reference the real session data above (IPs, usernames, commands, threat scores).\n"
+            "- When asked for suggestions, provide prioritized, actionable defensive recommendations (SSH hardening, UFW firewall rules, sudoers audits, credential rotation).\n"
+            "- When asked for speed tests or benchmarks, provide a complete, well-formed response so generation latency can be evaluated."
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
+        ]
+
+        try:
+            metrics = await client.chat_completion_with_metrics(messages=messages, max_tokens=1024)
+            return {
+                "success": True,
+                "reply": metrics["content"].strip(),
+                "model": target_model,
+                "latency_seconds": metrics["latency_seconds"],
+                "tokens_generated": metrics["tokens"],
+                "tokens_per_second": metrics["tokens_per_second"],
+                "system_state": {
+                    "status": self.status,
+                    "port": self.config.honeypot.port,
+                    "persona": self.config.deception.persona,
+                    "active_sessions_count": len(active_sessions_list),
+                    "recent_sessions_count": len(recent_sessions),
+                },
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "model": target_model,
+                "latency_seconds": 0.0,
+                "tokens_generated": 0,
+                "tokens_per_second": 0.0,
+            }
+
     async def _run_http_sensor(self, deception_engine) -> None:
-        """Run the HTTP honeypot sensor on port 8080 using uvicorn."""
+        """Run the HTTP honeypot sensor safely using uvicorn with a pre-bound socket."""
+        import socket
         import uvicorn
+
         http_port = getattr(self.config, "http_sensor_port", 8080)
+        if not http_port or http_port <= 0:
+            logger.info("HTTP honeypot sensor disabled (port set to 0)")
+            return
+
+        host = self.config.honeypot.host or "0.0.0.0"
+
+        # Pre-bind the socket to safely handle port conflicts without letting Uvicorn call sys.exit(1)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, http_port))
+            sock.listen(128)
+            sock.setblocking(False)
+        except OSError as e:
+            sock.close()
+            logger.warning(
+                f"HTTP honeypot sensor could not bind on {host}:{http_port} ([Errno {getattr(e, 'errno', 'unknown')}]: {e}). "
+                "HTTP sensor disabled; SSH honeypot and dashboard remain operational."
+            )
+            return
+
+        self._http_sock = sock
 
         async def _event_cb(event_type: str, data: dict) -> None:
             self._on_session_event(event_type, data)
@@ -285,22 +434,33 @@ class HoneypotController:
         )
         cfg = uvicorn.Config(
             app=sensor_app,
-            host=self.config.honeypot.host,
-            port=http_port,
             log_level="warning",
             access_log=False,
+            lifespan="off",
         )
         server = uvicorn.Server(cfg)
-        logger.info(f"HTTP honeypot sensor starting on port {http_port}")
+        self.http_server = server
+        logger.info(f"HTTP honeypot sensor listening on {host}:{http_port}")
+
         try:
-            await server.serve()
+            await server.serve(sockets=[sock])
         except asyncio.CancelledError:
             logger.info("HTTP honeypot sensor stopped")
+        except (SystemExit, Exception) as e:
+            logger.warning(f"HTTP honeypot sensor stopped: {e}")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            self._http_sock = None
+            self.http_server = None
 
     def get_config_dict(self) -> Dict[str, Any]:
         return {
             "honeypot_host": self.config.honeypot.host,
             "honeypot_port": self.config.honeypot.port,
+            "http_sensor_port": getattr(self.config, "http_sensor_port", 8080),
             "hostname": self.config.honeypot.hostname,
             "default_user": self.config.honeypot.default_user,
             "persona": self.config.deception.persona,
@@ -368,6 +528,8 @@ class HoneypotController:
             self.config.sandbox.enabled = bool(updates["sandbox_enabled"])
         if "hostname" in updates:
             self.config.honeypot.hostname = str(updates["hostname"])
+        if "http_sensor_port" in updates:
+            self.config.http_sensor_port = int(updates["http_sensor_port"])
         self._sync_runtime_components()
 
     async def diagnose_environment(self) -> Dict[str, Any]:
@@ -536,10 +698,30 @@ class HoneypotController:
                     except Exception:
                         pass
 
+        # 3b. HTTP sensor port check
+        http_sensor_port = getattr(self.config, "http_sensor_port", 8080)
+        http_port_diag = {
+            "port": http_sensor_port,
+            "available": True,
+            "enabled": bool(http_sensor_port and http_sensor_port > 0),
+            "detail": f"HTTP sensor port {http_sensor_port} is available." if http_sensor_port > 0 else "HTTP sensor is disabled (port 0).",
+            "info": "Listens for malicious web scanner probes (e.g. requests for /.env, /wp-admin, SQL injection).",
+        }
+        if self.status != "RUNNING" and http_sensor_port and http_sensor_port > 0:
+            try:
+                test_h_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                test_h_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                test_h_sock.bind((self.config.honeypot.host, http_sensor_port))
+                test_h_sock.close()
+            except Exception:
+                http_port_diag["available"] = False
+                http_port_diag["detail"] = f"Port {http_sensor_port} is currently in use by another service. HTTP sensor will be disabled automatically or can be configured to an alternate port."
+
         return {
             "docker": docker_diag,
             "llm": llm_diag,
             "port": port_diag,
+            "http_port": http_port_diag,
             "persona": {
                 "current": self.config.deception.persona,
                 "info": "Deception Persona defines the system identity, installed fake services, and honeytokens that the attacker discovers during reconnaissance.",
@@ -563,6 +745,9 @@ class HoneypotController:
             self.config.sandbox.enabled = bool(value)
             self._sync_runtime_components()
             return {"message": f"Sandbox set to {value}", "config": self.get_config_dict()}
+        elif action == "set_http_port":
+            self.config.http_sensor_port = int(value)
+            return {"message": f"HTTP sensor port set to {value}", "config": self.get_config_dict()}
         elif action == "recheck":
             if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
                 self.session_manager.sandbox_manager.check_availability()

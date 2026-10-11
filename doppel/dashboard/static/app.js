@@ -109,6 +109,17 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const infoModalBody = document.getElementById('info-modal-body');
   const btnCloseInfo = document.getElementById('btn-close-info');
 
+  // DOM Elements - AI Assistant & Benchmark Modal
+  const btnOpenAssistant = document.getElementById('btn-open-assistant');
+  const assistantModal = document.getElementById('assistant-modal');
+  const btnCloseAssistant = document.getElementById('btn-close-assistant');
+  const assistantModelSelect = document.getElementById('assistant-model-select');
+  const assistantChips = document.querySelectorAll('.assistant-chip');
+  const assistantChatBody = document.getElementById('assistant-chat-body');
+  const assistantInputForm = document.getElementById('assistant-input-form');
+  const assistantInput = document.getElementById('assistant-input');
+  const btnSendAssistant = document.getElementById('btn-send-assistant');
+
   // --- View Management ---
 
   function switchView(viewName, manual = false) {
@@ -468,6 +479,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     // Populate model select with installed models if available
     if (llm.models_available && llm.models_available.length > 0) {
       selectLlmModel.innerHTML = '';
+      if (assistantModelSelect) {
+        assistantModelSelect.innerHTML = '';
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = `Default (${llm.configured_model || 'System'})`;
+        assistantModelSelect.appendChild(defOpt);
+      }
+
       llm.models_available.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
@@ -476,6 +495,16 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           opt.selected = true;
         }
         selectLlmModel.appendChild(opt);
+
+        if (assistantModelSelect) {
+          const aOpt = document.createElement('option');
+          aOpt.value = m;
+          aOpt.textContent = m;
+          if (m.toLowerCase() === (llm.configured_model || '').toLowerCase()) {
+            aOpt.selected = true;
+          }
+          assistantModelSelect.appendChild(aOpt);
+        }
       });
     }
 
@@ -1096,6 +1125,160 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const tabId = `tab-${btn.dataset.tab}`;
       const targetContent = document.getElementById(tabId);
       if (targetContent) targetContent.classList.add('active');
+    });
+  });
+
+  // --- AI Assistant & Benchmark Console Logic ---
+  function syncAssistantModels() {
+    if (!assistantModelSelect) return;
+    if (assistantModelSelect.options.length <= 1 && selectLlmModel && selectLlmModel.options.length > 0) {
+      const curVal = assistantModelSelect.value;
+      assistantModelSelect.innerHTML = '';
+      const defOpt = document.createElement('option');
+      defOpt.value = '';
+      defOpt.textContent = 'Default Configured Model';
+      assistantModelSelect.appendChild(defOpt);
+
+      Array.from(selectLlmModel.options).forEach(opt => {
+        const aOpt = document.createElement('option');
+        aOpt.value = opt.value;
+        aOpt.textContent = opt.textContent;
+        if (opt.value === curVal || opt.selected) {
+          aOpt.selected = true;
+        }
+        assistantModelSelect.appendChild(aOpt);
+      });
+    }
+  }
+
+  if (btnOpenAssistant) {
+    btnOpenAssistant.addEventListener('click', () => {
+      syncAssistantModels();
+      assistantModal.classList.remove('hidden');
+      assistantInput.focus();
+    });
+  }
+
+  if (btnCloseAssistant) {
+    btnCloseAssistant.addEventListener('click', () => {
+      assistantModal.classList.add('hidden');
+    });
+  }
+
+  if (assistantModal) {
+    assistantModal.addEventListener('click', (e) => {
+      if (e.target === assistantModal) {
+        assistantModal.classList.add('hidden');
+      }
+    });
+  }
+
+  async function sendAssistantMessage(messageText) {
+    const text = (messageText || '').trim();
+    if (!text) return;
+
+    // 1. Append User Message Bubble
+    const userMsg = document.createElement('div');
+    userMsg.className = 'assistant-msg assistant-msg-user';
+    userMsg.innerHTML = `<div class="assistant-bubble">${escapeHtml(text)}</div>`;
+    assistantChatBody.appendChild(userMsg);
+    assistantInput.value = '';
+
+    // 2. Append Loading Indicator
+    const targetModel = assistantModelSelect ? assistantModelSelect.value : '';
+    const loadingMsg = document.createElement('div');
+    loadingMsg.className = 'assistant-msg assistant-msg-bot';
+    loadingMsg.id = 'assistant-temp-loading';
+    loadingMsg.innerHTML = `
+      <div class="assistant-loading-indicator">
+        <span class="assistant-spinner"></span>
+        <span>Evaluating inference${targetModel ? ` on ${escapeHtml(targetModel)}` : ''}...</span>
+      </div>
+    `;
+    assistantChatBody.appendChild(loadingMsg);
+    assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
+
+    // Disable input while running
+    assistantInput.disabled = true;
+    btnSendAssistant.disabled = true;
+
+    try {
+      const payload = { message: text };
+      if (targetModel) {
+        payload.model = targetModel;
+      }
+
+      const res = await fetch('/api/chat-assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const loadingElem = document.getElementById('assistant-temp-loading');
+      if (loadingElem) loadingElem.remove();
+
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (!data.success && data.error) {
+        throw new Error(data.error);
+      }
+
+      // Render assistant message with formatted markdown and performance metrics
+      const botMsg = document.createElement('div');
+      botMsg.className = 'assistant-msg assistant-msg-bot';
+
+      const formattedBody = renderMarkdown(data.reply || '(Empty response)');
+      const speedStr = typeof data.tokens_per_second === 'number' ? `${data.tokens_per_second.toFixed(1)} tok/s` : '';
+      const latencyStr = typeof data.latency_seconds === 'number' ? `${data.latency_seconds.toFixed(2)}s` : '';
+      const tokensStr = typeof data.tokens_generated === 'number' ? `${data.tokens_generated} tokens` : '';
+      const modelStr = data.model || targetModel || 'default';
+
+      botMsg.innerHTML = `
+        <div class="assistant-bubble">${formattedBody}</div>
+        <div class="assistant-metrics-bar">
+          ${speedStr ? `<span class="metric-pill speed">${speedStr}</span>` : ''}
+          ${latencyStr ? `<span class="metric-pill latency">${latencyStr} latency</span>` : ''}
+          ${tokensStr ? `<span class="metric-pill tokens">${tokensStr}</span>` : ''}
+          <span class="metric-pill model">${escapeHtml(modelStr)}</span>
+        </div>
+      `;
+      assistantChatBody.appendChild(botMsg);
+    } catch (err) {
+      const loadingElem = document.getElementById('assistant-temp-loading');
+      if (loadingElem) loadingElem.remove();
+
+      const errMsg = document.createElement('div');
+      errMsg.className = 'assistant-msg assistant-msg-bot';
+      errMsg.innerHTML = `
+        <div class="assistant-bubble" style="border-color: var(--accent-red); color: var(--accent-red);">
+          Failed to query assistant: ${escapeHtml(err.message || 'Unknown network error')}
+        </div>
+      `;
+      assistantChatBody.appendChild(errMsg);
+    } finally {
+      assistantInput.disabled = false;
+      btnSendAssistant.disabled = false;
+      assistantInput.focus();
+      assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
+    }
+  }
+
+  if (assistantInputForm) {
+    assistantInputForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendAssistantMessage(assistantInput.value);
+    });
+  }
+
+  assistantChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      const prompt = chip.getAttribute('data-prompt');
+      if (prompt) {
+        sendAssistantMessage(prompt);
+      }
     });
   });
 

@@ -50,6 +50,12 @@
       </div>
 
       <div class="nav-actions">
+        <button id="btn-open-assistant" class="btn btn-secondary" title="Test model speed and query system intelligence">
+          <svg class="btn-svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>AI Assistant</span>
+        </button>
         <button id="btn-view-switch" class="btn btn-secondary hidden">
           <span id="btn-view-switch-label">Live Dashboard</span>
         </button>
@@ -302,6 +308,58 @@
         </div>
       </section>
     </main>
+
+    <!-- AI Assistant & Model Benchmark Modal -->
+    <div class="modal-backdrop hidden" id="assistant-modal">
+      <div class="assistant-window">
+        <div class="assistant-header">
+          <div class="assistant-title-group">
+            <svg class="assistant-header-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <div class="assistant-titles">
+              <span class="assistant-title">AI Assistant & Benchmark</span>
+              <span class="assistant-subtitle">Live Model Inference Speed & Security State Intelligence</span>
+            </div>
+          </div>
+          <div class="assistant-header-controls">
+            <div class="assistant-model-select-wrap">
+              <label for="assistant-model-select">Model:</label>
+              <select id="assistant-model-select" class="assistant-select">
+                <option value="">Default Configured Model</option>
+              </select>
+            </div>
+            <button class="btn-close" id="btn-close-assistant" title="Close assistant">&times;</button>
+          </div>
+        </div>
+
+        <!-- Quick Prompts / Benchmark triggers -->
+        <div class="assistant-chips-bar">
+          <span class="assistant-chips-label">Quick Prompts:</span>
+          <button type="button" class="assistant-chip" data-prompt="Run a model speed and throughput benchmark test.">Speed Benchmark</button>
+          <button type="button" class="assistant-chip" data-prompt="What was the last attacker attack like? Summarize the IP, commands run, and threat level.">Last Attack Summary</button>
+          <button type="button" class="assistant-chip" data-prompt="What are actionable defensive suggestions based on the last 5 attacks?">Defensive Suggestions</button>
+          <button type="button" class="assistant-chip" data-prompt="What is the current software state and active honeypot configuration?">System Status</button>
+        </div>
+
+        <!-- Chat messages container -->
+        <div class="assistant-chat-body" id="assistant-chat-body">
+          <div class="assistant-msg assistant-msg-system">
+            <div class="assistant-bubble">
+              Welcome to the Doppel AI Security Intelligence & Benchmark console. Test inference speed across models or query honeypot telemetry, attacker behaviors, and defensive recommendations.
+            </div>
+          </div>
+        </div>
+
+        <!-- Input Area -->
+        <form class="assistant-input-form" id="assistant-input-form">
+          <input type="text" id="assistant-input" class="assistant-input-field" placeholder="Ask about attacks, security recommendations, or prompt the model..." autocomplete="off">
+          <button type="submit" class="btn btn-primary assistant-send-btn" id="btn-send-assistant">
+            <span>Send</span>
+          </button>
+        </form>
+      </div>
+    </div>
 
     <!-- Info Explanation Modal (Plain English for all technical terms) -->
     <div class="modal-backdrop hidden" id="info-modal">

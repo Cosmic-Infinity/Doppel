@@ -42,11 +42,17 @@ class ConfigUpdateRequest(BaseModel):
     llm_model: Optional[str] = None
     llm_mock_mode: Optional[bool] = None
     sandbox_enabled: Optional[bool] = None
+    http_sensor_port: Optional[int] = None
 
 
 class QuickFixRequest(BaseModel):
     action: str
     value: Any = None
+
+
+class AssistantChatRequest(BaseModel):
+    message: str
+    model: Optional[str] = None
 
 
 @app.on_event("startup")
@@ -64,6 +70,11 @@ async def apply_quick_fix(req: QuickFixRequest):
     res = await controller.apply_quick_fix(req.action, req.value)
     diag = await controller.diagnose_environment()
     return {"result": res, "diagnostics": diag}
+
+
+@app.post("/api/chat-assistant")
+async def chat_assistant(req: AssistantChatRequest):
+    return await controller.query_assistant(message=req.message, model_override=req.model)
 
 
 @app.get("/api/status")
