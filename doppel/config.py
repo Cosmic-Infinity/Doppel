@@ -65,11 +65,15 @@ class GeoIPSettings(BaseModel):
     asn_db_path:  str = ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb
 
 
+from pydantic_settings import BaseSettings, SettingsConfigDict, YamlConfigSettingsSource
+
+
 class DoppelConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOPPEL_",
         env_nested_delimiter="__",
         case_sensitive=False,
+        extra="ignore",
     )
 
     honeypot: HoneypotSettings = Field(default_factory=HoneypotSettings)
@@ -85,15 +89,22 @@ class DoppelConfig(BaseSettings):
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DoppelConfig":
         """Load configuration from config.yaml if available, overlaid with env vars."""
-        file_path = Path(config_path or "config.yaml")
-        file_data: Dict[str, Any] = {}
-        if file_path.exists():
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = yaml.safe_load(f)
-                if isinstance(content, dict):
-                    file_data = content
+        return cls(_yaml_file=config_path or "config.yaml")
 
-        return cls(**file_data)
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        yaml_file = init_settings.init_kwargs.pop("_yaml_file", "config.yaml")
+        sources = [init_settings, env_settings, dotenv_settings]
+        if Path(yaml_file).exists():
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_file))
+        return tuple(sources)
 
 
 _CONFIG_INSTANCE: Optional[DoppelConfig] = None

@@ -32,12 +32,30 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self._input_buffer = ""
         self._last_char_was_cr = False
         self._execution_lock = asyncio.Lock()
+        self._shell_ready = asyncio.Event()
+        self._is_exec = False
 
     def pty_requested(self, term_type, term_size, term_modes):
         return True
 
     def shell_requested(self):
         return True
+
+    def exec_requested(self, command: str) -> bool:
+        self._is_exec = True
+        asyncio.create_task(self._handle_exec(command))
+        return True
+
+    async def _handle_exec(self, command: str):
+        await self._shell_ready.wait()
+        if not self.session:
+            return
+        output = await self.session_manager.process_command(self.session.session_id, command)
+        if output:
+            formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
+            self.chan.write(formatted.rstrip("\r\n") + "\r\n")
+        self.chan.exit(0)
+        self.chan.close()
 
     def connection_made(self, chan):
         self.chan = chan
@@ -47,18 +65,22 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             chan.set_line_mode(False)
 
     async def _start_shell(self):
-        self.session = await self.session_manager.create_session(
-            remote_ip=self.remote_ip,
-            remote_port=self.remote_port,
-            username=self.username,
-            password=self.password,
-            credential_analysis=self.credential_analysis,
-            geoip=self.geoip,
-        )
-        # Send Ubuntu MOTD
-        if self.config.honeypot.motd:
-            self.chan.write(self.config.honeypot.motd.replace("\n", "\r\n") + "\r\n")
-        self._write_prompt()
+        try:
+            self.session = await self.session_manager.create_session(
+                remote_ip=self.remote_ip,
+                remote_port=self.remote_port,
+                username=self.username,
+                password=self.password,
+                credential_analysis=self.credential_analysis,
+                geoip=self.geoip,
+            )
+            if not self._is_exec:
+                # Send Ubuntu MOTD
+                if self.config.honeypot.motd:
+                    self.chan.write(self.config.honeypot.motd.replace("\n", "\r\n") + "\r\n")
+                self._write_prompt()
+        finally:
+            self._shell_ready.set()
 
     def _get_prompt(self) -> str:
         cwd = self.session.cwd if self.session else "/home/ubuntu"
@@ -116,6 +138,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                     self.chan.write(char)
 
     async def _execute_line(self, command: str):
+        await self._shell_ready.wait()
         async with self._execution_lock:
             cmd_clean = command.strip()
             if not cmd_clean:

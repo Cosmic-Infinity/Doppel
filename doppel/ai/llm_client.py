@@ -162,5 +162,23 @@ class LLMClient:
                 "    5  sudo mysql -u root -p\n"
                 "    6  docker ps -a"
             )
+        elif "sudo" in user_msg:
+            return "[sudo] password for ubuntu: "
+        elif "id" in user_msg:
+            return "uid=1000(ubuntu) gid=1000(ubuntu) groups=1000(ubuntu),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),110(lxd)"
+        elif "whoami" in user_msg:
+            return "ubuntu"
+        elif "apt" in user_msg:
+            return "Reading package lists... Done\nBuilding dependency tree... Done\nAll packages are up to date."
+        elif "systemctl" in user_msg or "service" in user_msg:
+            return "System has not been booted with systemd as init system (PID 1). Can't operate."
 
-        return f"Simulated output for: {user_msg}"
+        # Extract binary name from prompt format (e.g. 'ubuntu:/home/ubuntu$ command')
+        cmd_text = user_msg
+        if "$ " in cmd_text:
+            cmd_text = cmd_text.split("$ ", 1)[1]
+        elif "# " in cmd_text:
+            cmd_text = cmd_text.split("# ", 1)[1]
+        tokens = cmd_text.strip().split()
+        binary = tokens[0] if tokens else "command"
+        return f"bash: {binary}: command not found"

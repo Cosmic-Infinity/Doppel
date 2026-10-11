@@ -147,6 +147,7 @@ class HoneypotController:
                 intercept_sensitive_files=self.config.deception.intercept_sensitive_files,
                 intercept_missing_tools=self.config.deception.intercept_missing_tools,
                 sandbox_available=sandbox_manager.is_available,
+                benign_commands=set(self.config.benign_commands),
             )
             observer = ThreatObserver(llm_client=llm_client, db=self.db)
             reporter = IncidentReporter(
@@ -311,6 +312,47 @@ class HoneypotController:
             "sandbox_image": self.config.sandbox.image,
         }
 
+    def _sync_runtime_components(self):
+        """Propagate updated config parameters to active session components without restart."""
+        if not self.session_manager:
+            return
+        if hasattr(self.session_manager, "deception_engine") and self.session_manager.deception_engine:
+            self.session_manager.deception_engine.persona = self.config.deception.persona
+            if hasattr(self.session_manager.deception_engine, "llm_client") and self.session_manager.deception_engine.llm_client:
+                self.session_manager.deception_engine.llm_client.base_url = self.config.llm.base_url.rstrip("/")
+                self.session_manager.deception_engine.llm_client.model = self.config.llm.model
+                self.session_manager.deception_engine.llm_client.mock_mode = self.config.llm.mock_mode
+        if hasattr(self.session_manager, "observer") and self.session_manager.observer and hasattr(self.session_manager.observer, "llm_client"):
+            self.session_manager.observer.llm_client.base_url = self.config.llm.base_url.rstrip("/")
+            self.session_manager.observer.llm_client.model = self.config.llm.model
+            self.session_manager.observer.llm_client.mock_mode = self.config.llm.mock_mode
+        if hasattr(self.session_manager, "reporter") and self.session_manager.reporter and hasattr(self.session_manager.reporter, "llm_client"):
+            self.session_manager.reporter.llm_client.base_url = self.config.llm.base_url.rstrip("/")
+            self.session_manager.reporter.llm_client.model = self.config.llm.model
+            self.session_manager.reporter.llm_client.mock_mode = self.config.llm.mock_mode
+        if hasattr(self.session_manager, "sandbox_manager") and self.session_manager.sandbox_manager:
+            self.session_manager.sandbox_manager.enabled = self.config.sandbox.enabled
+            if not self.config.sandbox.enabled:
+                self.session_manager.sandbox_manager.is_available = False
+            else:
+                self.session_manager.sandbox_manager.check_availability()
+
+    async def _attach_session_container(self, session) -> None:
+        """Asynchronously attach a new isolated sandbox container to an active session."""
+        try:
+            if not self.session_manager or not self.session_manager.sandbox_manager:
+                return
+            container_id = await asyncio.to_thread(
+                self.session_manager.sandbox_manager.create_sandbox_session,
+                session.session_id,
+                username=session.username,
+            )
+            if container_id:
+                session.container_id = container_id
+                logger.info(f"Dynamically attached Docker sandbox {container_id[:12]} to active session {session.session_id[:8]}")
+        except Exception as e:
+            logger.warning(f"Could not dynamically attach container to session {session.session_id[:8]}: {e}")
+
     def update_config(self, updates: Dict[str, Any]):
         if "honeypot_port" in updates:
             self.config.honeypot.port = int(updates["honeypot_port"])
@@ -326,6 +368,7 @@ class HoneypotController:
             self.config.sandbox.enabled = bool(updates["sandbox_enabled"])
         if "hostname" in updates:
             self.config.honeypot.hostname = str(updates["hostname"])
+        self._sync_runtime_components()
 
     async def diagnose_environment(self) -> Dict[str, Any]:
         """Perform proactive pre-flight checks on Docker, Ollama/LLM, and ports."""
@@ -337,12 +380,15 @@ class HoneypotController:
             "status": "unavailable",
             "available": False,
             "version": None,
+            "enabled": self.config.sandbox.enabled,
             "detail": "Docker is not running. Honeypot will run in zero-risk LLM simulation mode.",
             "info": "Docker Sandbox executes safe bash commands (like 'ls' or 'id') in an isolated, disposable container without network egress. If unavailable, Doppel seamlessly uses AI to simulate the bash terminal.",
         }
         if not self.config.sandbox.enabled:
             docker_diag["status"] = "disabled"
             docker_diag["detail"] = "Docker sandbox is disabled in configuration. Using pure LLM simulation."
+            if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
+                self.session_manager.sandbox_manager.is_available = False
         else:
             try:
                 import docker
@@ -353,10 +399,20 @@ class HoneypotController:
                 docker_diag["available"] = True
                 docker_diag["version"] = ver
                 docker_diag["detail"] = f"Docker Desktop is active (Engine v{ver}). Containers are isolated."
+
+                if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
+                    sm = self.session_manager.sandbox_manager
+                    sm.is_available = True
+                    sm.client = client
+                    for s in list(self.session_manager.sessions.values()):
+                        if not s.container_id:
+                            asyncio.create_task(self._attach_session_container(s))
             except Exception:
                 docker_diag["status"] = "unavailable"
                 docker_diag["available"] = False
-                docker_diag["detail"] = "Docker Desktop is not running. Safe simulation mode will be used automatically."
+                docker_diag["detail"] = "Docker Desktop is not running. Safe simulation mode will be used automatically (whitelisted commands will not execute in container isolation)."
+                if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
+                    self.session_manager.sandbox_manager.is_available = False
 
         # 2. LLM / Ollama check
         llm_diag = {
@@ -365,56 +421,89 @@ class HoneypotController:
             "latency_ms": 0,
             "models_available": [],
             "configured_model": self.config.llm.model,
+            "endpoint": self.config.llm.base_url,
+            "mock_mode": self.config.llm.mock_mode,
+            "backend_available": False,
+            "can_switch_live": False,
             "detail": "",
             "suggestion": None,
             "info": "The LLM powers dynamic terminal simulation, fake honeytoken credentials, and real-time MITRE ATT&CK analysis. Mock Mode runs locally using built-in simulated responses without requiring an AI model or GPU.",
         }
-        if self.config.llm.mock_mode:
-            llm_diag["status"] = "mock_mode"
-            llm_diag["detail"] = "Mock Mode is enabled. Built-in simulated responses will be used (no GPU/model required)."
-        else:
-            try:
-                start_t = time.time()
-                base = self.config.llm.base_url.rstrip("/")
-                models = []
-                async with httpx.AsyncClient(timeout=3.0) as client:
-                    # Attempt Ollama native tags API first
-                    ollama_url = base.replace("/v1", "") + "/api/tags"
+
+        # Probe LLM backend (even if currently in mock mode, to detect when Ollama comes online)
+        start_t = time.time()
+        base = self.config.llm.base_url.rstrip("/")
+        models = []
+        connected = False
+        last_err = None
+
+        try:
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                ollama_url = base.replace("/v1", "") + "/api/tags"
+                try:
+                    resp = await client.get(ollama_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = [m["name"] for m in data.get("models", [])]
+                        connected = True
+                except Exception as ex:
+                    last_err = ex
+
+                if not connected:
                     try:
-                        resp = await client.get(ollama_url)
+                        resp = await client.get(f"{base}/models")
                         if resp.status_code == 200:
                             data = resp.json()
-                            models = [m["name"] for m in data.get("models", [])]
-                    except Exception:
-                        pass
+                            models = [m.get("id") or m.get("name") for m in data.get("data", []) if m]
+                            connected = True
+                        elif resp.status_code in (401, 403):
+                            connected = True
+                    except Exception as ex:
+                        last_err = ex
 
-                    # Fallback to OpenAI /v1/models
-                    if not models:
-                        try:
-                            resp = await client.get(f"{base}/models")
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                models = [m.get("id") or m.get("name") for m in data.get("data", []) if m]
-                        except Exception:
-                            pass
+                if not connected:
+                    try:
+                        resp = await client.get(base)
+                        if resp.status_code < 500:
+                            connected = True
+                    except Exception as ex:
+                        last_err = ex
 
-                    elapsed_ms = int((time.time() - start_t) * 1000)
+                if not connected:
+                    raise last_err or ConnectionError(f"Cannot reach endpoint at {self.config.llm.base_url}")
+
+                elapsed_ms = int((time.time() - start_t) * 1000)
+                llm_diag["backend_available"] = True
+                llm_diag["latency_ms"] = elapsed_ms
+                llm_diag["models_available"] = [m for m in models if m]
+
+                curr_model = self.config.llm.model.lower()
+                model_found = any(curr_model in m.lower() or m.lower() in curr_model for m in models) if models else True
+
+                if self.config.llm.mock_mode:
+                    llm_diag["status"] = "mock_mode"
                     llm_diag["reachable"] = True
-                    llm_diag["latency_ms"] = elapsed_ms
-                    llm_diag["models_available"] = [m for m in models if m]
-
-                    curr_model = self.config.llm.model.lower()
-                    model_found = any(curr_model in m.lower() or m.lower() in curr_model for m in models) if models else True
-
-                    if models and not model_found:
-                        llm_diag["status"] = "model_missing"
-                        llm_diag["detail"] = f"Connected to Ollama ({elapsed_ms}ms), but model '{self.config.llm.model}' is not pulled yet."
-                        llm_diag["suggestion"] = f"Run 'ollama pull {self.config.llm.model}' or choose from installed models."
-                    else:
-                        llm_diag["status"] = "ready"
-                        llm_diag["detail"] = f"Connected to LLM backend ({elapsed_ms}ms). Model '{self.config.llm.model}' is ready."
-            except Exception as e:
+                    llm_diag["can_switch_live"] = True
+                    llm_diag["detail"] = f"Mock Mode active. Ollama backend is online ({elapsed_ms}ms) with model '{self.config.llm.model}'."
+                elif models and not model_found:
+                    llm_diag["status"] = "model_missing"
+                    llm_diag["reachable"] = True
+                    llm_diag["detail"] = f"Connected to Ollama ({elapsed_ms}ms), but model '{self.config.llm.model}' is not pulled yet."
+                    llm_diag["suggestion"] = f"Run 'ollama pull {self.config.llm.model}' or choose from installed models."
+                else:
+                    llm_diag["status"] = "ready"
+                    llm_diag["reachable"] = True
+                    llm_diag["detail"] = f"Connected to LLM backend ({elapsed_ms}ms). Model '{self.config.llm.model}' is ready."
+        except Exception:
+            llm_diag["backend_available"] = False
+            llm_diag["can_switch_live"] = False
+            if self.config.llm.mock_mode:
+                llm_diag["status"] = "mock_mode"
+                llm_diag["reachable"] = False
+                llm_diag["detail"] = "Mock Mode is enabled. Built-in simulated responses will be used (no GPU/model required)."
+            else:
                 llm_diag["status"] = "unreachable"
+                llm_diag["reachable"] = False
                 llm_diag["detail"] = f"Cannot reach endpoint at {self.config.llm.base_url}."
                 llm_diag["suggestion"] = "Start Ollama with 'ollama serve' in PowerShell, or switch to Mock Mode."
 
@@ -464,12 +553,19 @@ class HoneypotController:
             return {"message": f"Port changed to {value}", "config": self.get_config_dict()}
         elif action == "set_model":
             self.config.llm.model = str(value)
+            self._sync_runtime_components()
             return {"message": f"Model changed to {value}", "config": self.get_config_dict()}
         elif action == "toggle_mock":
             self.config.llm.mock_mode = bool(value)
+            self._sync_runtime_components()
             return {"message": f"Mock mode set to {value}", "config": self.get_config_dict()}
         elif action == "toggle_sandbox":
             self.config.sandbox.enabled = bool(value)
+            self._sync_runtime_components()
             return {"message": f"Sandbox set to {value}", "config": self.get_config_dict()}
+        elif action == "recheck":
+            if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
+                self.session_manager.sandbox_manager.check_availability()
+            return {"message": "Environment rechecked"}
         return {"error": f"Unknown quick-fix action: {action}"}
 

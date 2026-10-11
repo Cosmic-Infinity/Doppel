@@ -39,6 +39,14 @@
         </div>
         <div class="meta-badge" id="nav-meta-port">Port: 2222</div>
         <div class="meta-badge" id="nav-meta-model">Model: qwen2.5-coder:7b</div>
+        <div class="subsystem-badge" id="nav-badge-llm" title="AI Deception Model">
+          <span class="subsystem-dot checking" id="dot-nav-llm"></span>
+          <span id="text-nav-llm">LLM</span>
+        </div>
+        <div class="subsystem-badge" id="nav-badge-docker" title="Docker Sandbox">
+          <span class="subsystem-dot checking" id="dot-nav-docker"></span>
+          <span id="text-nav-docker">Docker</span>
+        </div>
       </div>
 
       <div class="nav-actions">
@@ -51,6 +59,21 @@
         </button>
       </div>
     </header>
+
+    <!-- Global Subsystem Warning Banner -->
+    <aside class="system-warning-banner hidden" id="system-warning-banner" role="alert" aria-live="polite">
+      <div class="warning-banner-container">
+        <div class="warning-banner-body">
+          <span class="warning-banner-icon">⚠</span>
+          <div class="warning-banner-messages" id="warning-banner-messages"></div>
+        </div>
+        <div class="warning-banner-actions">
+          <button type="button" class="btn-banner btn-banner-secondary" id="btn-banner-recheck">Recheck</button>
+          <button type="button" class="btn-banner btn-banner-primary hidden" id="btn-banner-mock">Switch to Mock Mode</button>
+          <button type="button" class="btn-banner-close" id="btn-banner-dismiss" title="Dismiss banner" aria-label="Dismiss">×</button>
+        </div>
+      </div>
+    </aside>
 
     <!-- VIEW 1: Pre-Flight Launch & Setup Screen (Shown when Stopped) -->
     <section class="launch-view" id="view-launch">

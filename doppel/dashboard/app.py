@@ -172,6 +172,26 @@ async def get_session_details(session_id: str):
         controller.session_manager and session_id in controller.session_manager.sessions
     )
     details["is_active"] = is_active
+    if is_active:
+        live = controller.session_manager.sessions[session_id]
+        details["cwd"] = live.cwd
+        details["max_threat_score"] = max(details.get("max_threat_score") or 0, live.threat_score)
+        db_cmds = details.get("commands", [])
+        if len(live.history) > len(db_cmds):
+            live_cmds = [
+                {
+                    "command": h["command"],
+                    "output": h["output"],
+                    "cwd": h.get("cwd", live.cwd),
+                    "route_decision": h.get("route_decision", "standard"),
+                    "timestamp": "",
+                }
+                for h in live.history
+            ]
+            for idx, c in enumerate(db_cmds):
+                if idx < len(live_cmds):
+                    live_cmds[idx].update({k: v for k, v in c.items() if v is not None})
+            details["commands"] = live_cmds
     return details
 
 

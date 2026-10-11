@@ -71,6 +71,68 @@ def test_dashboard_quick_fix_endpoint(client):
     # Revert back to 2222
     client.post("/api/quick-fix", json={"action": "set_port", "value": 2222})
 
+    # Test recheck action
+    recheck_res = client.post("/api/quick-fix", json={"action": "recheck"})
+    assert recheck_res.status_code == 200
+    recheck_data = recheck_res.json()
+    assert recheck_data["result"]["message"] == "Environment rechecked"
+    assert "diagnostics" in recheck_data
+    assert "docker" in recheck_data["diagnostics"]
+    assert "llm" in recheck_data["diagnostics"]
+    assert "enabled" in recheck_data["diagnostics"]["docker"]
+    assert "endpoint" in recheck_data["diagnostics"]["llm"]
+
+    # Test toggle_mock action
+    mock_res = client.post("/api/quick-fix", json={"action": "toggle_mock", "value": True})
+    assert mock_res.status_code == 200
+    assert controller.config.llm.mock_mode is True
+
+
+def test_diagnostics_unreachable_llm(client):
+    orig_mock = controller.config.llm.mock_mode
+    orig_url = controller.config.llm.base_url
+    try:
+        controller.config.llm.mock_mode = False
+        controller.config.llm.base_url = "http://127.0.0.1:59999/v1"
+        res = client.get("/api/diagnostics")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["llm"]["status"] == "unreachable"
+        assert data["llm"]["reachable"] is False
+        assert "59999" in data["llm"]["detail"]
+    finally:
+        controller.config.llm.mock_mode = orig_mock
+        controller.config.llm.base_url = orig_url
+
+
+def test_diagnostics_docker_status(client):
+    orig_enabled = controller.config.sandbox.enabled
+    try:
+        controller.config.sandbox.enabled = False
+        res = client.get("/api/diagnostics")
+        assert res.status_code == 200
+        assert res.json()["docker"]["status"] == "disabled"
+
+        controller.config.sandbox.enabled = True
+        res2 = client.get("/api/diagnostics")
+        assert res2.status_code == 200
+        docker_data = res2.json()["docker"]
+        assert docker_data["enabled"] is True
+        assert docker_data["status"] in ("ready", "unavailable")
+    finally:
+        controller.config.sandbox.enabled = orig_enabled
+
+
+def test_index_html_has_warning_elements(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert "system-warning-banner" in html
+    assert "warning-banner-messages" in html
+    assert "nav-badge-llm" in html
+    assert "nav-badge-docker" in html
+    assert "btn-banner-recheck" in html
+
 
 
 def test_dashboard_firewall_blocks_unlisted_ip():

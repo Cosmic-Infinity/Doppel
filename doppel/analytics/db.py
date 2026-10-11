@@ -13,6 +13,11 @@ class TelemetryDB:
 
     def __init__(self, db_path: str = "doppel_telemetry.db"):
         self.db_path = db_path
+        self._initialized = False
+
+    async def _ensure_initialized(self):
+        if not self._initialized:
+            await self.initialize()
 
     async def initialize(self):
         """Create tables and indexes if they do not exist."""
@@ -87,6 +92,7 @@ class TelemetryDB:
                 )
             """)
             await db.commit()
+            self._initialized = True
             logger.info(f"Telemetry database initialized at {self.db_path}")
 
     async def log_session_start(
@@ -99,6 +105,7 @@ class TelemetryDB:
         geoip: Optional[Dict[str, Any]] = None,
         credential_risk: Optional[str] = None,
     ):
+        await self._ensure_initialized()
         now = datetime.now(timezone.utc).isoformat()
         geo = geoip or {}
         async with aiosqlite.connect(self.db_path) as db:
@@ -128,14 +135,15 @@ class TelemetryDB:
         output: str,
         route_decision: str,
         threat_meta: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> int:
+        await self._ensure_initialized()
         now = datetime.now(timezone.utc).isoformat()
         meta = threat_meta or {}
         tactics_str = json.dumps(meta.get("tactics", []))
         score = meta.get("threat_score", 0)
 
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
+            cur = await db.execute(
                 """
                 INSERT INTO commands
                 (session_id, timestamp, cwd, command, output, route_decision,
@@ -155,15 +163,58 @@ class TelemetryDB:
                     score,
                 ),
             )
+            cmd_id = cur.lastrowid
             # Update max threat score in session if higher
+            if score > 0:
+                await db.execute(
+                    """
+                    UPDATE sessions
+                    SET max_threat_score = MAX(max_threat_score, ?)
+                    WHERE session_id = ?
+                    """,
+                    (score, session_id),
+                )
+            await db.commit()
+            return cmd_id
+
+    async def update_command_threat(
+        self,
+        command_id: int,
+        threat_meta: Dict[str, Any],
+    ):
+        """Update an already-logged command with MITRE ATT&CK intelligence."""
+        await self._ensure_initialized()
+        meta = threat_meta or {}
+        tactics_str = json.dumps(meta.get("tactics", []))
+        score = meta.get("threat_score", 0)
+
+        async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                UPDATE sessions
-                SET max_threat_score = MAX(max_threat_score, ?)
-                WHERE session_id = ?
+                UPDATE commands
+                SET technique_id = ?, technique_name = ?, tactics = ?, threat_score = ?
+                WHERE id = ?
                 """,
-                (score, session_id),
+                (
+                    meta.get("technique_id"),
+                    meta.get("technique_name"),
+                    tactics_str,
+                    score,
+                    command_id,
+                ),
             )
+            if score > 0:
+                async with db.execute("SELECT session_id FROM commands WHERE id = ?", (command_id,)) as cur:
+                    row = await cur.fetchone()
+                    if row and row[0]:
+                        await db.execute(
+                            """
+                            UPDATE sessions
+                            SET max_threat_score = MAX(max_threat_score, ?)
+                            WHERE session_id = ?
+                            """,
+                            (score, row[0]),
+                        )
             await db.commit()
 
     async def log_phase_transition(
@@ -219,6 +270,7 @@ class TelemetryDB:
             await db.commit()
 
     async def get_session_details(self, session_id: str) -> Dict[str, Any]:
+        await self._ensure_initialized()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)) as cur:
@@ -236,6 +288,7 @@ class TelemetryDB:
             return session_dict
 
     async def get_all_sessions(self) -> List[Dict[str, Any]]:
+        await self._ensure_initialized()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM sessions ORDER BY start_time DESC") as cur:

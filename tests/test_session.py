@@ -63,9 +63,14 @@ async def test_session_lifecycle_and_navigation():
         await session_mgr.process_command(session.session_id, "cd ~")
         assert session.cwd == "/home/ubuntu"
 
-        # 3. Test intercepted command
+        # 3. Test intercepted command and immediate DB logging
         output = await session_mgr.process_command(session.session_id, "cat .env")
         assert "DB_PASSWORD" in output
+
+        # Verify command was logged to DB immediately
+        details = await db.get_session_details(session.session_id)
+        assert len(details["commands"]) >= 1
+        assert details["commands"][-1]["command"] == "cat .env"
 
         # 4. Close session and check report generation
         report_file = await session_mgr.close_session(session.session_id)
@@ -76,3 +81,73 @@ async def test_session_lifecycle_and_navigation():
             content = f.read()
             assert "Incident Response Report" in content
             assert "192.168.1.100" in content
+
+
+@pytest.mark.asyncio
+async def test_ssh_session_exec_and_early_commands():
+    from doppel.core.ssh_server import DoppelSSHServerSession
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "test_telemetry.db")
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.analytics.db_path = db_path
+
+        llm_client = LLMClient(mock_mode=True)
+        deception_engine = DeceptionEngine(llm_client)
+        sandbox_manager = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm_client, db)
+        reporter = IncidentReporter(llm_client, db, reports_dir=tmpdir)
+
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=deception_engine,
+            sandbox_manager=sandbox_manager,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        class MockChannel:
+            def __init__(self):
+                self.written = []
+                self.closed = False
+                self.exit_status = None
+
+            def write(self, data):
+                self.written.append(data)
+
+            def exit(self, status):
+                self.exit_status = status
+
+            def close(self):
+                self.closed = True
+
+        # Test exec_requested (one-shot command)
+        chan = MockChannel()
+        ssh_sess = DoppelSSHServerSession(
+            session_manager=session_mgr,
+            config=config,
+            remote_ip="192.168.1.50",
+            remote_port=55111,
+            username="ubuntu",
+            password="pwd",
+        )
+        ssh_sess.connection_made(chan)
+        ssh_sess.session_started()
+        accepted = ssh_sess.exec_requested("whoami")
+        assert accepted is True
+
+        # Wait briefly for async exec task
+        import asyncio
+        await asyncio.sleep(0.3)
+
+        assert chan.closed is True
+        assert chan.exit_status == 0
+        output_combined = "".join(chan.written)
+        assert "ubuntu" in output_combined

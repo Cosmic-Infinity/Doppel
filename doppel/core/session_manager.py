@@ -88,8 +88,13 @@ class SessionManager:
         initial_cwd = "/root" if username == "root" else f"/home/{username}"
 
         container_id = None
-        if self.config.sandbox.enabled and self.sandbox_manager.is_available:
-            container_id = self.sandbox_manager.create_sandbox_session(sess_id)
+        if self.config.sandbox.enabled:
+            if not self.sandbox_manager.is_available:
+                await asyncio.to_thread(self.sandbox_manager.check_availability)
+            if self.sandbox_manager.is_available:
+                container_id = await asyncio.to_thread(
+                    self.sandbox_manager.create_sandbox_session, sess_id, username=username
+                )
 
         session = SessionState(
             session_id=sess_id,
@@ -141,28 +146,46 @@ class SessionManager:
         if not cmd_clean:
             return ""
 
+        # If sandbox enabled but session lacks a container, check if Docker became available
+        if self.config.sandbox.enabled and not session.container_id:
+            if not self.sandbox_manager.is_available:
+                await asyncio.to_thread(self.sandbox_manager.check_availability)
+            if self.sandbox_manager.is_available:
+                session.container_id = await asyncio.to_thread(
+                    self.sandbox_manager.create_sandbox_session,
+                    session.session_id,
+                    username=session.username,
+                )
+
         # Update router sandbox availability status
         self.router.sandbox_available = bool(session.container_id and self.sandbox_manager.is_available)
 
         # Check whether this session's IP is in the safe allowlist
-        safe_ips = self.config.access.safe_ips
-        self.router.safe_ip_mode = session.remote_ip in safe_ips
+        is_safe_ip = session.remote_ip in self.config.access.safe_ips
 
         # 1. Routing classification
-        decision, route_reason = self.router.classify_command(cmd_clean)
+        decision, route_reason = self.router.classify_command(cmd_clean, is_safe_ip=is_safe_ip)
         output = ""
 
         # 2. Command execution based on route decision
         if decision == RouteDecision.BUILTIN:
             output = self._handle_builtin(session, cmd_clean)
         elif decision == RouteDecision.SANDBOX and session.container_id:
-            res = self.sandbox_manager.execute_in_sandbox(
-                container_id=session.container_id,
-                command=cmd_clean,
-                workdir=session.cwd,
-                user=session.username,
-            )
-            output = res.stdout if res.stdout else res.stderr
+            try:
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.sandbox_manager.execute_in_sandbox,
+                        container_id=session.container_id,
+                        command=cmd_clean,
+                        workdir=session.cwd,
+                        user=session.username,
+                    ),
+                    timeout=20.0,
+                )
+                output = (res.stdout or "") + (res.stderr or "")
+            except asyncio.TimeoutError:
+                logger.warning(f"Command '{cmd_clean}' timed out in sandbox")
+                output = f"bash: {cmd_clean.split()[0] if cmd_clean.split() else 'command'}: command timed out\n"
         else:
             # LLM Deception — inject fake filesystem context so the model
             # knows about files the attacker created this session
@@ -200,16 +223,32 @@ class SessionManager:
             "command": cmd_clean,
             "cwd": session.cwd,
             "output": output,
+            "route_decision": decision.value,
             "ts": _time.monotonic(),
         })
 
-        # 5. Background MITRE analysis & database logging
+        # 5. Immediate DB logging so command is recorded right away
+        cmd_id = None
+        try:
+            cmd_id = await self.db.log_command(
+                session_id=session.session_id,
+                cwd=session.cwd,
+                command=cmd_clean,
+                output=output,
+                route_decision=decision.value,
+                threat_meta=None,
+            )
+        except Exception as db_err:
+            logger.error(f"Failed to log command to DB: {db_err}")
+
+        # 6. Background MITRE analysis & profiling
         task = asyncio.create_task(
             self._analyze_and_record(
                 session=session,
                 command=cmd_clean,
                 output=output,
                 decision=decision.value,
+                cmd_id=cmd_id,
             )
         )
         self._background_tasks.add(task)
@@ -259,74 +298,81 @@ class SessionManager:
         command: str,
         output: str,
         decision: str,
+        cmd_id: Optional[int] = None,
     ):
-        threat_meta = None
-        if self.config.analytics.enable_mitre_tagging:
-            threat_meta = await self.observer.analyze_command(
-                session_id=session.session_id,
-                command=command,
-                cwd=session.cwd,
-                user=session.username,
-                session_history=[h["command"] for h in session.history],
-            )
-            if threat_meta:
-                session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
-                self._notify("threat_analyzed", {
-                    "session_id": session.session_id,
-                    "threat": threat_meta,
-                    "threat_score": session.threat_score,
-                })
-
-        # ── Attacker profiler (timing + phase) ──────────────────────────────
-        if session.profiler_state is not None:
-            tactics_list = threat_meta.get("tactics", []) if threat_meta else []
-            # Use the monotonic ts we stored in history for accurate gap measurement
-            cmd_ts = session.history[-1].get("ts") if session.history else None
-            updated_state, phase_event = self._profiler.record_command(
-                state=session.profiler_state,
-                command=command,
-                tactics=tactics_list,
-                now=cmd_ts,
-            )
-            session.profiler_state = updated_state
-
-            from doppel.analytics.profiler import AttackerProfiler
-            profile_summary = AttackerProfiler.summary(updated_state)
-            self._notify("profile_updated", {
-                "session_id": session.session_id,
-                "profile": profile_summary,
-            })
-
-            if phase_event:
-                self._notify("phase_transition", {
-                    "session_id": session.session_id,
-                    **phase_event,
-                })
-                # Persist phase transition to DB (fire-and-forget; errors logged inside)
-                asyncio.create_task(self.db.log_phase_transition(
+        try:
+            threat_meta = None
+            if self.config.analytics.enable_mitre_tagging:
+                threat_meta = await self.observer.analyze_command(
                     session_id=session.session_id,
-                    from_phase=phase_event["from_phase"],
-                    to_phase=phase_event["to_phase"],
-                    phase_index=phase_event["phase_index"],
-                    triggered_by=phase_event["triggered_by"],
+                    command=command,
+                    cwd=session.cwd,
+                    user=session.username,
+                    session_history=[h["command"] for h in session.history],
+                )
+                if threat_meta:
+                    session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
+                    self._notify("threat_analyzed", {
+                        "session_id": session.session_id,
+                        "threat": threat_meta,
+                        "threat_score": session.threat_score,
+                    })
+
+            # ── Attacker profiler (timing + phase) ──────────────────────────────
+            if session.profiler_state is not None:
+                tactics_list = threat_meta.get("tactics", []) if threat_meta else []
+                # Use the monotonic ts we stored in history for accurate gap measurement
+                cmd_ts = session.history[-1].get("ts") if session.history else None
+                updated_state, phase_event = self._profiler.record_command(
+                    state=session.profiler_state,
+                    command=command,
+                    tactics=tactics_list,
+                    now=cmd_ts,
+                )
+                session.profiler_state = updated_state
+
+                from doppel.analytics.profiler import AttackerProfiler
+                profile_summary = AttackerProfiler.summary(updated_state)
+                self._notify("profile_updated", {
+                    "session_id": session.session_id,
+                    "profile": profile_summary,
+                })
+
+                if phase_event:
+                    self._notify("phase_transition", {
+                        "session_id": session.session_id,
+                        **phase_event,
+                    })
+                    # Persist phase transition to DB (fire-and-forget; errors logged inside)
+                    asyncio.create_task(self.db.log_phase_transition(
+                        session_id=session.session_id,
+                        from_phase=phase_event["from_phase"],
+                        to_phase=phase_event["to_phase"],
+                        phase_index=phase_event["phase_index"],
+                        triggered_by=phase_event["triggered_by"],
+                    ))
+
+                # Persist live profile columns to DB (non-blocking)
+                asyncio.create_task(self.db.update_session_profile(
+                    session_id=session.session_id,
+                    attacker_type=updated_state.attacker_type,
+                    type_confidence=updated_state.type_confidence,
+                    current_phase=updated_state.current_phase,
                 ))
 
-            # Persist live profile columns to DB (non-blocking)
-            asyncio.create_task(self.db.update_session_profile(
-                session_id=session.session_id,
-                attacker_type=updated_state.attacker_type,
-                type_confidence=updated_state.type_confidence,
-                current_phase=updated_state.current_phase,
-            ))
-
-        await self.db.log_command(
-            session_id=session.session_id,
-            cwd=session.cwd,
-            command=command,
-            output=output,
-            route_decision=decision,
-            threat_meta=threat_meta,
-        )
+            if cmd_id is not None and threat_meta:
+                await self.db.update_command_threat(cmd_id, threat_meta)
+            elif cmd_id is None:
+                await self.db.log_command(
+                    session_id=session.session_id,
+                    cwd=session.cwd,
+                    command=command,
+                    output=output,
+                    route_decision=decision,
+                    threat_meta=threat_meta,
+                )
+        except Exception as e:
+            logger.error(f"Error in background threat analysis for session {session.session_id[:8]}: {e}", exc_info=True)
 
     async def close_session(self, session_id: str) -> Optional[str]:
         session = self.sessions.pop(session_id, None)
@@ -336,7 +382,7 @@ class SessionManager:
         session.is_active = False
 
         if session.container_id:
-            self.sandbox_manager.destroy_sandbox_session(session.container_id)
+            await asyncio.to_thread(self.sandbox_manager.destroy_sandbox_session, session.container_id)
 
         # Wait for all background tasks to complete database writes before closing session
         if self._background_tasks:

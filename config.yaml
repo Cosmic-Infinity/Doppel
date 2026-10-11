@@ -55,7 +55,7 @@ analytics:
 # Alert/logging still fires so you know they connected, but no deception.
 access:
   safe_ips:
-    - "127.0.0.1"   # localhost
+    # - "127.0.0.1"   # localhost (uncomment only to bypass deception for local admin SSH)
     - "100.81.22.95" #silverstar
     - "100.119.167.91" # youknow
     - "100.118.57.70" #blackbird

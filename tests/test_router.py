@@ -75,3 +75,61 @@ def test_system_discovery_and_fingerprinting_routing():
         decision, reason = router.classify_command(target)
         assert decision == RouteDecision.LLM_DECEPTION
         assert "sensitive_file" in reason
+
+
+def test_benign_commands_routing_and_priority():
+    router = HybridRouter(
+        sandbox_available=True,
+        intercept_sensitive_files=True,
+        intercept_missing_tools=True,
+        benign_commands={"ls", "cat", "pwd", "grep", "whoami"},
+    )
+
+    # Benign commands with non-sensitive arguments route to SANDBOX
+    dec, reason = router.classify_command("cat readme.txt")
+    assert dec == RouteDecision.SANDBOX
+    assert reason == "benign_command"
+
+    dec, reason = router.classify_command("ls -la /home/ubuntu")
+    assert dec == RouteDecision.SANDBOX
+    assert reason == "benign_command"
+
+    dec, reason = router.classify_command("pwd")
+    assert dec == RouteDecision.SANDBOX
+    assert reason == "benign_command"
+
+    # CRITICAL: Even though 'cat' and 'grep' are in benign_commands,
+    # sensitive file access and credential harvesting MUST be intercepted by LLM!
+    dec, reason = router.classify_command("cat /etc/shadow")
+    assert dec == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
+
+    dec, reason = router.classify_command("cat .env")
+    assert dec == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
+
+    dec, reason = router.classify_command("grep -i password /var/www/html/app.py")
+    assert dec == RouteDecision.LLM_DECEPTION
+    assert reason == "credential_harvesting"
+
+
+def test_safe_ip_passthrough():
+    router = HybridRouter(
+        sandbox_available=True,
+        intercept_sensitive_files=True,
+        intercept_missing_tools=True,
+        benign_commands={"ls"},
+    )
+
+    # Untrusted session (is_safe_ip=False): intercepts sensitive targets
+    dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=False)
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # Trusted session (is_safe_ip=True): passes through to sandbox
+    dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=True)
+    assert dec == RouteDecision.SANDBOX
+    assert reason == "safe_ip_passthrough"
+
+    # Shell built-in still handled as built-in even for safe IP
+    dec, reason = router.classify_command("cd /tmp", is_safe_ip=True)
+    assert dec == RouteDecision.BUILTIN

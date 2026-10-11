@@ -226,7 +226,7 @@ def dashboard(
         f"[cyan]Dashboard URL:[/cyan] http://{host if host != '0.0.0.0' else 'localhost'}:{port}\n"
         f"[cyan]Controls:[/cyan] Start/Stop honeypot & configure directly via browser\n"
         f"[cyan]Telemetry:[/cyan] Live multi-session fleet monitor and terminal streams",
-        title="🖥️ Web Dashboard",
+        title="Web Dashboard",
         border_style="cyan"
     ))
 

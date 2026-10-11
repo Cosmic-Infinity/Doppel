@@ -26,3 +26,13 @@ async def test_mock_llm_threat_analysis_json():
     assert "tactics" in data
     assert "threat_score" in data
     assert data["technique_id"].startswith("T")
+
+
+@pytest.mark.asyncio
+async def test_mock_llm_unknown_command_fallback():
+    client = LLMClient(mock_mode=True)
+    messages = [{"role": "user", "content": "ubuntu:/home/ubuntu$ foobar123 --some-flag"}]
+    output = await client.chat_completion(messages)
+
+    assert "bash: foobar123: command not found" in output
+    assert "Simulated output for:" not in output

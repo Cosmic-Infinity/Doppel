@@ -112,7 +112,7 @@ class HybridRouter:
         # When True, ALL commands go to sandbox — no deception at all
         self.safe_ip_mode = safe_ip_mode
 
-    def classify_command(self, raw_cmd: str) -> Tuple[RouteDecision, str]:
+    def classify_command(self, raw_cmd: str, is_safe_ip: Optional[bool] = None) -> Tuple[RouteDecision, str]:
         """Determine whether to handle internally, execute in sandbox, or intercept with LLM."""
         cmd_clean = raw_cmd.strip()
         if not cmd_clean:
@@ -121,29 +121,24 @@ class HybridRouter:
         tokens = cmd_clean.split()
         binary = tokens[0].lower()
 
-        # 0a. Safe-IP mode: bypass all deception, execute everything in sandbox
-        if self.safe_ip_mode and self.sandbox_available:
-            if binary in {"cd", "exit", "logout", "clear"}:
-                return RouteDecision.BUILTIN, binary
-            return RouteDecision.SANDBOX, "safe_ip_passthrough"
-
-        # 0b. Explicitly benign commands: always route to real sandbox, never to LLM
-        if binary in self.benign_commands and self.sandbox_available:
-            return RouteDecision.SANDBOX, "benign_command"
-
         # 1. Shell built-ins that modify state directly
         if binary in {"cd", "exit", "logout", "clear"}:
             return RouteDecision.BUILTIN, binary
 
-        # 2. Check for missing/specialized penetration testing tools
+        # 2. Safe-IP mode: bypass all deception for trusted admin connections
+        safe_ip_active = self.safe_ip_mode if is_safe_ip is None else is_safe_ip
+        if safe_ip_active and self.sandbox_available:
+            return RouteDecision.SANDBOX, "safe_ip_passthrough"
+
+        # 3. Check for missing/specialized penetration testing tools
         if self.intercept_missing_tools and any(tool in binary for tool in DECEPTION_TOOLS):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
 
-        # 3. Check for system discovery & fingerprinting queries (routed to deception to prevent container telltales)
+        # 4. Check for system discovery & fingerprinting queries (routed to deception to prevent container telltales)
         if binary in SYSTEM_DISCOVERY_COMMANDS:
             return RouteDecision.LLM_DECEPTION, f"system_discovery:{binary}"
 
-        # 4. Check if command touches sensitive files or honeytokens
+        # 5. Check if command touches sensitive files or honeytokens
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
 
@@ -155,13 +150,17 @@ class HybridRouter:
                 if pattern in cmd_lower:
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
-        # 5. Check for payload downloaders (curl ... | sh, wget)
+        # 6. Check for payload downloaders (curl ... | sh, wget)
         if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
             return RouteDecision.LLM_DECEPTION, "payload_download"
 
-        # 6. If sandbox is active and available, execute real command safely
+        # 7. Explicitly benign commands: route to real sandbox when available
+        if binary in self.benign_commands and self.sandbox_available:
+            return RouteDecision.SANDBOX, "benign_command"
+
+        # 8. If sandbox is active and available, execute real command safely
         if self.sandbox_available:
             return RouteDecision.SANDBOX, "standard_execution"
 
-        # 7. Fallback to full LLM terminal simulation
+        # 9. Fallback to full LLM terminal simulation
         return RouteDecision.LLM_DECEPTION, "simulated_terminal"

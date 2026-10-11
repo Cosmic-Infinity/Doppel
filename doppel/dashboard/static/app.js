@@ -45,8 +45,21 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const statusText = document.getElementById('status-text');
   const metaPort = document.getElementById('nav-meta-port');
   const metaModel = document.getElementById('nav-meta-model');
+  const navBadgeLlm = document.getElementById('nav-badge-llm');
+  const dotNavLlm = document.getElementById('dot-nav-llm');
+  const textNavLlm = document.getElementById('text-nav-llm');
+  const navBadgeDocker = document.getElementById('nav-badge-docker');
+  const dotNavDocker = document.getElementById('dot-nav-docker');
+  const textNavDocker = document.getElementById('text-nav-docker');
   const btnToggle = document.getElementById('btn-toggle-honeypot');
   const btnToggleLabel = document.getElementById('btn-toggle-label');
+
+  // DOM Elements - Global Warning Banner
+  const systemWarningBanner = document.getElementById('system-warning-banner');
+  const warningBannerMessages = document.getElementById('warning-banner-messages');
+  const btnBannerRecheck = document.getElementById('btn-banner-recheck');
+  const btnBannerMock = document.getElementById('btn-banner-mock');
+  const btnBannerDismiss = document.getElementById('btn-banner-dismiss');
 
   // DOM Elements - Launch Screen Diagnostics
   const pillLlm = document.getElementById('pill-llm');
@@ -231,6 +244,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   fetchSessions();
   connectStream();
 
+  // Background diagnostics auto-refresh every 8 seconds
+  setInterval(fetchDiagnostics, 8000);
+
   // --- API Calls ---
 
   async function fetchStatus() {
@@ -286,19 +302,135 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   function renderDiagnosticsUI(diag) {
     if (!diag) return;
 
-    // 1. LLM Diagnostics
-    const llm = diag.llm;
+    const llm = diag.llm || {};
+    const docker = diag.docker || {};
+    const port = diag.port || {};
+    const persona = diag.persona || {};
+
+    // 1. Update Top Navigation Subsystem Badges
+    if (navBadgeLlm && dotNavLlm && textNavLlm) {
+      if (llm.status === 'ready') {
+        dotNavLlm.className = 'subsystem-dot ready';
+        textNavLlm.textContent = 'LLM Ready';
+        navBadgeLlm.title = `AI Model ready (${llm.latency_ms || 0}ms): ${llm.configured_model || ''}`;
+      } else if (llm.status === 'mock_mode') {
+        dotNavLlm.className = 'subsystem-dot neutral';
+        textNavLlm.textContent = 'LLM Mock';
+        navBadgeLlm.title = 'AI Mock Mode active';
+      } else if (llm.status === 'model_missing') {
+        dotNavLlm.className = 'subsystem-dot warning';
+        textNavLlm.textContent = 'Model Missing';
+        navBadgeLlm.title = `Model '${llm.configured_model || ''}' not pulled`;
+      } else {
+        dotNavLlm.className = 'subsystem-dot error';
+        textNavLlm.textContent = 'LLM Offline';
+        navBadgeLlm.title = `LLM endpoint unreachable at ${llm.endpoint || 'local'}`;
+      }
+    }
+
+    if (navBadgeDocker && dotNavDocker && textNavDocker) {
+      if (docker.status === 'ready') {
+        dotNavDocker.className = 'subsystem-dot ready';
+        textNavDocker.textContent = 'Docker Ready';
+        navBadgeDocker.title = `Docker Sandbox active (v${docker.version || 'Engine'})`;
+      } else if (docker.status === 'disabled') {
+        dotNavDocker.className = 'subsystem-dot neutral';
+        textNavDocker.textContent = 'Docker Off';
+        navBadgeDocker.title = 'Docker sandbox disabled in configuration';
+      } else {
+        dotNavDocker.className = 'subsystem-dot warning';
+        textNavDocker.textContent = 'Docker Offline';
+        navBadgeDocker.title = 'Docker Engine not running (safe simulation mode)';
+      }
+    }
+
+    // 2. Global Subsystem Warning Banner Evaluation
+    const warningItems = [];
+    let hasCriticalError = false;
+
+    if (llm.status === 'unreachable') {
+      hasCriticalError = true;
+      warningItems.push({
+        type: 'error',
+        tag: 'LLM Offline',
+        html: `Ollama is unreachable at <code>${escapeHtml(llm.endpoint || 'http://127.0.0.1:11434')}</code>. Start Ollama with <code>ollama serve</code> or switch to Mock Mode.`
+      });
+    } else if (llm.status === 'model_missing') {
+      hasCriticalError = true;
+      warningItems.push({
+        type: 'warning',
+        tag: 'Model Missing',
+        html: `Configured model <code>${escapeHtml(llm.configured_model || '')}</code> is not pulled. Run <code>ollama pull ${escapeHtml(llm.configured_model || '')}</code> or switch to Mock Mode.`
+      });
+    }
+
+    if (docker.status === 'unavailable' && docker.enabled !== false) {
+      warningItems.push({
+        type: 'warning',
+        tag: 'Docker Offline',
+        html: `Docker Engine is not running. Commands will execute in simulated mode without container isolation.`
+      });
+    }
+
+    if (!port.available) {
+      warningItems.push({
+        type: 'warning',
+        tag: 'Port Busy',
+        html: `SSH port <code>${port.port}</code> is occupied by another service.`
+      });
+    }
+
+    if (systemWarningBanner && warningBannerMessages) {
+      if (warningItems.length === 0) {
+        systemWarningBanner.classList.add('hidden');
+        sessionStorage.removeItem('doppel_banner_dismissed');
+      } else {
+        const isDismissed = sessionStorage.getItem('doppel_banner_dismissed') === 'true';
+        if (!isDismissed) {
+          systemWarningBanner.classList.remove('hidden');
+        } else {
+          systemWarningBanner.classList.add('hidden');
+        }
+
+        if (hasCriticalError) {
+          systemWarningBanner.classList.add('banner-critical');
+        } else {
+          systemWarningBanner.classList.remove('banner-critical');
+        }
+
+        let msgsHtml = '';
+        warningItems.forEach(item => {
+          msgsHtml += `
+            <div class="warning-banner-item">
+              <span class="warning-banner-tag ${item.type === 'error' ? 'tag-error' : ''}">${escapeHtml(item.tag)}</span>
+              <span>${item.html}</span>
+            </div>
+          `;
+        });
+        warningBannerMessages.innerHTML = msgsHtml;
+
+        if (btnBannerMock) {
+          if (llm.status === 'unreachable' || llm.status === 'model_missing') {
+            btnBannerMock.classList.remove('hidden');
+          } else {
+            btnBannerMock.classList.add('hidden');
+          }
+        }
+      }
+    }
+
+    // 3. Card 1: LLM Diagnostics
     if (llm.status === 'ready') {
       pillLlm.className = 'diag-pill ready';
       pillLlm.textContent = `Ready (${llm.latency_ms}ms)`;
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = '';
     } else if (llm.status === 'mock_mode') {
-      pillLlm.className = 'diag-pill neutral';
-      pillLlm.textContent = 'Mock Mode';
+      pillLlm.className = llm.backend_available ? 'diag-pill ready' : 'diag-pill neutral';
+      pillLlm.textContent = llm.backend_available ? 'Mock Mode (Backend Online)' : 'Mock Mode';
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-disable-mock">Switch to Live LLM</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-mock">${llm.backend_available ? 'Connect to Live LLM' : 'Switch to Live LLM'}</button>
       `;
       document.getElementById('btn-fix-disable-mock')?.addEventListener('click', () => {
         applyQuickFix('toggle_mock', false);
@@ -308,8 +440,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       pillLlm.textContent = 'Model Missing';
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">⚡ Use Mock Mode Instead</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck Models</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Switch to Mock Mode</button>
       `;
+      document.getElementById('btn-fix-recheck-llm')?.addEventListener('click', () => {
+        applyQuickFix('recheck');
+      });
       document.getElementById('btn-fix-enable-mock')?.addEventListener('click', () => {
         applyQuickFix('toggle_mock', true);
       });
@@ -318,8 +454,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       pillLlm.textContent = 'Offline';
       descLlm.textContent = `${llm.detail} ${llm.suggestion || ''}`;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">⚡ Switch to Mock Mode (No GPU Needed)</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck Ollama</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Switch to Mock Mode</button>
       `;
+      document.getElementById('btn-fix-recheck-llm')?.addEventListener('click', () => {
+        applyQuickFix('recheck');
+      });
       document.getElementById('btn-fix-enable-mock')?.addEventListener('click', () => {
         applyQuickFix('toggle_mock', true);
       });
@@ -339,8 +479,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       });
     }
 
-    // 2. Docker Diagnostics
-    const docker = diag.docker;
+    // 4. Card 2: Docker Diagnostics
     if (docker.status === 'ready') {
       pillDocker.className = 'diag-pill ready';
       pillDocker.textContent = 'Container Sandbox Active';
@@ -362,16 +501,22 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         applyQuickFix('toggle_sandbox', true);
       });
     } else {
-      pillDocker.className = 'diag-pill neutral';
-      pillDocker.textContent = 'Simulated Mode';
+      pillDocker.className = 'diag-pill warning';
+      pillDocker.textContent = 'Engine Offline';
       descDocker.textContent = docker.detail;
       actionBarDocker.innerHTML = `
-        <span style="font-size:11px;color:var(--text-muted)">Zero-risk simulation enabled automatically.</span>
+        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-docker">Recheck Docker</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-sandbox">Disable Sandbox (Pure AI Mode)</button>
       `;
+      document.getElementById('btn-fix-recheck-docker')?.addEventListener('click', () => {
+        applyQuickFix('recheck');
+      });
+      document.getElementById('btn-fix-disable-sandbox')?.addEventListener('click', () => {
+        applyQuickFix('toggle_sandbox', false);
+      });
     }
 
-    // 3. Port Diagnostics
-    const port = diag.port;
+    // 5. Card 3: Port Diagnostics
     inputCustomPort.value = port.port;
     if (port.available) {
       pillPort.className = 'diag-pill ready';
@@ -396,7 +541,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       });
     }
 
-    // 4. Persona
+    // 6. Card 4: Persona
     if (diag.persona) {
       const currentPersona = diag.persona.current || 'ubuntu_web_server';
       personaRadios.forEach(radio => {
@@ -410,16 +555,22 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       pillPersona.textContent = names[currentPersona] || currentPersona;
     }
 
-    // Summary bar
-    if (port.available && (llm.status === 'ready' || llm.status === 'mock_mode')) {
-      launchSummaryDot.className = 'summary-dot ready';
-      launchSummaryText.textContent = `Ready to listen on port ${port.port} with persona: ${pillPersona.textContent}.`;
-    } else if (!port.available) {
+    // 7. Launch Summary Strip
+    if (!port.available) {
+      launchSummaryDot.className = 'summary-dot error';
+      launchSummaryText.textContent = `Port conflict: port ${port.port} is busy. Use a quick-switch alternative above or change ports.`;
+    } else if (llm.status === 'unreachable') {
+      launchSummaryDot.className = 'summary-dot error';
+      launchSummaryText.textContent = `Warning: LLM backend is offline. Start Ollama or switch to Mock Mode before launching.`;
+    } else if (llm.status === 'model_missing') {
       launchSummaryDot.className = 'summary-dot warning';
-      launchSummaryText.textContent = `Port ${port.port} is busy. Use a quick-switch alternative above or change ports.`;
+      launchSummaryText.textContent = `Warning: Model '${llm.configured_model}' is not pulled. Pull model or switch to Mock Mode.`;
+    } else if (docker.status === 'unavailable' && docker.enabled !== false) {
+      launchSummaryDot.className = 'summary-dot warning';
+      launchSummaryText.textContent = `Warning: Docker Engine is offline. Honeypot will launch in simulated mode without container isolation.`;
     } else {
-      launchSummaryDot.className = 'summary-dot warning';
-      launchSummaryText.textContent = `LLM is offline. Click 'Switch to Mock Mode' above for zero-compute testing.`;
+      launchSummaryDot.className = 'summary-dot ready';
+      launchSummaryText.textContent = `All subsystems ready. Listening on port ${port.port} with persona: ${pillPersona.textContent}.`;
     }
   }
 
@@ -447,6 +598,32 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       fetchStatus();
     });
   });
+
+  // Global Warning Banner Action Listeners
+  if (btnBannerRecheck) {
+    btnBannerRecheck.addEventListener('click', async () => {
+      const origText = btnBannerRecheck.textContent;
+      btnBannerRecheck.textContent = 'Checking...';
+      sessionStorage.removeItem('doppel_banner_dismissed');
+      await applyQuickFix('recheck');
+      btnBannerRecheck.textContent = origText;
+    });
+  }
+
+  if (btnBannerMock) {
+    btnBannerMock.addEventListener('click', async () => {
+      await applyQuickFix('toggle_mock', true);
+    });
+  }
+
+  if (btnBannerDismiss) {
+    btnBannerDismiss.addEventListener('click', () => {
+      sessionStorage.setItem('doppel_banner_dismissed', 'true');
+      if (systemWarningBanner) {
+        systemWarningBanner.classList.add('hidden');
+      }
+    });
+  }
 
   // Launch Button (Both primary on launch screen and nav button)
   async function launchHoneypot() {
@@ -823,6 +1000,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   }
 
   function renderSessionDetail(session) {
+    if (activeSessionId && session.session_id !== activeSessionId) return;
     emptyInspector.classList.add('hidden');
     sessionDetail.classList.remove('hidden');
 
@@ -834,25 +1012,29 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     detailUser.textContent = `user: ${session.username}`;
     detailSessionId.textContent = `ID: ${session.session_id}`;
     detailThreatScore.textContent = `${session.max_threat_score || 0} / 100`;
-    detailCmdCount.textContent = (session.commands || []).length;
+    detailCmdCount.textContent = Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0);
     detailCwd.textContent = session.cwd || '/home/ubuntu';
 
-    terminalOutput.innerHTML = '';
-    (session.commands || []).forEach(cmd => {
-      appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision);
-    });
+    const serverCmds = session.commands || [];
+    const currentTerminalLines = terminalOutput.children.length;
+    if (serverCmds.length > 0 || currentTerminalLines === 0) {
+      terminalOutput.innerHTML = '';
+      serverCmds.forEach(cmd => {
+        appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision);
+      });
 
-    telemetryTableBody.innerHTML = '';
-    (session.commands || []).forEach(cmd => {
-      appendTelemetryRow(
-        cmd.timestamp,
-        cmd.command,
-        cmd.route_decision,
-        cmd.technique_id || '—',
-        cmd.technique_name || '—',
-        cmd.threat_score || 0
-      );
-    });
+      telemetryTableBody.innerHTML = '';
+      serverCmds.forEach(cmd => {
+        appendTelemetryRow(
+          cmd.timestamp,
+          cmd.command,
+          cmd.route_decision,
+          cmd.technique_id || '—',
+          cmd.technique_name || '—',
+          cmd.threat_score || 0
+        );
+      });
+    }
   }
 
   function appendTerminalCommand(cwd, command, output, decision) {

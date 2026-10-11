@@ -52,8 +52,35 @@ class DockerSandboxManager:
             if not DOCKER_INSTALLED:
                 logger.info("Docker python library not installed; running in simulation fallback mode.")
 
-    def create_sandbox_session(self, session_id: str) -> Optional[str]:
+    def check_availability(self) -> bool:
+        """Dynamically re-verify if Docker daemon has become reachable."""
+        if not self.enabled or not DOCKER_INSTALLED:
+            self.is_available = False
+            return False
+        # Test existing client if already instantiated
+        if self.client:
+            try:
+                self.client.ping()
+                self.is_available = True
+                return True
+            except Exception:
+                pass
+        # Re-acquire fresh client from environment (e.g. Docker Desktop pipe created after boot)
+        try:
+            client = docker.from_env()
+            client.ping()
+            self.client = client
+            self.is_available = True
+            logger.info("Docker daemon connection established dynamically.")
+            return True
+        except Exception:
+            self.is_available = False
+            return False
+
+    def create_sandbox_session(self, session_id: str, username: str = "ubuntu") -> Optional[str]:
         """Spawn a new isolated container for an attacker session."""
+        if not self.is_available:
+            self.check_availability()
         if not self.is_available or not self.client:
             return None
 
@@ -78,16 +105,27 @@ class DockerSandboxManager:
                 remove=True,
             )
 
-            # Bootstrap standard Linux layout, ubuntu user (uid 1000), Ubuntu release markers, and remove docker artifacts
+            # Bootstrap standard Linux layout, user accounts, Ubuntu release markers, aliases, and env file
             try:
+                user_cmds = (
+                    f"mkdir -p /home/{username} && "
+                    f"(id -u '{username}' >/dev/null 2>&1 || adduser -D -s /bin/sh '{username}' 2>/dev/null || useradd -m -s /bin/sh '{username}' 2>/dev/null || true) && "
+                    f"chown -R '{username}' /home/{username} 2>/dev/null || true; "
+                ) if username and username != "root" else ""
+
                 bootstrap_script = (
-                    "mkdir -p /home/ubuntu /var/www/html /root /var/log && "
-                    "(id -u ubuntu >/dev/null 2>&1 || adduser -D -u 1000 ubuntu 2>/dev/null || true) && "
+                    "mkdir -p /home/ubuntu /var/www/html /root /var/log /tmp && "
+                    "(id -u ubuntu >/dev/null 2>&1 || adduser -D -u 1000 ubuntu 2>/dev/null || useradd -m -u 1000 ubuntu 2>/dev/null || true) && "
                     "chown -R 1000:1000 /home/ubuntu 2>/dev/null || true; "
+                    f"{user_cmds}"
                     "rm -f /.dockerenv 2>/dev/null || true; "
                     "printf 'PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\\nNAME=\"Ubuntu\"\\nVERSION_ID=\"22.04\"\\nVERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\\nID=ubuntu\\nID_LIKE=debian\\n' > /etc/os-release 2>/dev/null || true; "
                     "echo 'Ubuntu 22.04.4 LTS \\n \\l' > /etc/issue 2>/dev/null || true; "
-                    "which apk >/dev/null 2>&1 && apk add --no-cache bash 2>/dev/null || true"
+                    "which apk >/dev/null 2>&1 && apk add --no-cache bash 2>/dev/null || true; "
+                    "printf '#!/bin/sh\\nexec ls -la \"$@\"\\n' > /bin/ll 2>/dev/null && chmod +x /bin/ll 2>/dev/null || true; "
+                    "printf '#!/bin/sh\\nexec ls -A \"$@\"\\n' > /bin/la 2>/dev/null && chmod +x /bin/la 2>/dev/null || true; "
+                    "printf '#!/bin/sh\\nexec ls -CF \"$@\"\\n' > /bin/l 2>/dev/null && chmod +x /bin/l 2>/dev/null || true; "
+                    "touch /tmp/.doppel_env && chmod 666 /tmp/.doppel_env 2>/dev/null || true"
                 )
                 container.exec_run(["/bin/sh", "-c", bootstrap_script])
             except Exception as init_err:
@@ -112,15 +150,55 @@ class DockerSandboxManager:
 
         try:
             container = self.client.containers.get(container_id)
-            # Safe execution: ensure target directory exists, navigate inside shell rather than failing OCI
-            safe_script = f"mkdir -p '{workdir}' 2>/dev/null; cd '{workdir}' 2>/dev/null || cd /; {command}"
+            # Safe execution: source shell env, ensure target directory exists, navigate inside shell
+            # If command exports a variable or alias, persist it in /tmp/.doppel_env
+            persist_env = ""
+            stripped = command.strip()
+            if stripped.startswith(("export ", "alias ")):
+                safe_val = stripped.replace("'", "'\\''")
+                persist_env = f"; echo '{safe_val}' >> /tmp/.doppel_env 2>/dev/null || true"
+
+            safe_script = (
+                f"[ -f /tmp/.doppel_env ] && . /tmp/.doppel_env 2>/dev/null; "
+                f"mkdir -p '{workdir}' 2>/dev/null; cd '{workdir}' 2>/dev/null || cd /; "
+                f"{command}{persist_env}"
+            )
+
             # Prefer /bin/bash if available in the container, otherwise fallback to /bin/sh
             shell_bin = "/bin/bash" if container.exec_run(["which", "bash"]).exit_code == 0 else "/bin/sh"
-            exec_res = container.exec_run(
-                cmd=[shell_bin, "-c", safe_script],
-                user=user if user != "root" else "0:0",
-                demux=True,
-            )
+            exec_user = user if user != "root" else "0:0"
+
+            try:
+                exec_res = container.exec_run(
+                    cmd=[shell_bin, "-c", safe_script],
+                    user=exec_user,
+                    demux=True,
+                )
+            except Exception as user_err:
+                err_str = str(user_err).lower()
+                if "unable to find user" in err_str or "no matching entries" in err_str:
+                    logger.debug(f"User {user} missing in container; creating and retrying")
+                    container.exec_run([
+                        "/bin/sh",
+                        "-c",
+                        f"id -u '{user}' >/dev/null 2>&1 || (adduser -D '{user}' 2>/dev/null || useradd -m '{user}' 2>/dev/null || true)",
+                    ])
+                    try:
+                        exec_res = container.exec_run(
+                            cmd=[shell_bin, "-c", safe_script],
+                            user=exec_user,
+                            demux=True,
+                        )
+                    except Exception:
+                        # Fallback to root execution
+                        exec_res = container.exec_run(
+                            cmd=[shell_bin, "-c", safe_script],
+                            user="0:0",
+                            demux=True,
+                        )
+                else:
+                    raise user_err
+
             stdout_bytes, stderr_bytes = exec_res.output
             stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
             stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
