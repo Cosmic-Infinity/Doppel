@@ -9,4 +9,6 @@
 
 ## Development notes
 
-- The development machines may not have all the resources available. Do not target it while testing. The code is pushed and tested on a remote workstation manually, so any commands requiring docker running or llm access may fail. You are not allowed to access said remote resources, do not make any attempts regarding the same.
+- The development machines may not have all the resources available. The code is pushed and tested on a remote workstation manually, so any commands requiring docker running or llm access may fail.
+
+- You can access the dashboard on `100.100.186.40`, IF required. Always ask the user permission before accessing the dashboard, and confirm from them if it is even running in the first place, and if the latest code is running on it.

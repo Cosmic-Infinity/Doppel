@@ -844,8 +844,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         renderSessionsList(Object.values(sessionsCache));
       }
 
-      // Auto-latch if no session is currently selected
-      if (!activeSessionId) {
+      // Auto-latch if no session is currently selected, or if current selection is an ended session
+      const currentSelected = activeSessionId ? sessionsCache[activeSessionId] : null;
+      if (!activeSessionId || (currentSelected && !currentSelected.is_active)) {
         selectSession(data.session_id);
       }
 
@@ -895,6 +896,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         detailLivePill.classList.add('ended');
         fetchSessionReport(data.session_id);
       }
+      fetchSessions();
     }
   }
 
@@ -914,9 +916,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     sessionsEmpty.classList.add('hidden');
 
-    // Auto-select active or most recent session if nothing is selected or activeSessionId is not in list
-    if (!activeSessionId || !sessionsCache[activeSessionId]) {
-      const liveSession = sessions.find(s => s.is_active || !s.end_time);
+    // Auto-select: prioritize a truly active session over an ended/historical session
+    const currentIsActive = activeSessionId && sessionsCache[activeSessionId] && Boolean(sessionsCache[activeSessionId].is_active);
+    if (!currentIsActive) {
+      const liveSession = sessions.find(s => Boolean(s.is_active));
       const targetSession = liveSession || sessions[0];
       if (targetSession) {
         selectSession(targetSession.session_id);
@@ -932,7 +935,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       card.className = `session-card ${sess.session_id === activeSessionId ? 'selected' : ''}`;
       card.dataset.sessionId = sess.session_id;
 
-      const isLive = sess.is_active || !sess.end_time;
+      const isLive = Boolean(sess.is_active);
       const score = sess.max_threat_score || sess.threat_score || 0;
       const scoreClass = score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low');
 
@@ -1004,7 +1007,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     emptyInspector.classList.add('hidden');
     sessionDetail.classList.remove('hidden');
 
-    const isLive = session.is_active || !session.end_time;
+    const isLive = Boolean(session.is_active);
     detailLivePill.textContent = isLive ? 'LIVE' : 'ENDED';
     detailLivePill.className = `live-pill ${isLive ? '' : 'ended'}`;
 

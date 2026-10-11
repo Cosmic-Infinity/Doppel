@@ -114,6 +114,11 @@ async def get_sessions():
     db_sessions = await controller.db.get_all_sessions()
     sessions_map = {s["session_id"]: s for s in db_sessions}
 
+    # Explicitly determine active status strictly based on real in-memory connections
+    active_ids = set(controller.session_manager.sessions.keys()) if controller.session_manager else set()
+    for s in sessions_map.values():
+        s["is_active"] = (s["session_id"] in active_ids)
+
     # Overlay active session live states if running
     if controller.session_manager:
         for sess_id, live_sess in controller.session_manager.sessions.items():

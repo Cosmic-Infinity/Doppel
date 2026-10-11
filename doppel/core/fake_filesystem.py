@@ -77,7 +77,7 @@ class FakeFilesystem:
     # Public API used by DeceptionEngine
     # ------------------------------------------------------------------
 
-    def update_from_command(self, command: str, output: str) -> None:
+    def update_from_command(self, command: str, output: str, cwd: str = "/home/ubuntu") -> None:
         """
         Parse a shell command and update the in-memory filesystem state.
         `output` is the LLM's response (used to infer content for downloads).
@@ -91,13 +91,13 @@ class FakeFilesystem:
         for m in re.finditer(
             r"\bmkdir\b(?:\s+-[pP])?\s+([^\s;&|]+)", cmd
         ):
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             self._dirs.add(path)
             logger.debug(f"FakeFS: mkdir {path}")
 
         # ---- touch ---------------------------------------------------------
         for m in re.finditer(r"\btouch\b\s+([^\s;&|>]+)", cmd):
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             if path not in self._files:
                 self._files[path] = FakeFile()
             logger.debug(f"FakeFS: touch {path}")
@@ -105,7 +105,7 @@ class FakeFilesystem:
         # ---- redirect (create/overwrite): … > file -------------------------
         m = re.search(r"(?<![>])\s>+\s*([^\s;&|]+)\s*$", cmd)
         if m and ">>" not in cmd[:m.start() + 2]:
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             content = self._extract_redirect_content(cmd, operator=">")
             self._files[path] = FakeFile(content=content)
             logger.debug(f"FakeFS: write {path!r} ({len(content)} chars)")
@@ -113,7 +113,7 @@ class FakeFilesystem:
         # ---- append: … >> file ---------------------------------------------
         m = re.search(r">>\s*([^\s;&|]+)\s*$", cmd)
         if m:
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             content = self._extract_redirect_content(cmd, operator=">>")
             if path in self._files:
                 existing = self._files[path].content
@@ -125,7 +125,7 @@ class FakeFilesystem:
         # ---- cp src dst ----------------------------------------------------
         m = re.match(r"\bcp\b(?:\s+-[^\s]+)?\s+(\S+)\s+(\S+)\s*$", cmd)
         if m:
-            src, dst = self._resolve(m.group(1)), self._resolve(m.group(2))
+            src, dst = self._resolve(m.group(1), cwd=cwd), self._resolve(m.group(2), cwd=cwd)
             if src in self._files:
                 self._files[dst] = FakeFile(
                     content=self._files[src].content,
@@ -138,14 +138,14 @@ class FakeFilesystem:
         # ---- mv src dst ----------------------------------------------------
         m = re.match(r"\bmv\b\s+(\S+)\s+(\S+)\s*$", cmd)
         if m:
-            src, dst = self._resolve(m.group(1)), self._resolve(m.group(2))
+            src, dst = self._resolve(m.group(1), cwd=cwd), self._resolve(m.group(2), cwd=cwd)
             entry = self._files.pop(src, FakeFile())
             self._files[dst] = entry
             logger.debug(f"FakeFS: mv {src} → {dst}")
 
         # ---- rm / rmdir ----------------------------------------------------
         for m in re.finditer(r"\brm\b(?:\s+-[rfRF]+)?\s+([^\s;&|]+)", cmd):
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             self._files.pop(path, None)
             self._dirs.discard(path)
             logger.debug(f"FakeFS: rm {path}")
@@ -155,7 +155,7 @@ class FakeFilesystem:
             r"\bcurl\b.*-o\s+(\S+)", cmd
         )
         if m:
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             # Store a placeholder so the file "exists"; real content unknown
             url_m = re.search(r"https?://\S+", cmd)
             stub = f"# Downloaded from {url_m.group(0) if url_m else 'remote'}\n"
@@ -165,7 +165,7 @@ class FakeFilesystem:
         # ---- chmod +x -------------------------------------------------------
         m = re.search(r"\bchmod\b[^+]*\+x\s+(\S+)", cmd)
         if m:
-            path = self._resolve(m.group(1))
+            path = self._resolve(m.group(1), cwd=cwd)
             if path in self._files:
                 self._files[path].is_executable = True
             else:
@@ -201,22 +201,24 @@ class FakeFilesystem:
         )
         return "\n".join(lines)
 
-    def file_exists(self, path: str) -> bool:
-        return self._resolve(path) in self._files
+    def file_exists(self, path: str, cwd: str = "/home/ubuntu") -> bool:
+        return self._resolve(path, cwd=cwd) in self._files
 
-    def get_content(self, path: str) -> Optional[str]:
-        f = self._files.get(self._resolve(path))
+    def get_content(self, path: str, cwd: str = "/home/ubuntu") -> Optional[str]:
+        f = self._files.get(self._resolve(path, cwd=cwd))
         return f.content if f else None
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _resolve(self, path: str) -> str:
-        """Normalise a path string (strip quotes, trailing slash)."""
+    def _resolve(self, path: str, cwd: str = "/home/ubuntu") -> str:
+        """Normalise a path string (strip quotes, trailing slash) against current working directory."""
         path = path.strip("'\"").rstrip("/")
+        if not path:
+            return cwd
         if not path.startswith("/"):
-            path = "/tmp/" + path  # relative paths default to /tmp
+            path = cwd.rstrip("/") + "/" + path
         # Collapse // and simple /./ segments
         parts = []
         for seg in path.split("/"):

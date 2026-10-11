@@ -172,6 +172,26 @@ class LLMClient:
             return "Reading package lists... Done\nBuilding dependency tree... Done\nAll packages are up to date."
         elif "systemctl" in user_msg or "service" in user_msg:
             return "System has not been booted with systemd as init system (PID 1). Can't operate."
+        elif "pwd" in user_msg:
+            if ":" in user_msg and ("$" in user_msg or "#" in user_msg):
+                prefix = user_msg.split("$")[0].split("#")[0]
+                return prefix.split(":")[-1]
+            return "/home/ubuntu"
+        elif any(c in user_msg for c in ["mkdir", "touch", "chmod", "chown", "rm", "mv", "cp"]):
+            return ""
+        elif "ls" in user_msg:
+            if "la" in user_msg or "-l" in user_msg:
+                return (
+                    "total 32\n"
+                    "drwxr-xr-x 4 ubuntu ubuntu 4096 Oct 12 01:00 .\n"
+                    "drwxr-xr-x 3 root   root   4096 Oct 12 00:00 ..\n"
+                    "-rw-r--r-- 1 ubuntu ubuntu  220 Apr 15  2024 .bash_logout\n"
+                    "-rw-r--r-- 1 ubuntu ubuntu 3771 Apr 15  2024 .bashrc\n"
+                    "-rw-r--r-- 1 ubuntu ubuntu  807 Apr 15  2024 .profile\n"
+                    "drwxrwxr-x 2 ubuntu ubuntu 4096 Oct 12 01:05 app\n"
+                    "-rw-rw-r-- 1 ubuntu ubuntu  120 Oct 12 01:10 test_dir"
+                )
+            return "app  test_dir  package.json"
 
         # Extract binary name from prompt format (e.g. 'ubuntu:/home/ubuntu$ command')
         cmd_text = user_msg

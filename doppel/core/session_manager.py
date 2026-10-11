@@ -198,7 +198,7 @@ class SessionManager:
             )
             # After LLM responds, update the fake filesystem from this command
             if session.fake_fs:
-                session.fake_fs.update_from_command(cmd_clean, output)
+                session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
 
         # 3. Adaptive tar-pit delay — scales with attacker type
         base_delay_ms = self.config.deception.tar_pit_delay_ms

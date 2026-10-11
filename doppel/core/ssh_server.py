@@ -33,7 +33,9 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self._last_char_was_cr = False
         self._execution_lock = asyncio.Lock()
         self._shell_ready = asyncio.Event()
+        self._shell_started = False
         self._is_exec = False
+        self._closed = False
 
     def pty_requested(self, term_type, term_size, term_modes):
         return True
@@ -43,12 +45,18 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
 
     def exec_requested(self, command: str) -> bool:
         self._is_exec = True
-        asyncio.create_task(self._handle_exec(command))
+        asyncio.create_task(self._start_shell_and_exec(command))
         return True
+
+    async def _start_shell_and_exec(self, command: str):
+        await self._start_shell()
+        await self._handle_exec(command)
 
     async def _handle_exec(self, command: str):
         await self._shell_ready.wait()
         if not self.session:
+            if self.chan:
+                self.chan.close()
             return
         output = await self.session_manager.process_command(self.session.session_id, command)
         if output:
@@ -65,6 +73,10 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             chan.set_line_mode(False)
 
     async def _start_shell(self):
+        if self._shell_started:
+            await self._shell_ready.wait()
+            return
+        self._shell_started = True
         try:
             self.session = await self.session_manager.create_session(
                 remote_ip=self.remote_ip,
@@ -74,11 +86,18 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 credential_analysis=self.credential_analysis,
                 geoip=self.geoip,
             )
+            if self._closed:
+                if self.session:
+                    logger.info(f"SSH channel closed before shell ready, terminating session {self.session.session_id[:8]}")
+                    asyncio.create_task(self.session_manager.close_session(self.session.session_id))
+                return
             if not self._is_exec:
                 # Send Ubuntu MOTD
                 if self.config.honeypot.motd:
                     self.chan.write(self.config.honeypot.motd.replace("\n", "\r\n") + "\r\n")
                 self._write_prompt()
+        except Exception as e:
+            logger.error(f"Error starting shell session: {e}", exc_info=True)
         finally:
             self._shell_ready.set()
 
@@ -96,7 +115,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self.chan.write(self._get_prompt())
 
     def session_started(self):
-        asyncio.create_task(self._start_shell())
+        if not self._is_exec:
+            asyncio.create_task(self._start_shell())
 
     def data_received(self, data, datatype):
         """Process incoming raw terminal characters and keystrokes."""
@@ -159,10 +179,22 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
 
             self._write_prompt()
 
-    def connection_lost(self, exc):
+    def close_session(self):
+        if self._closed:
+            return
+        self._closed = True
         if self.session:
             logger.info(f"SSH connection closed for session {self.session.session_id[:8]}")
             asyncio.create_task(self.session_manager.close_session(self.session.session_id))
+
+    def connection_lost(self, exc):
+        self.close_session()
+
+    def eof_received(self):
+        if self.chan:
+            self.chan.close()
+        self.close_session()
+        return False
 
 
 class DoppelSSHServer(asyncssh.SSHServer):
@@ -173,6 +205,7 @@ class DoppelSSHServer(asyncssh.SSHServer):
         self.config = config
         self._client_creds = {}
         self._geoip_cache: dict = {}  # ip → enrichment result, reused per connection
+        self._sessions: set = set()
 
     def connection_made(self, conn):
         peer = conn.get_extra_info("peername")
@@ -231,7 +264,7 @@ class DoppelSSHServer(asyncssh.SSHServer):
         pw = self._client_creds.get("pass", "")
         cred_analysis = self._client_creds.get("credential_analysis", {})
         geoip_data    = self._client_creds.get("geoip", {})
-        return DoppelSSHServerSession(
+        sess = DoppelSSHServerSession(
             session_manager=self.session_manager,
             config=self.config,
             remote_ip=self.remote_ip,
@@ -241,6 +274,13 @@ class DoppelSSHServer(asyncssh.SSHServer):
             credential_analysis=cred_analysis,
             geoip=geoip_data,
         )
+        self._sessions.add(sess)
+        return sess
+
+    def connection_lost(self, exc):
+        for s in list(self._sessions):
+            s.close_session()
+        self._sessions.clear()
 
 
 async def start_ssh_server(session_manager: SessionManager, config: DoppelConfig) -> asyncssh.SSHServer:

@@ -91,6 +91,49 @@ class TelemetryDB:
                     response_snippet TEXT
                 )
             """)
+
+            # Schema migration: dynamically add any newly introduced columns to existing database tables
+            try:
+                async with db.execute("PRAGMA table_info(sessions)") as cur:
+                    cols = {row[1] for row in await cur.fetchall()}
+
+                needed_session_cols = {
+                    "country_code": "TEXT",
+                    "country_name": "TEXT",
+                    "city": "TEXT",
+                    "asn": "INTEGER",
+                    "asn_org": "TEXT",
+                    "is_datacenter": "INTEGER DEFAULT 0",
+                    "attacker_type": "TEXT DEFAULT 'unknown'",
+                    "type_confidence": "REAL DEFAULT 0.0",
+                    "current_phase": "TEXT DEFAULT 'Reconnaissance'",
+                    "credential_risk": "TEXT",
+                    "summary": "TEXT",
+                    "max_threat_score": "INTEGER DEFAULT 0",
+                }
+                for col_name, col_type in needed_session_cols.items():
+                    if col_name not in cols:
+                        await db.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")
+
+                async with db.execute("PRAGMA table_info(commands)") as cur:
+                    cmd_cols = {row[1] for row in await cur.fetchall()}
+
+                needed_cmd_cols = {
+                    "route_decision": "TEXT",
+                    "technique_id": "TEXT",
+                    "technique_name": "TEXT",
+                    "tactics": "TEXT",
+                    "threat_score": "INTEGER DEFAULT 0",
+                }
+                for col_name, col_type in needed_cmd_cols.items():
+                    if col_name not in cmd_cols:
+                        await db.execute(f"ALTER TABLE commands ADD COLUMN {col_name} {col_type}")
+
+                # Clean up any orphaned sessions from previous runs
+                await db.execute("UPDATE sessions SET end_time = CURRENT_TIMESTAMP WHERE end_time IS NULL")
+            except Exception as mig_err:
+                logger.warning(f"Database schema migration notice: {mig_err}")
+
             await db.commit()
             self._initialized = True
             logger.info(f"Telemetry database initialized at {self.db_path}")
@@ -108,24 +151,27 @@ class TelemetryDB:
         await self._ensure_initialized()
         now = datetime.now(timezone.utc).isoformat()
         geo = geoip or {}
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO sessions
-                (session_id, remote_ip, remote_port, username, password, start_time,
-                 country_code, country_name, city, asn, asn_org, is_datacenter,
-                 credential_risk)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id, remote_ip, remote_port, username, password or "", now,
-                    geo.get("country_code"), geo.get("country_name"), geo.get("city"),
-                    geo.get("asn"), geo.get("asn_org"),
-                    1 if geo.get("is_datacenter") else 0,
-                    credential_risk,
-                ),
-            )
-            await db.commit()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO sessions
+                    (session_id, remote_ip, remote_port, username, password, start_time,
+                     country_code, country_name, city, asn, asn_org, is_datacenter,
+                     credential_risk)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session_id, remote_ip, remote_port, username, password or "", now,
+                        geo.get("country_code"), geo.get("country_name"), geo.get("city"),
+                        geo.get("asn"), geo.get("asn_org"),
+                        1 if geo.get("is_datacenter") else 0,
+                        credential_risk,
+                    ),
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to log session start for {session_id}: {e}", exc_info=True)
 
     async def log_command(
         self,
