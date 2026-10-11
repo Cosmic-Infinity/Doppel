@@ -101,7 +101,20 @@ class LLMClient:
                 resp.raise_for_status()
                 data = resp.json()
                 elapsed = max(time.perf_counter() - start_t, 0.001)
-                content = data["choices"][0]["message"]["content"]
+                choice = data["choices"][0]
+                message_obj = choice.get("message", {})
+                content = message_obj.get("content") or choice.get("text") or ""
+                reasoning = (
+                    message_obj.get("reasoning_content")
+                    or message_obj.get("reasoning")
+                    or message_obj.get("thinking")
+                    or ""
+                )
+
+                if not content.strip() and reasoning.strip():
+                    content = f"<think>\n{reasoning.strip()}\n</think>"
+                elif reasoning.strip() and content.strip():
+                    content = f"<think>\n{reasoning.strip()}\n</think>\n\n{content.strip()}"
                 
                 usage = data.get("usage", {})
                 tokens = usage.get("completion_tokens")

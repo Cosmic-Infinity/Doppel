@@ -184,6 +184,7 @@ def test_index_html_has_assistant_elements(client):
     assert "btn-open-assistant" in html
     assert "assistant-modal" in html
     assert "assistant-model-select" in html
+    assert "btn-reset-assistant" in html
     assert "assistant-chips-bar" in html
 
 

@@ -114,11 +114,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const assistantModal = document.getElementById('assistant-modal');
   const btnCloseAssistant = document.getElementById('btn-close-assistant');
   const assistantModelSelect = document.getElementById('assistant-model-select');
+  const btnResetAssistant = document.getElementById('btn-reset-assistant');
   const assistantChips = document.querySelectorAll('.assistant-chip');
   const assistantChatBody = document.getElementById('assistant-chat-body');
   const assistantInputForm = document.getElementById('assistant-input-form');
   const assistantInput = document.getElementById('assistant-input');
   const btnSendAssistant = document.getElementById('btn-send-assistant');
+  let userChosenAssistantModel = localStorage.getItem('doppel_assistant_model') || '';
 
   // --- View Management ---
 
@@ -153,9 +155,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   function renderMarkdown(md) {
     if (!md) return '';
 
+    // Extract thought blocks (<think>...</think> or unclosed <think>...)
+    const thinkBlocks = [];
+    let text = md.replace(/<think>([\s\S]*?)(?:<\/think>|$)/gi, (match, thought) => {
+      const trimmed = thought.trim();
+      if (!trimmed) return '';
+      const idx = thinkBlocks.length;
+      const isUnclosed = !match.toLowerCase().includes('</think>');
+      thinkBlocks.push(
+        `<details class="thought-process"${isUnclosed ? ' open' : ''}>` +
+        `<summary>Thought Process${isUnclosed ? ' (Incomplete)' : ''}</summary>` +
+        `<div class="thought-body">${escapeHtml(trimmed)}</div>` +
+        `</details>`
+      );
+      return `\n@@@THINKBLOCK_${idx}@@@\n`;
+    });
+
     // Extract code blocks first to protect formatting
     const codeBlocks = [];
-    let text = md.replace(/```([a-zA-Z0-9_\-]*)?\n([\s\S]*?)```/g, (match, lang, code) => {
+    text = text.replace(/```([a-zA-Z0-9_\-]*)?\n([\s\S]*?)```/g, (match, lang, code) => {
       const idx = codeBlocks.length;
       codeBlocks.push(`<pre class="md-code-block"><code class="language-${lang || 'bash'}">${escapeHtml(code.trim())}</code></pre>`);
       return `@@@CODEBLOCK_${idx}@@@`;
@@ -228,8 +246,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         output.push('</ul>');
       }
 
-      // Headers, HR, Codeblocks, Blockquotes
-      if (line.startsWith('<h') || line.startsWith('<hr') || line.startsWith('<blockquote') || line.startsWith('@@@CODEBLOCK_')) {
+      // Headers, HR, Codeblocks, Blockquotes, Thinkblocks
+      if (line.startsWith('<h') || line.startsWith('<hr') || line.startsWith('<blockquote') || line.startsWith('@@@CODEBLOCK_') || line.startsWith('@@@THINKBLOCK_')) {
         output.push(line);
       } else if (line.length > 0) {
         output.push(`<p>${line}</p>`);
@@ -244,6 +262,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     // Restore Code Blocks
     codeBlocks.forEach((cb, idx) => {
       result = result.replace(`@@@CODEBLOCK_${idx}@@@`, cb);
+    });
+
+    // Restore Thought Blocks
+    thinkBlocks.forEach((tb, idx) => {
+      result = result.replace(`@@@THINKBLOCK_${idx}@@@`, tb);
     });
 
     return result;
@@ -479,14 +502,6 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     // Populate model select with installed models if available
     if (llm.models_available && llm.models_available.length > 0) {
       selectLlmModel.innerHTML = '';
-      if (assistantModelSelect) {
-        assistantModelSelect.innerHTML = '';
-        const defOpt = document.createElement('option');
-        defOpt.value = '';
-        defOpt.textContent = `Default (${llm.configured_model || 'System'})`;
-        assistantModelSelect.appendChild(defOpt);
-      }
-
       llm.models_available.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
@@ -495,17 +510,39 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           opt.selected = true;
         }
         selectLlmModel.appendChild(opt);
+      });
 
-        if (assistantModelSelect) {
+      if (assistantModelSelect) {
+        const currentSelected = userChosenAssistantModel !== '' ? userChosenAssistantModel : assistantModelSelect.value;
+        const allModels = new Set(['', ...llm.models_available]);
+        Array.from(assistantModelSelect.options).forEach(opt => {
+          if (opt.value) allModels.add(opt.value);
+        });
+
+        assistantModelSelect.innerHTML = '';
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = `Default (${llm.configured_model || 'System'})`;
+        if (!currentSelected) {
+          defOpt.selected = true;
+        }
+        assistantModelSelect.appendChild(defOpt);
+
+        allModels.forEach(m => {
+          if (!m) return;
           const aOpt = document.createElement('option');
           aOpt.value = m;
           aOpt.textContent = m;
-          if (m.toLowerCase() === (llm.configured_model || '').toLowerCase()) {
+          if (currentSelected && m.toLowerCase() === currentSelected.toLowerCase()) {
             aOpt.selected = true;
           }
           assistantModelSelect.appendChild(aOpt);
+        });
+
+        if (currentSelected) {
+          assistantModelSelect.value = currentSelected;
         }
-      });
+      }
     }
 
     // 4. Card 2: Docker Diagnostics
@@ -1131,24 +1168,33 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   // --- AI Assistant & Benchmark Console Logic ---
   function syncAssistantModels() {
     if (!assistantModelSelect) return;
-    if (assistantModelSelect.options.length <= 1 && selectLlmModel && selectLlmModel.options.length > 0) {
-      const curVal = assistantModelSelect.value;
-      assistantModelSelect.innerHTML = '';
-      const defOpt = document.createElement('option');
-      defOpt.value = '';
-      defOpt.textContent = 'Default Configured Model';
-      assistantModelSelect.appendChild(defOpt);
+    const currentSelected = userChosenAssistantModel !== '' ? userChosenAssistantModel : assistantModelSelect.value;
 
+    if (selectLlmModel && selectLlmModel.options.length > 0) {
+      const existingValues = new Set(Array.from(assistantModelSelect.options).map(o => o.value));
       Array.from(selectLlmModel.options).forEach(opt => {
-        const aOpt = document.createElement('option');
-        aOpt.value = opt.value;
-        aOpt.textContent = opt.textContent;
-        if (opt.value === curVal || opt.selected) {
-          aOpt.selected = true;
+        if (opt.value && !existingValues.has(opt.value)) {
+          const aOpt = document.createElement('option');
+          aOpt.value = opt.value;
+          aOpt.textContent = opt.textContent;
+          assistantModelSelect.appendChild(aOpt);
         }
-        assistantModelSelect.appendChild(aOpt);
       });
     }
+
+    if (currentSelected) {
+      assistantModelSelect.value = currentSelected;
+    }
+  }
+
+  if (assistantModelSelect) {
+    if (userChosenAssistantModel) {
+      assistantModelSelect.value = userChosenAssistantModel;
+    }
+    assistantModelSelect.addEventListener('change', (e) => {
+      userChosenAssistantModel = e.target.value;
+      localStorage.setItem('doppel_assistant_model', userChosenAssistantModel);
+    });
   }
 
   if (btnOpenAssistant) {
@@ -1185,7 +1231,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     assistantInput.value = '';
 
     // 2. Append Loading Indicator
-    const targetModel = assistantModelSelect ? assistantModelSelect.value : '';
+    const targetModel = (assistantModelSelect && assistantModelSelect.value) ? assistantModelSelect.value : (userChosenAssistantModel || '');
     const loadingMsg = document.createElement('div');
     loadingMsg.className = 'assistant-msg assistant-msg-bot';
     loadingMsg.id = 'assistant-temp-loading';
@@ -1270,6 +1316,24 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     assistantInputForm.addEventListener('submit', (e) => {
       e.preventDefault();
       sendAssistantMessage(assistantInput.value);
+    });
+  }
+
+  if (btnResetAssistant) {
+    btnResetAssistant.addEventListener('click', () => {
+      if (assistantChatBody) {
+        assistantChatBody.innerHTML = `
+          <div class="assistant-msg assistant-msg-system">
+            <div class="assistant-bubble">
+              Chat history cleared. Test inference speed across models or query honeypot telemetry, attacker behaviors, and defensive recommendations.
+            </div>
+          </div>
+        `;
+      }
+      if (assistantInput) {
+        assistantInput.value = '';
+        assistantInput.focus();
+      }
     });
   }
 

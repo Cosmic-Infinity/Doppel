@@ -79,3 +79,57 @@ def test_deception_clean_output_strips_echoed_first_line():
     assert "ubuntu@prod-api-node-01:~$" not in cleaned
     assert cleaned.strip() == "[sudo] password for ubuntu:"
 
+
+@pytest.mark.asyncio
+async def test_llm_client_extracts_reasoning_when_content_empty():
+    from unittest.mock import patch, MagicMock
+
+    client = LLMClient(mock_mode=False)
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "Detailed thinking about the last 5 attacks..."
+            }
+        }],
+        "usage": {"completion_tokens": 1024}
+    }
+
+    with patch("httpx.AsyncClient.post", return_value=fake_resp):
+        res = await client.chat_completion_with_metrics([{"role": "user", "content": "tell me about attacks"}])
+        assert res["tokens"] == 1024
+        assert "Detailed thinking about the last 5 attacks" in res["content"]
+        assert "<think>" in res["content"]
+
+
+@pytest.mark.asyncio
+async def test_llm_client_combines_reasoning_and_content():
+    from unittest.mock import patch, MagicMock
+
+    client = LLMClient(mock_mode=False)
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Here is the summary of the attacks.",
+                "reasoning_content": "Analyzing IP and telemetry."
+            }
+        }],
+        "usage": {"completion_tokens": 1500}
+    }
+
+    with patch("httpx.AsyncClient.post", return_value=fake_resp):
+        res = await client.chat_completion_with_metrics([{"role": "user", "content": "summary"}])
+        assert res["tokens"] == 1500
+        assert "<think>" in res["content"]
+        assert "Analyzing IP and telemetry" in res["content"]
+        assert "Here is the summary of the attacks." in res["content"]
+
+

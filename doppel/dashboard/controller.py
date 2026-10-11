@@ -357,6 +357,7 @@ class HoneypotController:
             f"{json.dumps(recent_sessions, indent=2)}\n\n"
             "INSTRUCTIONS:\n"
             "- Answer directly, technically, and concisely in clean Markdown.\n"
+            "- Be direct and concise; keep internal chain-of-thought brief so you can deliver the complete answer within token limits.\n"
             "- When asked about attacks or telemetry, reference the real session data above (IPs, usernames, commands, threat scores).\n"
             "- When asked for suggestions, provide prioritized, actionable defensive recommendations (SSH hardening, UFW firewall rules, sudoers audits, credential rotation).\n"
             "- When asked for speed tests or benchmarks, provide a complete, well-formed response so generation latency can be evaluated."
@@ -368,7 +369,7 @@ class HoneypotController:
         ]
 
         try:
-            metrics = await client.chat_completion_with_metrics(messages=messages, max_tokens=1024)
+            metrics = await client.chat_completion_with_metrics(messages=messages, max_tokens=2048)
             return {
                 "success": True,
                 "reply": metrics["content"].strip(),
