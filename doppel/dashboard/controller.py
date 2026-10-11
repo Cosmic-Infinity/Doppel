@@ -2,7 +2,7 @@ import json
 import time
 import asyncio
 import logging
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional, Set, Tuple, List, AsyncGenerator
 from datetime import datetime, timezone
 from fastapi import WebSocket
 
@@ -284,8 +284,10 @@ class HoneypotController:
                 "endpoint": self.config.llm.base_url,
             }
 
-    async def query_assistant(self, message: str, model_override: Optional[str] = None) -> Dict[str, Any]:
-        """Query the in-built security assistant with live telemetry, state context, and benchmark metrics."""
+    async def _prepare_assistant_context(
+        self, message: str, model_override: Optional[str] = None
+    ) -> Tuple[LLMClient, str, List[Dict[str, str]], Dict[str, Any]]:
+        """Assemble live telemetry, honeypot state context, and configured LLMClient for the assistant."""
         target_model = model_override or self.config.llm.model
         client = LLMClient(
             base_url=self.config.llm.base_url,
@@ -368,6 +370,19 @@ class HoneypotController:
             {"role": "user", "content": message},
         ]
 
+        system_state = {
+            "status": self.status,
+            "port": self.config.honeypot.port,
+            "persona": self.config.deception.persona,
+            "active_sessions_count": len(active_sessions_list),
+            "recent_sessions_count": len(recent_sessions),
+        }
+
+        return client, target_model, messages, system_state
+
+    async def query_assistant(self, message: str, model_override: Optional[str] = None) -> Dict[str, Any]:
+        """Query the in-built security assistant with live telemetry, state context, and benchmark metrics."""
+        client, target_model, messages, system_state = await self._prepare_assistant_context(message, model_override)
         try:
             metrics = await client.chat_completion_with_metrics(messages=messages, max_tokens=2048)
             return {
@@ -377,13 +392,7 @@ class HoneypotController:
                 "latency_seconds": metrics["latency_seconds"],
                 "tokens_generated": metrics["tokens"],
                 "tokens_per_second": metrics["tokens_per_second"],
-                "system_state": {
-                    "status": self.status,
-                    "port": self.config.honeypot.port,
-                    "persona": self.config.deception.persona,
-                    "active_sessions_count": len(active_sessions_list),
-                    "recent_sessions_count": len(recent_sessions),
-                },
+                "system_state": system_state,
             }
         except Exception as e:
             return {
@@ -393,6 +402,29 @@ class HoneypotController:
                 "latency_seconds": 0.0,
                 "tokens_generated": 0,
                 "tokens_per_second": 0.0,
+                "system_state": system_state,
+            }
+
+    async def query_assistant_stream(
+        self, message: str, model_override: Optional[str] = None
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream assistant response tokens, live latency, and throughput metrics."""
+        client, target_model, messages, system_state = await self._prepare_assistant_context(message, model_override)
+        try:
+            async for chunk in client.chat_completion_stream(messages=messages, max_tokens=2048):
+                chunk["system_state"] = system_state
+                yield chunk
+        except Exception as e:
+            logger.warning(f"Assistant streaming query failed: {e}")
+            yield {
+                "delta": f"\n\n[Generation error: {e}]",
+                "tokens": 0,
+                "latency_seconds": 0.0,
+                "tokens_per_second": 0.0,
+                "model": target_model,
+                "done": True,
+                "error": str(e),
+                "system_state": system_state,
             }
 
     async def _run_http_sensor(self, deception_engine) -> None:

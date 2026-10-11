@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi.testclient import TestClient
 from doppel.dashboard.app import app, controller
@@ -175,6 +176,29 @@ def test_dashboard_chat_assistant_model_override_and_state(client):
     assert "reply" in data and len(data["reply"]) > 0
     assert "system_state" in data
     assert data["system_state"]["port"] == controller.config.honeypot.port
+
+
+def test_dashboard_chat_assistant_streaming(client):
+    res = client.post("/api/chat-assistant/stream", json={"message": "Run a speed benchmark test"})
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+
+    body = res.text
+    assert "data: " in body
+
+    chunks = []
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            data = json.loads(line[5:].strip())
+            chunks.append(data)
+
+    assert len(chunks) > 1
+    assert any(c.get("delta") for c in chunks)
+    last = chunks[-1]
+    assert last.get("done") is True
+    assert "system_state" in last
+    assert last["system_state"]["status"] == controller.status
 
 
 def test_index_html_has_assistant_elements(client):

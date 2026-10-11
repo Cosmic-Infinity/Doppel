@@ -77,6 +77,28 @@ async def chat_assistant(req: AssistantChatRequest):
     return await controller.query_assistant(message=req.message, model_override=req.model)
 
 
+@app.post("/api/chat-assistant/stream")
+async def chat_assistant_stream(req: AssistantChatRequest):
+    """Stream assistant response tokens and live throughput metrics via Server-Sent Events."""
+    async def sse_generator():
+        try:
+            async for chunk in controller.query_assistant_stream(message=req.message, model_override=req.model):
+                yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            err_data = {"error": str(e), "done": True}
+            yield f"data: {json.dumps(err_data)}\n\n"
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/status")
 async def get_status():
     active_count = len(controller.session_manager.sessions) if controller.session_manager else 0

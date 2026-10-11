@@ -133,3 +133,80 @@ async def test_llm_client_combines_reasoning_and_content():
         assert "Here is the summary of the attacks." in res["content"]
 
 
+@pytest.mark.asyncio
+async def test_llm_client_mock_streaming():
+    client = LLMClient(mock_mode=True)
+    chunks = []
+    async for chunk in client.chat_completion_stream([{"role": "user", "content": "Run a speed benchmark test"}]):
+        chunks.append(chunk)
+
+    assert len(chunks) > 1
+    assert any(c["delta"] for c in chunks[:-1])
+    last = chunks[-1]
+    assert last["done"] is True
+    assert last["tokens"] > 0
+    assert last["latency_seconds"] >= 0
+    assert last["tokens_per_second"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_llm_client_streaming_sse_with_reasoning():
+    from unittest.mock import patch, MagicMock
+
+    client = LLMClient(mock_mode=False, base_url="http://localhost:11434/v1")
+
+    # Simulate SSE chunk sequence
+    sse_lines = [
+        'data: {"choices":[{"delta":{"reasoning_content":"Thinking about honeypot..."}}]}\n',
+        'data: {"choices":[{"delta":{"reasoning_content":" done thinking."}}]}\n',
+        'data: {"choices":[{"delta":{"content":"Here is the result."}}]}\n',
+        'data: [DONE]\n'
+    ]
+
+    class FakeAiterLines:
+        def __aiter__(self):
+            self.iter = iter(sse_lines)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.iter)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class FakeStreamContext:
+        async def __aenter__(self):
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.aiter_lines = MagicMock(return_value=FakeAiterLines())
+            return mock_resp
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            return FakeStreamContext()
+
+    with patch("httpx.AsyncClient", FakeAsyncClient):
+        chunks = []
+        async for chunk in client.chat_completion_stream([{"role": "user", "content": "analyze"}]):
+            chunks.append(chunk)
+
+        combined = "".join(c["delta"] for c in chunks)
+        assert "<think>" in combined
+        assert "</think>" in combined
+        assert "Thinking about honeypot" in combined
+        assert "Here is the result." in combined
+        assert chunks[-1]["done"] is True
+
+

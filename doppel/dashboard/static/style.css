@@ -1669,3 +1669,32 @@ html.init-dashboard #view-dashboard {
   word-break: break-word;
 }
 
+/* Real-time Streaming Cursor & Pulse */
+.assistant-streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  background-color: var(--accent-blue);
+  margin-left: 3px;
+  vertical-align: middle;
+  border-radius: 1px;
+  animation: assistant-blink 0.8s infinite;
+}
+
+@keyframes assistant-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.metric-pill.streaming {
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.25);
+  animation: metric-pulse 1.2s infinite alternate;
+}
+
+@keyframes metric-pulse {
+  from { opacity: 0.85; }
+  to { opacity: 1; }
+}
+
+

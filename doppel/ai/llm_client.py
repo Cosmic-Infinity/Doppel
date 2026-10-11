@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
+import re
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 import httpx
 
 logger = logging.getLogger("doppel.ai")
@@ -139,6 +141,180 @@ class LLMClient:
                 "latency_seconds": round(elapsed, 3),
                 "tokens_per_second": round(tokens / elapsed, 1),
                 "model": self.model,
+            }
+
+    async def chat_completion_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: int = 2048,
+        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[List[str]] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream tokens in real time along with live latency and throughput metrics."""
+        start_t = time.perf_counter()
+
+        if self.mock_mode:
+            content = self._mock_response(messages)
+            parts = re.split(r'(\s+)', content)
+            token_count = 0
+            for part in parts:
+                if not part:
+                    continue
+                await asyncio.sleep(0.005)
+                token_count += 1
+                elapsed = max(time.perf_counter() - start_t, 0.001)
+                yield {
+                    "delta": part,
+                    "tokens": token_count,
+                    "latency_seconds": round(elapsed, 3),
+                    "tokens_per_second": round(token_count / elapsed, 1),
+                    "model": self.model,
+                    "done": False,
+                }
+            elapsed = max(time.perf_counter() - start_t, 0.001)
+            yield {
+                "delta": "",
+                "tokens": token_count,
+                "latency_seconds": round(elapsed, 3),
+                "tokens_per_second": round(token_count / elapsed, 1),
+                "model": self.model,
+                "done": True,
+            }
+            return
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        if response_format:
+            payload["response_format"] = response_format
+        if stop:
+            payload["stop"] = stop
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+
+        url = f"{self.base_url}/chat/completions"
+        token_count = 0
+        in_thinking = False
+        target_model = self.model
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if chunk.get("model"):
+                            target_model = chunk["model"]
+
+                        choices = chunk.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        content_piece = delta.get("content") or ""
+                        reasoning_piece = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or delta.get("thinking")
+                            or ""
+                        )
+
+                        emitted_delta = ""
+                        if reasoning_piece:
+                            if not in_thinking:
+                                emitted_delta += "<think>\n"
+                                in_thinking = True
+                            emitted_delta += reasoning_piece
+                        elif content_piece:
+                            if in_thinking:
+                                emitted_delta += "\n</think>\n\n"
+                                in_thinking = False
+                            emitted_delta += content_piece
+
+                        if emitted_delta:
+                            token_count += max(1, len(emitted_delta.split()))
+                            elapsed = max(time.perf_counter() - start_t, 0.001)
+                            yield {
+                                "delta": emitted_delta,
+                                "tokens": token_count,
+                                "latency_seconds": round(elapsed, 3),
+                                "tokens_per_second": round(token_count / elapsed, 1),
+                                "model": target_model,
+                                "done": False,
+                            }
+
+            if in_thinking:
+                token_count += 1
+                elapsed = max(time.perf_counter() - start_t, 0.001)
+                yield {
+                    "delta": "\n</think>\n",
+                    "tokens": token_count,
+                    "latency_seconds": round(elapsed, 3),
+                    "tokens_per_second": round(token_count / elapsed, 1),
+                    "model": target_model,
+                    "done": False,
+                }
+
+            elapsed = max(time.perf_counter() - start_t, 0.001)
+            yield {
+                "delta": "",
+                "tokens": token_count,
+                "latency_seconds": round(elapsed, 3),
+                "tokens_per_second": round(token_count / elapsed, 1),
+                "model": target_model,
+                "done": True,
+            }
+        except Exception as e:
+            logger.warning(f"Streaming LLM request to {url} failed: {e}. Falling back to mock generator.")
+            content = self._mock_response(messages)
+            parts = re.split(r'(\s+)', content)
+            token_count = 0
+            for part in parts:
+                if not part:
+                    continue
+                await asyncio.sleep(0.005)
+                token_count += 1
+                elapsed = max(time.perf_counter() - start_t, 0.001)
+                yield {
+                    "delta": part,
+                    "tokens": token_count,
+                    "latency_seconds": round(elapsed, 3),
+                    "tokens_per_second": round(token_count / elapsed, 1),
+                    "model": self.model,
+                    "done": False,
+                }
+            elapsed = max(time.perf_counter() - start_t, 0.001)
+            yield {
+                "delta": "",
+                "tokens": token_count,
+                "latency_seconds": round(elapsed, 3),
+                "tokens_per_second": round(token_count / elapsed, 1),
+                "model": self.model,
+                "done": True,
             }
 
     def _mock_response(self, messages: List[Dict[str, str]]) -> str:

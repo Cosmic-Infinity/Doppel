@@ -152,7 +152,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   });
 
   // --- Robust Offline Markdown Parser ---
-  function renderMarkdown(md) {
+  function renderMarkdown(md, isStreaming = false) {
     if (!md) return '';
 
     // Extract thought blocks (<think>...</think> or unclosed <think>...)
@@ -162,10 +162,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (!trimmed) return '';
       const idx = thinkBlocks.length;
       const isUnclosed = !match.toLowerCase().includes('</think>');
+      const summaryLabel = isUnclosed
+        ? (isStreaming ? 'Thought Process' : 'Thought Process (Incomplete)')
+        : 'Thought Process';
+      const cursorInside = (isStreaming && isUnclosed) ? '<span class="assistant-streaming-cursor"></span>' : '';
       thinkBlocks.push(
         `<details class="thought-process"${isUnclosed ? ' open' : ''}>` +
-        `<summary>Thought Process${isUnclosed ? ' (Incomplete)' : ''}</summary>` +
-        `<div class="thought-body">${escapeHtml(trimmed)}</div>` +
+        `<summary>${summaryLabel}</summary>` +
+        `<div class="thought-body">${escapeHtml(trimmed)}${cursorInside}</div>` +
         `</details>`
       );
       return `\n@@@THINKBLOCK_${idx}@@@\n`;
@@ -1230,23 +1234,35 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     assistantChatBody.appendChild(userMsg);
     assistantInput.value = '';
 
-    // 2. Append Loading Indicator
+    // 2. Setup Assistant Response Message Bubble with live metrics bar
     const targetModel = (assistantModelSelect && assistantModelSelect.value) ? assistantModelSelect.value : (userChosenAssistantModel || '');
-    const loadingMsg = document.createElement('div');
-    loadingMsg.className = 'assistant-msg assistant-msg-bot';
-    loadingMsg.id = 'assistant-temp-loading';
-    loadingMsg.innerHTML = `
+
+    const botMsg = document.createElement('div');
+    botMsg.className = 'assistant-msg assistant-msg-bot';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'assistant-bubble';
+    bubble.innerHTML = `
       <div class="assistant-loading-indicator">
         <span class="assistant-spinner"></span>
-        <span>Evaluating inference${targetModel ? ` on ${escapeHtml(targetModel)}` : ''}...</span>
+        <span>Connecting to inference stream${targetModel ? ` (${escapeHtml(targetModel)})` : ''}...</span>
       </div>
     `;
-    assistantChatBody.appendChild(loadingMsg);
+    botMsg.appendChild(bubble);
+
+    const metricsBar = document.createElement('div');
+    metricsBar.className = 'assistant-metrics-bar hidden';
+    botMsg.appendChild(metricsBar);
+
+    assistantChatBody.appendChild(botMsg);
     assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
 
     // Disable input while running
     assistantInput.disabled = true;
     btnSendAssistant.disabled = true;
+
+    let accumulatedText = '';
+    let lastMetrics = null;
 
     try {
       const payload = { message: text };
@@ -1254,56 +1270,112 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         payload.model = targetModel;
       }
 
-      const res = await fetch('/api/chat-assistant', {
+      const res = await fetch('/api/chat-assistant/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
-      const loadingElem = document.getElementById('assistant-temp-loading');
-      if (loadingElem) loadingElem.remove();
-
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      if (!data.success && data.error) {
-        throw new Error(data.error);
+      if (!res.body) {
+        throw new Error('Streaming response body is unavailable');
       }
 
-      // Render assistant message with formatted markdown and performance metrics
-      const botMsg = document.createElement('div');
-      botMsg.className = 'assistant-msg assistant-msg-bot';
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
 
-      const formattedBody = renderMarkdown(data.reply || '(Empty response)');
-      const speedStr = typeof data.tokens_per_second === 'number' ? `${data.tokens_per_second.toFixed(1)} tok/s` : '';
-      const latencyStr = typeof data.latency_seconds === 'number' ? `${data.latency_seconds.toFixed(2)}s` : '';
-      const tokensStr = typeof data.tokens_generated === 'number' ? `${data.tokens_generated} tokens` : '';
-      const modelStr = data.model || targetModel || 'default';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
 
-      botMsg.innerHTML = `
-        <div class="assistant-bubble">${formattedBody}</div>
-        <div class="assistant-metrics-bar">
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep incomplete partial line in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr) continue;
+
+          try {
+            const chunk = JSON.parse(dataStr);
+            if (chunk.error) {
+              throw new Error(chunk.error);
+            }
+
+            if (chunk.delta) {
+              accumulatedText += chunk.delta;
+            }
+
+            lastMetrics = chunk;
+
+            if (accumulatedText) {
+              const isInsideThink = accumulatedText.lastIndexOf('<think>') > accumulatedText.lastIndexOf('</think>');
+              const renderedHtml = renderMarkdown(accumulatedText, !chunk.done);
+              const cursorHtml = (!chunk.done && !isInsideThink)
+                ? '<span class="assistant-streaming-cursor"></span>'
+                : '';
+              bubble.innerHTML = (renderedHtml || '') + cursorHtml;
+
+              const speedStr = (typeof chunk.tokens_per_second === 'number' && chunk.tokens_per_second > 0)
+                ? `${chunk.tokens_per_second.toFixed(1)} tok/s` : '';
+              const latencyStr = typeof chunk.latency_seconds === 'number'
+                ? `${chunk.latency_seconds.toFixed(2)}s latency` : '';
+              const tokensStr = (typeof chunk.tokens === 'number' && chunk.tokens > 0)
+                ? `${chunk.tokens} tokens` : '';
+              const modelStr = chunk.model || targetModel || 'default';
+
+              metricsBar.className = 'assistant-metrics-bar';
+              metricsBar.innerHTML = `
+                ${speedStr ? `<span class="metric-pill speed ${chunk.done ? '' : 'streaming'}">${speedStr}</span>` : ''}
+                ${latencyStr ? `<span class="metric-pill latency">${latencyStr}</span>` : ''}
+                ${tokensStr ? `<span class="metric-pill tokens">${tokensStr}</span>` : ''}
+                <span class="metric-pill model">${escapeHtml(modelStr)}</span>
+              `;
+            }
+
+            assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
+          } catch (jsonErr) {
+            if (jsonErr.message && !jsonErr.message.includes('JSON')) {
+              throw jsonErr;
+            }
+          }
+        }
+      }
+
+      // Finalization pass upon stream completion
+      bubble.innerHTML = renderMarkdown(accumulatedText || '(Empty response)', false);
+      if (lastMetrics) {
+        const speedStr = (typeof lastMetrics.tokens_per_second === 'number' && lastMetrics.tokens_per_second > 0)
+          ? `${lastMetrics.tokens_per_second.toFixed(1)} tok/s` : '';
+        const latencyStr = typeof lastMetrics.latency_seconds === 'number'
+          ? `${lastMetrics.latency_seconds.toFixed(2)}s latency` : '';
+        const tokensStr = (typeof lastMetrics.tokens === 'number' && lastMetrics.tokens > 0)
+          ? `${lastMetrics.tokens} tokens` : '';
+        const modelStr = lastMetrics.model || targetModel || 'default';
+
+        metricsBar.className = 'assistant-metrics-bar';
+        metricsBar.innerHTML = `
           ${speedStr ? `<span class="metric-pill speed">${speedStr}</span>` : ''}
-          ${latencyStr ? `<span class="metric-pill latency">${latencyStr} latency</span>` : ''}
+          ${latencyStr ? `<span class="metric-pill latency">${latencyStr}</span>` : ''}
           ${tokensStr ? `<span class="metric-pill tokens">${tokensStr}</span>` : ''}
           <span class="metric-pill model">${escapeHtml(modelStr)}</span>
-        </div>
-      `;
-      assistantChatBody.appendChild(botMsg);
+        `;
+      }
     } catch (err) {
-      const loadingElem = document.getElementById('assistant-temp-loading');
-      if (loadingElem) loadingElem.remove();
-
-      const errMsg = document.createElement('div');
-      errMsg.className = 'assistant-msg assistant-msg-bot';
-      errMsg.innerHTML = `
-        <div class="assistant-bubble" style="border-color: var(--accent-red); color: var(--accent-red);">
-          Failed to query assistant: ${escapeHtml(err.message || 'Unknown network error')}
-        </div>
-      `;
-      assistantChatBody.appendChild(errMsg);
+      if (!accumulatedText) {
+        bubble.innerHTML = `Failed to query assistant: ${escapeHtml(err.message || 'Unknown network error')}`;
+        bubble.style.borderColor = 'var(--accent-red)';
+        bubble.style.color = 'var(--accent-red)';
+      } else {
+        bubble.innerHTML = renderMarkdown(accumulatedText, false) +
+          `<div style="color: var(--accent-red); margin-top: 8px; font-size: 11px;">[Stream interrupted: ${escapeHtml(err.message)}]</div>`;
+      }
     } finally {
       assistantInput.disabled = false;
       btnSendAssistant.disabled = false;
