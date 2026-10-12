@@ -78,6 +78,7 @@ class DeceptionEngine:
         user: str,
         session_history: Optional[List[Dict[str, str]]] = None,
         fake_fs: Optional["FakeFilesystem"] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """Generate authentic simulated output for a command in the current session context."""
         # Build system prompt — append fake filesystem state when it exists
@@ -86,6 +87,18 @@ class DeceptionEngine:
             fs_block = fake_fs.build_context_block()
             if fs_block:
                 system_prompt = system_prompt + "\n\n" + fs_block
+
+        # Inject dynamic canary honeytokens if accessing sensitive files or credentials
+        cmd_lower = command.lower()
+        sensitive_patterns = [".env", "aws", "credential", "config", "token", "secret", "key", "password", "cat", "grep", "id_rsa"]
+        if any(pat in cmd_lower for pat in sensitive_patterns):
+            try:
+                from doppel.deception.honeytokens import get_honeytoken_manager
+                ht_mgr = get_honeytoken_manager()
+                ht_block = ht_mgr.build_injection_prompt_block(session_id or "default")
+                system_prompt = system_prompt + "\n\n" + ht_block
+            except Exception as e:
+                logger.debug(f"Failed to inject dynamic honeytokens: {e}")
 
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": system_prompt}

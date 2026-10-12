@@ -4,10 +4,11 @@ import asyncssh
 from typing import Optional
 from pathlib import Path
 
-from doppel.config import DoppelConfig
+from doppel.config import DoppelConfig, get_active_preset
 from doppel.core.session_manager import SessionManager, SessionState
 from doppel.core.credential_analyzer import CredentialAnalyzer
 from doppel.core.geoip import enrich as geoip_enrich, format_summary as geoip_summary
+from doppel.telemetry.recorder import get_recorder
 
 logger = logging.getLogger("doppel.ssh")
 
@@ -61,7 +62,9 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         output = await self.session_manager.process_command(self.session.session_id, command)
         if output:
             formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
-            self.chan.write(formatted.rstrip("\r\n") + "\r\n")
+            out_chunk = formatted.rstrip("\r\n") + "\r\n"
+            self.chan.write(out_chunk)
+            get_recorder().record_chunk(self.session.session_id, out_chunk)
         self.chan.exit(0)
         self.chan.close()
 
@@ -91,10 +94,21 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                     logger.info(f"SSH channel closed before shell ready, terminating session {self.session.session_id[:8]}")
                     asyncio.create_task(self.session_manager.close_session(self.session.session_id))
                 return
+
+            # Initialize Asciinema recording for this active session
+            preset = get_active_preset(self.config)
+            get_recorder().start_recording(
+                self.session.session_id,
+                title=f"Doppel Session Replay ({preset.get('name', 'Terminal')}) - {self.session.session_id[:8]}",
+            )
+
             if not self._is_exec:
-                # Send Ubuntu MOTD
-                if self.config.honeypot.motd:
-                    self.chan.write(self.config.honeypot.motd.replace("\n", "\r\n") + "\r\n")
+                # Send active preset MOTD
+                motd = preset.get("motd") or self.config.honeypot.motd
+                if motd:
+                    motd_formatted = motd.replace("\n", "\r\n") + "\r\n"
+                    self.chan.write(motd_formatted)
+                    get_recorder().record_chunk(self.session.session_id, motd_formatted)
                 self._write_prompt()
         except Exception as e:
             logger.error(f"Error starting shell session: {e}", exc_info=True)
@@ -102,17 +116,31 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             self._shell_ready.set()
 
     def _get_prompt(self) -> str:
-        cwd = self.session.cwd if self.session else "/home/ubuntu"
+        preset = get_active_preset(self.config)
+        default_home = preset.get("home_dir", "/home/ubuntu")
+        cwd = self.session.cwd if self.session else default_home
         user = self.username
-        hostname = self.config.honeypot.hostname
-        symbol = "#" if user == "root" else "$"
+        hostname = preset.get("hostname", self.config.honeypot.hostname)
 
         home_prefix = "/root" if user == "root" else f"/home/{user}"
         display_cwd = "~" if cwd == home_prefix else (cwd.replace(home_prefix, "~") if cwd.startswith(home_prefix) else cwd)
-        return f"{user}@{hostname}:{display_cwd}{symbol} "
+
+        if user == "root":
+            fmt = preset.get("root_prompt_format", "{user}@{hostname}:{cwd}# ")
+        else:
+            fmt = preset.get("prompt_format", "{user}@{hostname}:{cwd}$ ")
+
+        try:
+            return fmt.format(user=user, hostname=hostname, cwd=display_cwd)
+        except Exception:
+            symbol = "#" if user == "root" else "$"
+            return f"{user}@{hostname}:{display_cwd}{symbol} "
 
     def _write_prompt(self):
-        self.chan.write(self._get_prompt())
+        prompt = self._get_prompt()
+        self.chan.write(prompt)
+        if self.session:
+            get_recorder().record_chunk(self.session.session_id, prompt)
 
     def session_started(self):
         if not self._is_exec:
@@ -126,12 +154,16 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 self._input_buffer = ""
                 self._last_char_was_cr = False
                 self.chan.write("^C\r\n")
+                if self.session:
+                    get_recorder().record_chunk(self.session.session_id, "^C\r\n")
                 self._write_prompt()
             # Ctrl+D
             elif char == "\x04":
                 self._last_char_was_cr = False
                 if not self._input_buffer:
                     self.chan.write("exit\r\n")
+                    if self.session:
+                        get_recorder().record_chunk(self.session.session_id, "exit\r\n")
                     self.chan.close()
             # Backspace / Delete
             elif char in ("\x08", "\x7f"):
@@ -139,6 +171,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 if self._input_buffer:
                     self._input_buffer = self._input_buffer[:-1]
                     self.chan.write("\b \b")
+                    if self.session:
+                        get_recorder().record_chunk(self.session.session_id, "\b \b")
             # Enter / Return (handle CR, LF, and CRLF cleanly)
             elif char in ("\r", "\n"):
                 if char == "\n" and self._last_char_was_cr:
@@ -149,6 +183,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 cmd = self._input_buffer
                 self._input_buffer = ""
                 self.chan.write("\r\n")
+                if self.session:
+                    get_recorder().record_chunk(self.session.session_id, "\r\n")
                 asyncio.create_task(self._execute_line(cmd))
             else:
                 self._last_char_was_cr = False
@@ -156,6 +192,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 if ord(char) >= 32:
                     self._input_buffer += char
                     self.chan.write(char)
+                    if self.session:
+                        get_recorder().record_chunk(self.session.session_id, char)
 
     async def _execute_line(self, command: str):
         await self._shell_ready.wait()
@@ -167,6 +205,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
 
             if cmd_clean in ("exit", "logout"):
                 self.chan.write("logout\r\n")
+                if self.session:
+                    get_recorder().record_chunk(self.session.session_id, "logout\r\n")
                 self.chan.close()
                 return
 
@@ -175,7 +215,9 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 if output:
                     # Format newlines for terminal carriage returns and strip trailing excess newlines
                     formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
-                    self.chan.write(formatted.rstrip("\r\n") + "\r\n")
+                    out_chunk = formatted.rstrip("\r\n") + "\r\n"
+                    self.chan.write(out_chunk)
+                    get_recorder().record_chunk(self.session.session_id, out_chunk)
 
             self._write_prompt()
 
@@ -185,6 +227,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self._closed = True
         if self.session:
             logger.info(f"SSH connection closed for session {self.session.session_id[:8]}")
+            get_recorder().close_recording(self.session.session_id)
             asyncio.create_task(self.session_manager.close_session(self.session.session_id))
 
     def connection_lost(self, exc):

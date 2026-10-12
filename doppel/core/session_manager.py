@@ -14,6 +14,7 @@ from doppel.analytics.observer import ThreatObserver
 from doppel.analytics.reporter import IncidentReporter
 from doppel.core.fake_filesystem import FakeFilesystem
 from doppel.analytics.profiler import AttackerProfiler, ProfilerState
+from doppel.alerts.email import EmailAlerter
 
 logger = logging.getLogger("doppel.core.session")
 
@@ -49,6 +50,7 @@ class SessionManager:
         db: TelemetryDB,
         observer: ThreatObserver,
         reporter: IncidentReporter,
+        alerter: Optional[EmailAlerter] = None,
     ):
         self.config = config
         self.deception_engine = deception_engine
@@ -57,6 +59,24 @@ class SessionManager:
         self.db = db
         self.observer = observer
         self.reporter = reporter
+        if alerter is not None:
+            self.alerter = alerter
+        else:
+            email_cfg = getattr(getattr(config, "alerts", None), "email", None)
+            if email_cfg and getattr(email_cfg, "enabled", False):
+                self.alerter = EmailAlerter(
+                    enabled=email_cfg.enabled,
+                    smtp_server=email_cfg.smtp_server,
+                    smtp_port=email_cfg.smtp_port,
+                    smtp_user=email_cfg.smtp_user,
+                    smtp_password=email_cfg.smtp_password,
+                    use_tls=email_cfg.use_tls,
+                    sender_email=email_cfg.sender_email,
+                    receiver_email=email_cfg.receiver_email,
+                    min_threat_score=email_cfg.min_threat_score,
+                )
+            else:
+                self.alerter = None
         self.sessions: Dict[str, SessionState] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self.event_callbacks: List[Any] = []
@@ -195,6 +215,7 @@ class SessionManager:
                 user=session.username,
                 session_history=session.history,
                 fake_fs=session.fake_fs,
+                session_id=session.session_id,
             )
             # After LLM responds, update the fake filesystem from this command
             if session.fake_fs:
@@ -317,6 +338,22 @@ class SessionManager:
                         "threat": threat_meta,
                         "threat_score": session.threat_score,
                     })
+                    if self.alerter and self.alerter.should_alert(session.session_id, session.threat_score):
+                        tech_desc = [f"{threat_meta.get('technique_id')}: {threat_meta.get('technique_name')}"] if threat_meta.get("technique_id") else []
+                        geo_desc = f"{session.geoip.get('country_name', 'Unknown')}, {session.geoip.get('city', 'Unknown')} (ASN: {session.geoip.get('asn_org', 'Unknown')})"
+                        asyncio.create_task(
+                            self.alerter.maybe_send_alert(
+                                session_id=session.session_id,
+                                remote_ip=session.remote_ip,
+                                threat_score=session.threat_score,
+                                details={
+                                    "username": session.username,
+                                    "techniques": tech_desc,
+                                    "last_command": command,
+                                    "geo_summary": geo_desc,
+                                },
+                            )
+                        )
 
             # ── Attacker profiler (timing + phase) ──────────────────────────────
             if session.profiler_state is not None:

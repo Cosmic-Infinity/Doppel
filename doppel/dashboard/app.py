@@ -12,6 +12,9 @@ from pydantic import BaseModel
 
 from doppel.dashboard.controller import HoneypotController
 from doppel.dashboard.ip_filter import IPAllowlistMiddleware
+from doppel.api.analytics import router as analytics_router
+from doppel.telemetry.recorder import get_recorder
+from doppel.deception.honeytokens import get_honeytoken_manager
 
 logger = logging.getLogger("doppel.dashboard.api")
 
@@ -33,11 +36,15 @@ app.add_middleware(
     get_allowed=lambda: controller.config.access.dashboard_allowed_ips,
 )
 
+# Mount Analytics API
+app.include_router(analytics_router)
+
 
 class ConfigUpdateRequest(BaseModel):
     honeypot_port: Optional[int] = None
     hostname: Optional[str] = None
     persona: Optional[str] = None
+    active_preset: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_mock_mode: Optional[bool] = None
@@ -244,6 +251,115 @@ async def get_session_report(session_id: str):
     with open(report_path, "r", encoding="utf-8") as f:
         content = f.read()
     return PlainTextResponse(content)
+
+
+@app.get("/api/sessions/{session_id}/cast")
+async def get_session_asciinema_cast(session_id: str):
+    """Retrieve asciinema v2 .cast terminal replay log for an interactive session."""
+    recorder = get_recorder()
+    cast_data = recorder.get_cast(session_id)
+    if not cast_data:
+        # Check if session exists in DB to synthesize from historical commands
+        session_details = await controller.db.get_session_details(session_id)
+        if session_details and session_details.get("commands"):
+            cast_data = recorder.synthesize_cast_from_history(
+                session_id=session_id,
+                commands=session_details["commands"],
+                username=session_details.get("username", "ubuntu"),
+                hostname=controller.config.honeypot.hostname,
+                motd=controller.config.honeypot.motd,
+            )
+        elif controller.session_manager and session_id in controller.session_manager.sessions:
+            live = controller.session_manager.sessions[session_id]
+            cast_data = recorder.synthesize_cast_from_history(
+                session_id=session_id,
+                commands=live.history,
+                username=live.username,
+                hostname=controller.config.honeypot.hostname,
+                motd=controller.config.honeypot.motd,
+            )
+
+    if not cast_data:
+        raise HTTPException(status_code=404, detail="Asciinema recording not found for session")
+
+    return PlainTextResponse(cast_data, media_type="text/plain; charset=utf-8")
+
+
+@app.api_route("/auth/v1/verify", methods=["GET", "POST"])
+async def verify_canary_token(request: Request):
+    """
+    Canary verification tripwire endpoint. Catches, logs, and alerts whenever
+    stolen decoy credentials, API keys, or Canary URLs are accessed or tested.
+    """
+    import aiosqlite
+    from datetime import datetime, timezone
+
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    token_val = request.query_params.get("token") or request.query_params.get("key") or ""
+
+    # Check headers if not in query params
+    if not token_val:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token_val = auth_header.split(" ", 1)[1]
+        elif request.headers.get("x-api-key"):
+            token_val = request.headers.get("x-api-key", "")
+
+    # Check JSON body if POST
+    if not token_val and request.method == "POST":
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                token_val = body.get("token") or body.get("api_key") or body.get("key") or ""
+        except Exception:
+            pass
+
+    ht_mgr = get_honeytoken_manager()
+    activation = ht_mgr.verify_and_log_activation(
+        token_identifier=token_val or "probe_without_token",
+        remote_ip=client_ip,
+        user_agent=user_agent,
+        method=request.method,
+    )
+
+    # Log to database web_probes
+    try:
+        async with aiosqlite.connect(controller.config.analytics.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO web_probes
+                (timestamp, remote_ip, remote_port, method, path, query, user_agent, probe_label, status_code, response_snippet)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    client_ip,
+                    request.client.port if request.client else 0,
+                    request.method,
+                    request.url.path,
+                    str(request.query_params),
+                    user_agent,
+                    f"HONEYTOKEN_ACTIVATED:{activation['token_type']}",
+                    401,
+                    "Decoy credential verification trapped",
+                ),
+            )
+            await db.commit()
+    except Exception as db_err:
+        logger.warning(f"Failed to log honeytoken probe to database: {db_err}")
+
+    # Broadcast tripwire alert to Web SOC dashboard
+    await controller.broadcast({
+        "type": "honeytoken_activated",
+        "data": activation,
+    })
+
+    return {
+        "status": "error",
+        "code": "invalid_credentials",
+        "message": "Token verification failed. Credential has expired or is invalid.",
+    }
 
 
 @app.websocket("/ws/stream")

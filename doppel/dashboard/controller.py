@@ -497,6 +497,7 @@ class HoneypotController:
             "hostname": self.config.honeypot.hostname,
             "default_user": self.config.honeypot.default_user,
             "persona": self.config.deception.persona,
+            "active_preset": getattr(self.config, "active_preset", "ubuntu_web_server"),
             "llm_base_url": self.config.llm.base_url,
             "llm_model": self.config.llm.model,
             "llm_timeout": self.config.llm.timeout_seconds,
@@ -509,8 +510,13 @@ class HoneypotController:
         """Propagate updated config parameters to active session components without restart."""
         if not self.session_manager:
             return
+
+        from doppel.config import get_active_preset
+        preset = get_active_preset(self.config)
+
         if hasattr(self.session_manager, "deception_engine") and self.session_manager.deception_engine:
-            self.session_manager.deception_engine.persona = self.config.deception.persona
+            target_persona = preset.get("persona_context", self.config.deception.persona) if preset else self.config.deception.persona
+            self.session_manager.deception_engine.persona = target_persona
             if hasattr(self.session_manager.deception_engine, "llm_client") and self.session_manager.deception_engine.llm_client:
                 self.session_manager.deception_engine.llm_client.base_url = self.config.llm.base_url.rstrip("/")
                 self.session_manager.deception_engine.llm_client.model = self.config.llm.model
@@ -551,6 +557,8 @@ class HoneypotController:
             self.config.honeypot.port = int(updates["honeypot_port"])
         if "persona" in updates:
             self.config.deception.persona = str(updates["persona"])
+        if "active_preset" in updates:
+            self.config.active_preset = str(updates["active_preset"])
         if "llm_base_url" in updates:
             self.config.llm.base_url = str(updates["llm_base_url"])
         if "llm_model" in updates:

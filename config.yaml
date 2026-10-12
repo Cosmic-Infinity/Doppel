@@ -168,3 +168,20 @@ http_sensor_port: 8080
 geoip:
   city_db_path: ""   # e.g. /opt/geoip/GeoLite2-City.mmdb
   asn_db_path:  ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb
+
+# Active Distribution Preset (supports zero-downtime hot reloading)
+# Options: ubuntu_web_server, centos_database, debian_cloud_node
+active_preset: "ubuntu_web_server"
+
+# Asynchronous Security Alerting
+alerts:
+  email:
+    enabled: false
+    smtp_server: "smtp.example.com"
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password: ""
+    use_tls: true
+    sender_email: "doppel@example.com"
+    receiver_email: "soc-alerts@example.com"
+    min_threat_score: 60

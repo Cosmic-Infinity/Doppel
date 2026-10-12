@@ -1,0 +1,70 @@
+# Doppel Distribution Presets
+# Defines target operating system personas, banners, MOTDs, and shell prompt formats
+# Supports zero-downtime hot-reloading via active_preset in config.yaml or runtime config updates.
+
+presets:
+  ubuntu_web_server:
+    name: "Ubuntu 22.04.4 LTS Web Server"
+    server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+    hostname: "prod-api-node-01"
+    default_user: "ubuntu"
+    home_dir: "/home/ubuntu"
+    shell: "/bin/bash"
+    prompt_format: "{user}@{hostname}:{cwd}$ "
+    root_prompt_format: "{user}@{hostname}:{cwd}# "
+    motd: |
+      Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)
+       * Documentation:  https://help.ubuntu.com
+       * Management:     https://landscape.canonical.com
+       * Support:        https://ubuntu.com/pro
+
+      System information as of current session:
+        System load:  0.18               Processes:             112
+        Usage of /:   34.2% of 48.29GB   Users logged in:       1
+        Memory usage: 28%                IPv4 address for eth0: 10.0.4.15
+
+      0 updates can be applied immediately.
+    persona_context: "ubuntu_web_server"
+
+  centos_database:
+    name: "CentOS Linux 7 Database Host"
+    server_banner: "SSH-2.0-OpenSSH_7.4p1"
+    hostname: "db-cluster-node-03"
+    default_user: "centos"
+    home_dir: "/home/centos"
+    shell: "/bin/bash"
+    prompt_format: "[{user}@{hostname} {cwd}]$ "
+    root_prompt_format: "[{user}@{hostname} {cwd}]# "
+    motd: |
+      CentOS Linux 7 (Core)
+      Kernel 3.10.0-1160.99.1.el7.x86_64 on an x86_64
+
+      Database Cluster Status:
+        Node:           db-cluster-node-03.internal
+        Cluster Health: [OK] Primary Replication Sync
+        Active DBs:     PostgreSQL 14.9, MySQL 8.0.34
+        Storage Pool:   /var/lib/data (RAID-10, 4.2TB Free)
+
+      Authorized administrative access only. All activities are logged.
+    persona_context: "fintech_api"
+
+  debian_cloud_node:
+    name: "Debian 12 Cloud Node"
+    server_banner: "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
+    hostname: "cloud-worker-fra1"
+    default_user: "debian"
+    home_dir: "/home/debian"
+    shell: "/bin/bash"
+    prompt_format: "{user}@{hostname}:{cwd}$ "
+    root_prompt_format: "{user}@{hostname}:{cwd}# "
+    motd: |
+      Linux cloud-worker-fra1 6.1.0-21-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 x86_64
+
+      The programs included with the Debian GNU/Linux system are free software;
+      the exact distribution terms for each program are described in the
+      individual files in /usr/share/doc/*/copyright.
+
+      Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+      permitted by applicable law.
+      Last login: Sun Oct 11 19:42:10 2026 from 10.0.8.2
+    persona_context: "cloud_worker"

@@ -8,6 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.2/dist/bundle/asciinema-player.css">
+  <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.2/dist/bundle/asciinema-player.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>
     (function() {
       try {
@@ -178,17 +181,17 @@
                 </div>
               </label>
               <label class="persona-option">
-                <input type="radio" name="persona-select" value="cloud_worker">
+                <input type="radio" name="persona-select" value="centos_database">
                 <div class="persona-box">
-                  <span class="persona-name">AWS EC2 Cloud Worker Node</span>
-                  <span class="persona-detail">Kubernetes, IMDSv2 metadata, mock AWS credentials</span>
+                  <span class="persona-name">CentOS 7 Database Host</span>
+                  <span class="persona-detail">PostgreSQL 14, MySQL 8, Enterprise audit logs</span>
                 </div>
               </label>
               <label class="persona-option">
-                <input type="radio" name="persona-select" value="fintech_api">
+                <input type="radio" name="persona-select" value="debian_cloud_node">
                 <div class="persona-box">
-                  <span class="persona-name">Fintech Payment Gateway</span>
-                  <span class="persona-detail">Debian 12, PostgreSQL, Stripe webhook secret tokens</span>
+                  <span class="persona-name">Debian 12 Cloud Node</span>
+                  <span class="persona-detail">Debian Bookworm, Cloud worker, custom MOTD banner</span>
                 </div>
               </label>
             </div>
@@ -259,6 +262,14 @@
                 <span class="stat-label">Directory</span>
                 <span class="stat-value" id="detail-cwd">/home/ubuntu</span>
               </div>
+              <div class="stat-box-btn">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-watch-replay" title="Watch full interactive terminal session replay">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 5px;">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <span>Watch Replay</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -266,6 +277,7 @@
           <div class="tabs-bar">
             <button class="tab-btn active" data-tab="terminal">Terminal Feed</button>
             <button class="tab-btn" data-tab="telemetry">MITRE Telemetry</button>
+            <button class="tab-btn" data-tab="analytics">Attack Trends & Analytics</button>
             <button class="tab-btn" data-tab="report">Incident Report</button>
           </div>
 
@@ -306,6 +318,57 @@
                 Report will be compiled automatically when the session terminates.
               </div>
               <div class="report-content markdown-body hidden" id="report-content"></div>
+            </div>
+          </div>
+
+          <!-- Tab 4: Real-Time & Historical Web Analytics Charts -->
+          <div class="tab-content" id="tab-analytics">
+            <div class="analytics-dashboard-view">
+              <!-- Graph A: Real-Time Activity (Smooth Area Chart) -->
+              <div class="analytics-card full-width">
+                <div class="analytics-card-header">
+                  <div class="analytics-title-group">
+                    <span class="analytics-card-title">Real-Time Ingress & Command Activity</span>
+                    <span class="analytics-card-subtitle">Rolling 10-minute ingress connections and execution velocity</span>
+                  </div>
+                  <div class="analytics-badge-group">
+                    <span class="analytics-pulse-dot"></span>
+                    <span class="analytics-pulse-label">Live Rolling</span>
+                  </div>
+                </div>
+                <div class="chart-canvas-wrapper area-wrapper">
+                  <canvas id="chart-realtime"></canvas>
+                </div>
+              </div>
+
+              <!-- Graph B: Historical Stacked Bar Combo & MITRE Category Breakdown -->
+              <div class="analytics-row-dual">
+                <!-- Graph B1: Historical Volume & Threat Severity Combo Chart -->
+                <div class="analytics-card half-width">
+                  <div class="analytics-card-header">
+                    <div class="analytics-title-group">
+                      <span class="analytics-card-title">Historical Attack Volume & Threat Severity</span>
+                      <span class="analytics-card-subtitle">Daily execution volume overlaid with average threat score (0-100)</span>
+                    </div>
+                  </div>
+                  <div class="chart-canvas-wrapper combo-wrapper">
+                    <canvas id="chart-historical"></canvas>
+                  </div>
+                </div>
+
+                <!-- Graph B2: MITRE Category Distribution Doughnut Chart -->
+                <div class="analytics-card half-width">
+                  <div class="analytics-card-header">
+                    <div class="analytics-title-group">
+                      <span class="analytics-card-title">MITRE ATT&CK Category Distribution</span>
+                      <span class="analytics-card-subtitle">Percentage breakdown of observed adversary tactics</span>
+                    </div>
+                  </div>
+                  <div class="chart-canvas-wrapper doughnut-wrapper">
+                    <canvas id="chart-mitre-doughnut"></canvas>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -388,6 +451,34 @@
         </div>
       </div>
     </div>
+
+    <!-- Side-Docked Asciinema Session Replay Drawer -->
+    <div class="drawer-backdrop hidden" id="replay-backdrop"></div>
+    <aside class="replay-drawer hidden" id="replay-drawer" aria-label="Terminal Session Replay">
+      <div class="replay-drawer-header">
+        <div class="replay-title-group">
+          <span class="replay-title">Interactive Terminal Session Replay</span>
+          <span class="replay-session-badge" id="replay-session-badge">Session: —</span>
+        </div>
+        <div class="replay-header-controls">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-restart-replay" title="Restart replay playback">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+              <path d="M21 3v5h-5"></path>
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+              <path d="M3 21v-5h5"></path>
+            </svg>
+            <span>Restart</span>
+          </button>
+          <button class="btn-close" id="btn-close-replay" title="Close replay drawer">&times;</button>
+        </div>
+      </div>
+      <div class="replay-drawer-body">
+        <div class="replay-mount-container" id="asciinema-mount-container">
+          <!-- Asciinema player attaches here -->
+        </div>
+      </div>
+    </aside>
   </div>
 
   <script src="/static/app.js"></script>

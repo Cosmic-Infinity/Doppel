@@ -65,6 +65,22 @@ class GeoIPSettings(BaseModel):
     asn_db_path:  str = ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb
 
 
+class EmailAlertSettings(BaseModel):
+    enabled: bool = False
+    smtp_server: str = "smtp.example.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    use_tls: bool = True
+    sender_email: str = "doppel@example.com"
+    receiver_email: str = "alerts@example.com"
+    min_threat_score: int = 60
+
+
+class AlertsSettings(BaseModel):
+    email: EmailAlertSettings = Field(default_factory=EmailAlertSettings)
+
+
 from pydantic_settings import BaseSettings, SettingsConfigDict, YamlConfigSettingsSource
 
 
@@ -76,12 +92,14 @@ class DoppelConfig(BaseSettings):
         extra="ignore",
     )
 
+    active_preset: str = "ubuntu_web_server"
     honeypot: HoneypotSettings = Field(default_factory=HoneypotSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     deception: DeceptionSettings = Field(default_factory=DeceptionSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     access: AccessSettings = Field(default_factory=AccessSettings)
+    alerts: AlertsSettings = Field(default_factory=AlertsSettings)
     benign_commands: list[str] = Field(default_factory=list)
     http_sensor_port: int = 8080  # 0 = disabled
     geoip: GeoIPSettings = Field(default_factory=GeoIPSettings)
@@ -108,10 +126,57 @@ class DoppelConfig(BaseSettings):
 
 
 _CONFIG_INSTANCE: Optional[DoppelConfig] = None
+_PRESETS_CACHE: Optional[Dict[str, Any]] = None
+
+
+def get_presets_dict() -> Dict[str, Any]:
+    """Load distribution presets from presets.yaml."""
+    global _PRESETS_CACHE
+    presets_paths = [
+        Path("doppel/config/presets.yaml"),
+        Path(__file__).parent / "config" / "presets.yaml",
+        Path("presets.yaml"),
+    ]
+    for p in presets_paths:
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                    _PRESETS_CACHE = data.get("presets", {})
+                    return _PRESETS_CACHE
+            except Exception as e:
+                pass
+    return {}
+
+
+def get_active_preset(config: Optional[DoppelConfig] = None) -> Dict[str, Any]:
+    """Retrieve active distribution preset based on active_preset key in configuration."""
+    cfg = config or get_config()
+    presets = get_presets_dict()
+    preset_key = getattr(cfg, "active_preset", "ubuntu_web_server")
+    if preset_key in presets:
+        return presets[preset_key]
+    # Fallback to first available preset or standard Ubuntu profile
+    return presets.get("ubuntu_web_server", {
+        "name": "Ubuntu 22.04 LTS Web Server",
+        "server_banner": cfg.honeypot.server_banner,
+        "hostname": cfg.honeypot.hostname,
+        "default_user": cfg.honeypot.default_user,
+        "motd": cfg.honeypot.motd,
+        "prompt_format": "{user}@{hostname}:{cwd}$ ",
+        "root_prompt_format": "{user}@{hostname}:{cwd}# ",
+        "persona_context": cfg.deception.persona,
+    })
 
 
 def get_config(config_path: Optional[str] = None) -> DoppelConfig:
     global _CONFIG_INSTANCE
     if _CONFIG_INSTANCE is None:
         _CONFIG_INSTANCE = DoppelConfig.load(config_path)
+    return _CONFIG_INSTANCE
+
+
+def reload_config(config_path: Optional[str] = None) -> DoppelConfig:
+    global _CONFIG_INSTANCE
+    _CONFIG_INSTANCE = DoppelConfig.load(config_path)
     return _CONFIG_INSTANCE
