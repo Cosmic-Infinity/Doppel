@@ -1003,7 +1003,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       }
 
       if (activeSessionId === data.session_id) {
-        appendTerminalCommand(data.cwd, data.command, data.output, data.decision);
+        appendTerminalCommand(data.cwd, data.command, data.output, data.decision, data.reasoning);
         appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
         detailCwd.textContent = data.cwd;
         detailCmdCount.textContent = (parseInt(detailCmdCount.textContent, 10) || 0) + 1;
@@ -1427,7 +1427,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (serverCmds.length > 0 || currentTerminalLines === 0) {
       terminalOutput.innerHTML = '';
       serverCmds.forEach(cmd => {
-        appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision);
+        appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision, cmd.reasoning);
       });
 
       telemetryTableBody.innerHTML = '';
@@ -1444,7 +1444,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
-  function appendTerminalCommand(cwd, command, output, decision) {
+  function appendTerminalCommand(cwd, command, output, decision, reasoning = null) {
     const line = document.createElement('div');
     line.className = 'terminal-line';
 
@@ -1452,12 +1452,23 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     const routeLabel = decision === 'sandbox' ? 'Sandbox' : (decision === 'builtin' ? 'Builtin' : 'Deception');
     const formattedOutput = output ? escapeHtml(output).replace(/\r\n/g, '\n') : '';
 
+    let reasoningHtml = '';
+    if (reasoning) {
+      reasoningHtml = `
+        <details class="terminal-reasoning-details">
+          <summary class="terminal-reasoning-summary">Model Reasoning</summary>
+          <div class="terminal-reasoning-content">${escapeHtml(reasoning)}</div>
+        </details>
+      `;
+    }
+
     line.innerHTML = `
       <div>
         <span class="terminal-prompt">ubuntu@prod-api-node-01:${escapeHtml(cwd || '~')}$ </span>
         <span class="terminal-cmd">${escapeHtml(command)}</span>
         <span class="terminal-route-tag ${routeClass}">${routeLabel}</span>
       </div>
+      ${reasoningHtml}
       ${formattedOutput ? `<div class="terminal-output-block">${formattedOutput}</div>` : ''}
     `;
 

@@ -59,6 +59,7 @@ class TelemetryDB:
                     technique_name TEXT,
                     tactics TEXT,
                     threat_score INTEGER,
+                    reasoning TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             """)
@@ -124,6 +125,7 @@ class TelemetryDB:
                     "technique_name": "TEXT",
                     "tactics": "TEXT",
                     "threat_score": "INTEGER DEFAULT 0",
+                    "reasoning": "TEXT",
                 }
                 for col_name, col_type in needed_cmd_cols.items():
                     if col_name not in cmd_cols:
@@ -181,6 +183,7 @@ class TelemetryDB:
         output: str,
         route_decision: str,
         threat_meta: Optional[Dict[str, Any]] = None,
+        reasoning: Optional[str] = None,
     ) -> int:
         await self._ensure_initialized()
         now = datetime.now(timezone.utc).isoformat()
@@ -193,8 +196,8 @@ class TelemetryDB:
                 """
                 INSERT INTO commands
                 (session_id, timestamp, cwd, command, output, route_decision,
-                 technique_id, technique_name, tactics, threat_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 technique_id, technique_name, tactics, threat_score, reasoning)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -207,6 +210,7 @@ class TelemetryDB:
                     meta.get("technique_name"),
                     tactics_str,
                     score,
+                    reasoning,
                 ),
             )
             cmd_id = cur.lastrowid

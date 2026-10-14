@@ -1105,6 +1105,38 @@ body {
   padding-left: 4px;
 }
 
+.terminal-reasoning-details {
+  margin: 4px 0 6px 4px;
+  background: rgba(147, 51, 234, 0.08);
+  border-left: 2px solid var(--accent-purple, #a855f7);
+  border-radius: 0 4px 4px 0;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.terminal-reasoning-summary {
+  cursor: pointer;
+  color: var(--accent-purple, #c084fc);
+  font-weight: 500;
+  user-select: none;
+  outline: none;
+}
+
+.terminal-reasoning-summary:hover {
+  text-decoration: underline;
+}
+
+.terminal-reasoning-content {
+  margin-top: 4px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* Telemetry Table */
 .telemetry-view {
   flex: 1;

@@ -85,7 +85,7 @@ def run(
         f"[cyan]Mock Mode:[/cyan] {'Enabled' if config.llm.mock_mode else 'Disabled'}\n"
         f"[cyan]Persona:[/cyan] {config.deception.persona}\n"
         f"[cyan]Sandbox:[/cyan] {'Active' if config.sandbox.enabled else 'Disabled'}",
-        title="🍯 Doppel Initialized",
+        title="Doppel Initialized",
         border_style="green"
     ))
 
@@ -132,10 +132,10 @@ def test_model(
         try:
             resp = await client.chat_completion(test_messages)
             elapsed = time.time() - start
-            console.print(f"[bold green]✓ Connection Successful![/bold green] (Latency: {elapsed:.3f}s)")
+            console.print(f"[bold green][OK] Connection Successful![/bold green] (Latency: {elapsed:.3f}s)")
             console.print(Panel(resp.strip(), title="Model Output"))
         except Exception as e:
-            console.print(f"[bold red]✗ Connection Failed:[/bold red] {e}")
+            console.print(f"[bold red][FAILED] Connection Failed:[/bold red] {e}")
 
     asyncio.run(test())
 
@@ -153,7 +153,7 @@ def sim(
         "[bold yellow]Doppel Terminal Simulator (Local Interactive Test)[/bold yellow]\n"
         "Type commands to test hybrid routing, bait injection, and mock output.\n"
         "Type 'exit' to quit.",
-        title="🖥️ Interactive Simulation"
+        title="Interactive Simulation"
     ))
 
     async def run_sim():

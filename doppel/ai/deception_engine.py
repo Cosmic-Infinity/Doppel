@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import TYPE_CHECKING, List, Dict, Any, Optional
+from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple, Union
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.prompts.deception_prompts import build_deception_system_prompt
 if TYPE_CHECKING:
@@ -17,9 +17,40 @@ class DeceptionEngine:
         self.persona = persona
         self.system_prompt = build_deception_system_prompt(persona)
 
+    @staticmethod
+    def extract_reasoning(raw_output: str) -> Tuple[str, Optional[str]]:
+        """Extract <think> or <thought> reasoning blocks from model output.
+        Returns:
+            Tuple[cleaned_text_without_thoughts, reasoning_content_or_None]
+        """
+        text = raw_output or ""
+        think_blocks: List[str] = []
+
+        # 1. Closed tags: <think>...</think> or <thought>...</thought>
+        closed_pattern = re.compile(r"<(think|thought)>([\s\S]*?)<\/\1>", flags=re.IGNORECASE)
+        for match in closed_pattern.finditer(text):
+            content = match.group(2).strip()
+            if content:
+                think_blocks.append(content)
+        stripped = closed_pattern.sub("", text).strip()
+
+        # 2. Unclosed tag if model was truncated mid-thought: <think>...
+        unclosed_pattern = re.compile(r"<(think|thought)>([\s\S]*)$", flags=re.IGNORECASE)
+        unclosed_match = unclosed_pattern.search(stripped)
+        if unclosed_match:
+            content = unclosed_match.group(2).strip()
+            if content:
+                think_blocks.append(content)
+            stripped = unclosed_pattern.sub("", stripped).strip()
+
+        reasoning = "\n\n".join(think_blocks) if think_blocks else None
+        return stripped, reasoning
+
     def _clean_output(self, raw_output: str, command: str = "") -> str:
-        """Strip markdown fences, hallucinated prompts, conversational preambles, and repeating loops."""
-        text = raw_output.strip()
+        """Strip markdown fences, thinking tags, hallucinated prompts, conversational preambles, and repeating loops."""
+        # Strip thinking tags if present
+        text, _ = self.extract_reasoning(raw_output)
+        text = text.strip()
 
         # Remove ```bash ... ``` or ``` ... ```
         if text.startswith("```"):
@@ -79,7 +110,8 @@ class DeceptionEngine:
         session_history: Optional[List[Dict[str, str]]] = None,
         fake_fs: Optional["FakeFilesystem"] = None,
         session_id: Optional[str] = None,
-    ) -> str:
+        return_reasoning: bool = False,
+    ) -> Union[str, Tuple[str, Optional[str]]]:
         """Generate authentic simulated output for a command in the current session context."""
         # Build system prompt — append fake filesystem state when it exists
         system_prompt = self.system_prompt
@@ -134,8 +166,14 @@ class DeceptionEngine:
                 frequency_penalty=0.4,
                 stop=stop_tokens,
             )
-            cleaned = self._clean_output(raw_response, command=command)
+            stripped_text, reasoning = self.extract_reasoning(raw_response)
+            cleaned = self._clean_output(stripped_text, command=command)
+            if return_reasoning:
+                return cleaned, reasoning
             return cleaned
         except Exception as e:
             logger.error(f"Error generating deception output: {e}")
-            return f"bash: {command.split()[0]}: command not found"
+            fallback = f"bash: {command.split()[0]}: command not found"
+            if return_reasoning:
+                return fallback, None
+            return fallback

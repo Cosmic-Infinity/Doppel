@@ -208,6 +208,7 @@ class SessionManager:
             # Standard routing classification
             decision, route_reason = self.router.classify_command(cmd_clean, is_safe_ip=is_safe_ip)
             output = ""
+            reasoning = None
 
             # 2. Command execution based on route decision
             if decision == RouteDecision.BUILTIN:
@@ -230,13 +231,14 @@ class SessionManager:
                     output = f"bash: {cmd_clean.split()[0] if cmd_clean.split() else 'command'}: command timed out\n"
             else:
                 # LLM Deception — inject fake filesystem context and effective user
-                output = await self.deception_engine.generate_command_output(
+                output, reasoning = await self.deception_engine.generate_command_output(
                     command=cmd_clean,
                     cwd=session.cwd,
                     user=getattr(session, "effective_user", session.username),
                     session_history=session.history,
                     fake_fs=session.fake_fs,
                     session_id=session.session_id,
+                    return_reasoning=True,
                 )
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:
@@ -278,11 +280,13 @@ class SessionManager:
             "cwd": session.cwd,
             "output": output,
             "route_decision": decision.value,
+            "reasoning": reasoning if "reasoning" in locals() else None,
             "ts": _time.monotonic(),
         })
 
         # 5. Immediate DB logging so command is recorded right away
         cmd_id = None
+        cmd_reasoning = reasoning if "reasoning" in locals() else None
         try:
             cmd_id = await self.db.log_command(
                 session_id=session.session_id,
@@ -291,6 +295,7 @@ class SessionManager:
                 output=output,
                 route_decision=decision.value,
                 threat_meta=None,
+                reasoning=cmd_reasoning,
             )
         except Exception as db_err:
             logger.error(f"Failed to log command to DB: {db_err}")
@@ -316,6 +321,7 @@ class SessionManager:
             "cwd": session.cwd,
             "output": output,
             "decision": decision.value if hasattr(decision, "value") else str(decision),
+            "reasoning": cmd_reasoning,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "attacker_type": _prof.attacker_type if _prof else "unknown",
             "current_phase": _prof.current_phase if _prof else "Reconnaissance",

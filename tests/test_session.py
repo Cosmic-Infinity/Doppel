@@ -228,3 +228,127 @@ def test_fake_filesystem_cwd_path_resolution():
     ctx = fs.build_context_block()
     assert "/home/ubuntu/test_dir" in ctx
     assert "/home/ubuntu/payload.sh" in ctx
+
+
+def test_docker_destroy_sandbox_session_forced_removal():
+    from unittest.mock import MagicMock
+    sandbox_mgr = DockerSandboxManager(enabled=False)
+    sandbox_mgr.is_available = True
+
+    mock_client = MagicMock()
+    mock_container = MagicMock()
+    # Simulate container already exited/dead: kill() raises exception
+    mock_container.kill.side_effect = Exception("409 Client Error: Container is not running")
+    mock_client.containers.get.return_value = mock_container
+    sandbox_mgr.client = mock_client
+
+    # destroy_sandbox_session should still call remove(force=True, v=True)
+    sandbox_mgr.destroy_sandbox_session("test_container_123")
+    mock_container.kill.assert_called_once()
+    mock_container.remove.assert_called_once_with(force=True, v=True)
+
+
+def test_docker_cleanup_orphans():
+    from unittest.mock import MagicMock
+    sandbox_mgr = DockerSandboxManager(enabled=False)
+    sandbox_mgr.is_available = True
+
+    mock_client = MagicMock()
+    c1 = MagicMock()
+    c2 = MagicMock()
+    mock_client.containers.list.return_value = [c1, c2]
+    sandbox_mgr.client = mock_client
+
+    count = sandbox_mgr.cleanup_orphans()
+    assert count == 2
+    mock_client.containers.list.assert_called_once_with(all=True, filters={"name": "doppel_sandbox_"})
+    c1.remove.assert_called_once_with(force=True, v=True)
+    c2.remove.assert_called_once_with(force=True, v=True)
+
+
+def test_deception_engine_extracts_reasoning_and_cleans_terminal_output():
+    raw_with_think = (
+        "<think>\n"
+        "The user is asking for environment variables.\n"
+        "Rule 2 forbids markdown.\n"
+        "</think>\n"
+        "USER=ubuntu\n"
+        "HOME=/home/ubuntu"
+    )
+
+    stripped, reasoning = DeceptionEngine.extract_reasoning(raw_with_think)
+    assert reasoning is not None
+    assert "Rule 2 forbids markdown" in reasoning
+    assert "<think>" not in stripped
+    assert "</think>" not in stripped
+    assert "USER=ubuntu" in stripped
+
+    # Clean output must never contain thinking tags
+    llm = LLMClient(mock_mode=True)
+    engine = DeceptionEngine(llm)
+    cleaned = engine._clean_output(raw_with_think)
+    assert "<think>" not in cleaned
+    assert "Rule 2 forbids markdown" not in cleaned
+    assert "USER=ubuntu" in cleaned
+
+    # Unclosed think tag must also be stripped
+    unclosed_think = "<think>Generating token...\nTOKEN=123"
+    unclosed_cleaned = engine._clean_output(unclosed_think)
+    assert "<think>" not in unclosed_cleaned
+    assert "Generating token" not in unclosed_cleaned
+
+
+@pytest.mark.asyncio
+async def test_session_manager_logs_reasoning_to_db_and_notifies():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "test_reasoning.db")
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.analytics.db_path = db_path
+        config.analytics.reports_dir = os.path.join(tmpdir, "reports")
+
+        llm_client = LLMClient(mock_mode=True)
+        deception_engine = DeceptionEngine(llm_client)
+        # Mock generate_command_output to return (output, reasoning)
+        async def mock_gen(*args, **kwargs):
+            if kwargs.get("return_reasoning"):
+                return "simulated_out", "simulated reasoning chain"
+            return "simulated_out"
+        deception_engine.generate_command_output = mock_gen
+
+        sandbox_manager = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm_client, db)
+        reporter = IncidentReporter(llm_client, db, reports_dir=config.analytics.reports_dir)
+
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=deception_engine,
+            sandbox_manager=sandbox_manager,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        events_received = []
+        session_mgr.register_event_listener(lambda ev, data: events_received.append((ev, data)))
+
+        session = await session_mgr.create_session("10.0.0.1", 1234, "ubuntu")
+        # Run a command routed to deception
+        out = await session_mgr.process_command(session.session_id, "cat /etc/shadow")
+        assert out == "simulated_out"
+
+        # Check DB command row
+        details = await db.get_session_details(session.session_id)
+        assert len(details["commands"]) == 1
+        cmd_row = details["commands"][0]
+        assert cmd_row["reasoning"] == "simulated reasoning chain"
+
+        # Check notified events
+        cmd_events = [data for ev, data in events_received if ev == "command_executed"]
+        assert len(cmd_events) == 1
+        assert cmd_events[0]["reasoning"] == "simulated reasoning chain"

@@ -45,6 +45,7 @@ class DockerSandboxManager:
                 self.client.ping()
                 self.is_available = True
                 logger.info(f"Docker sandbox initialized successfully. Base image: {self.image}")
+                self.cleanup_orphans()
             except Exception as e:
                 logger.warning(f"Docker daemon not reachable ({e}). Sandbox will fall back to simulated execution.")
                 self.is_available = False
@@ -72,6 +73,7 @@ class DockerSandboxManager:
             self.client = client
             self.is_available = True
             logger.info("Docker daemon connection established dynamically.")
+            self.cleanup_orphans()
             return True
         except Exception:
             self.is_available = False
@@ -240,6 +242,25 @@ class DockerSandboxManager:
             logger.debug(f"Failed to sync file '{path}' into container {container_id[:8]}: {e}")
             return False
 
+    def cleanup_orphans(self) -> int:
+        """Find and remove any stale Doppel sandbox containers left over from prior runs."""
+        if not self.is_available or not self.client:
+            return 0
+        removed = 0
+        try:
+            containers = self.client.containers.list(all=True, filters={"name": "doppel_sandbox_"})
+            for c in containers:
+                try:
+                    c.remove(force=True, v=True)
+                    removed += 1
+                except Exception:
+                    pass
+            if removed > 0:
+                logger.info(f"Cleaned up {removed} orphaned sandbox container(s)")
+        except Exception as e:
+            logger.debug(f"Notice while cleaning up orphaned containers: {e}")
+        return removed
+
     def destroy_sandbox_session(self, container_id: str):
         """Stop and remove the container on session termination."""
         if not self.is_available or not self.client or not container_id:
@@ -247,7 +268,14 @@ class DockerSandboxManager:
 
         try:
             container = self.client.containers.get(container_id)
-            container.kill()
+            try:
+                container.kill()
+            except Exception:
+                pass
+            try:
+                container.remove(force=True, v=True)
+            except Exception:
+                pass
             logger.info(f"Cleaned up sandbox container {container_id[:12]}")
         except Exception as e:
             logger.debug(f"Container cleanup notice for {container_id[:12]}: {e}")

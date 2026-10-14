@@ -1,4 +1,4 @@
-# 🍯 Doppel: AI-Augmented Hybrid Deception Honeypot System
+# Doppel: AI-Augmented Hybrid Deception Honeypot System
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Architecture](https://img.shields.io/badge/Architecture-Hybrid%20Sandbox%20%2B%20LLM-purple.svg)]()
@@ -11,7 +11,7 @@
 
 ---
 
-## 🏛️ System Architecture
+## System Architecture
 
 ```mermaid
 flowchart TD
@@ -84,7 +84,7 @@ flowchart TD
 
 ---
 
-## ⚡ Hybrid Command Routing Sequence
+## Hybrid Command Routing Sequence
 
 ```mermaid
 sequenceDiagram
@@ -249,7 +249,7 @@ Phase is determined first from MITRE tactic mappings (authoritative LLM output),
 
 ---
 
-## 📁 Repository Layout
+## Repository Layout
 
 ```
 Doppel/
@@ -263,19 +263,19 @@ Doppel/
 │   ├── analytics/                   # Threat intelligence & telemetry
 │   │   ├── db.py                    # Async SQLite (sessions, commands, phase_transitions, web_probes)
 │   │   ├── observer.py              # Background MITRE ATT&CK tagger & threat scorer
-│   │   ├── profiler.py              # Attacker type classifier + kill-chain phase tracker  ★ NEW
+│   │   ├── profiler.py              # Attacker type classifier + kill-chain phase tracker
 │   │   └── reporter.py             # Automated Markdown incident report generator
 │   ├── core/                        # Core honeypot runtime
-│   │   ├── credential_analyzer.py  # SSH auth pattern classifier (9 categories)          ★ NEW
-│   │   ├── fake_filesystem.py      # Per-session in-memory filesystem for LLM context     ★ NEW
-│   │   ├── geoip.py                # Zero-latency GeoIP enrichment (MaxMind mmdb)         ★ NEW
+│   │   ├── credential_analyzer.py  # SSH auth pattern classifier (9 categories)
+│   │   ├── fake_filesystem.py      # Per-session in-memory filesystem for LLM context
+│   │   ├── geoip.py                # Zero-latency GeoIP enrichment (MaxMind mmdb)
 │   │   ├── session_manager.py      # Session lifecycle, routing, profiling, tar-pit
 │   │   └── ssh_server.py           # AsyncSSH PTY daemon + GeoIP/cred hooks
 │   ├── dashboard/                   # Web SOC & GUI Control Center
 │   │   ├── app.py                   # FastAPI backend & WebSocket/SSE endpoints
 │   │   ├── controller.py            # Honeypot daemon, HTTP sensor lifecycle, diagnostics
 │   │   └── static/                  # Minimalist dark-mode UI
-│   ├── http_sensor/                 # HTTP honeypot sensor                                 ★ NEW
+│   ├── http_sensor/                 # HTTP honeypot sensor
 │   │   └── sensor.py               # 25-category probe classifier + LLM response synthesis
 │   ├── router/
 │   │   └── hybrid_router.py        # Command router: BUILTIN / SANDBOX / LLM_DECEPTION
@@ -293,7 +293,7 @@ Doppel/
 
 ---
 
-## 🖥️ Web SOC Dashboard & Pre-Flight Control Center
+## Web SOC Dashboard & Pre-Flight Control Center
 
 Doppel features a built-in, zero-CLI Web Control Center (`http://localhost:8000`):
 
@@ -322,7 +322,7 @@ flowchart LR
 
     F --> J
     B -->|"All Systems Healthy"| J
-    ### 🔒 Dashboard Firewall (IP Allow-List)
+    ### Dashboard Firewall (IP Allow-List)
 
 Restrict who can open the dashboard (HTTP, SSE, and WebSocket) by listing allowed IPs or CIDR ranges in `config.yaml`:
 
@@ -357,7 +357,7 @@ Every WebSocket/SSE event is typed. New event types added in this iteration:
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Web SOC Dashboard (recommended)
 
@@ -422,7 +422,7 @@ Doppel runs fine without the files — enrichment returns null fields with a one
 
 ---
 
-## ⚙️ Configuration (`config.yaml`)
+## Configuration (`config.yaml`)
 
 ```yaml
 honeypot:
@@ -507,7 +507,7 @@ geoip:
 
 ---
 
-## 🗄️ Database Schema
+## Database Schema
 
 SQLite (`doppel_telemetry.db`) — four tables:
 
@@ -520,12 +520,12 @@ SQLite (`doppel_telemetry.db`) — four tables:
 | `username`, `password` | Credentials tried |
 | `start_time`, `end_time` | ISO-8601 timestamps |
 | `max_threat_score` | Highest MITRE score (0–100) |
-| `country_code`, `country_name`, `city` | GeoIP ★ |
-| `asn`, `asn_org`, `is_datacenter` | ASN enrichment ★ |
-| `attacker_type` | `bot` / `semi-automated` / `human` / `unknown` ★ |
-| `type_confidence` | Classifier confidence 0–1 ★ |
-| `current_phase` | Latest kill-chain phase ★ |
-| `credential_risk` | `low` / `medium` / `high` / `critical` ★ |
+| `country_code`, `country_name`, `city` | GeoIP |
+| `asn`, `asn_org`, `is_datacenter` | ASN enrichment |
+| `attacker_type` | `bot` / `semi-automated` / `human` / `unknown` |
+| `type_confidence` | Classifier confidence 0–1 |
+| `current_phase` | Latest kill-chain phase |
+| `credential_risk` | `low` / `medium` / `high` / `critical` |
 | `summary` | LLM-generated incident summary |
 
 **`commands`** — one row per command.
@@ -537,8 +537,9 @@ SQLite (`doppel_telemetry.db`) — four tables:
 | `route_decision` | `BUILTIN` / `SANDBOX` / `LLM_DECEPTION` / `http_sensor` |
 | `technique_id`, `technique_name`, `tactics` | MITRE ATT&CK |
 | `threat_score` | Per-command score |
+| `reasoning` | Model chain-of-thought (sanitized from attacker, visible on dashboard) |
 
-**`phase_transitions`** ★ — one row per forward kill-chain transition.
+**`phase_transitions`** — one row per forward kill-chain transition.
 
 | Column | Description |
 |---|---|
@@ -548,7 +549,7 @@ SQLite (`doppel_telemetry.db`) — four tables:
 | `phase_index` | Numeric position in kill-chain (0–9) |
 | `triggered_by` | Command that caused the transition |
 
-**`web_probes`** ★ — one row per HTTP sensor hit.
+**`web_probes`** — one row per HTTP sensor hit.
 
 | Column | Description |
 |---|---|
@@ -559,7 +560,7 @@ SQLite (`doppel_telemetry.db`) — four tables:
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 python -m pytest
@@ -573,7 +574,7 @@ Coverage areas:
 
 ---
 
-## 📊 Telemetry & Reports
+## Telemetry & Reports
 
 - **Web SOC Dashboard**: `http://localhost:8000` — live WebSocket/SSE fleet monitoring.
 - **SQLite DB**: `doppel_telemetry.db` — fully queryable with any SQLite client.
@@ -585,7 +586,7 @@ Coverage areas:
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 > Features are marked `[x]` when fully implemented.
 
