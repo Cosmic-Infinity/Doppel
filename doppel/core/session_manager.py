@@ -126,6 +126,7 @@ class SessionManager:
             username=username,
             password=password,
             cwd=initial_cwd,
+            container_id=container_id,
             credential_analysis=credential_analysis or {},
             fake_fs=FakeFilesystem(),
             geoip=geoip or {},

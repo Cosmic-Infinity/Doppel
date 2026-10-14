@@ -114,8 +114,11 @@ class DeceptionEngine:
 
         # 1. who / whoami / id / hostname / uname
         if binary == "who":
-            # who am i / who am I
-            if len(tokens) >= 3 and tokens[1].lower() == "am" and tokens[2].lower() == "i":
+            # who am i / who am I / who mom likes
+            if len(tokens) >= 3 and (
+                (tokens[1].lower() == "am" and tokens[2].lower() == "i")
+                or (tokens[1].lower() == "mom" and tokens[2].lower() == "likes")
+            ):
                 return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
             # who with no arguments
             if len(tokens) == 1:
@@ -152,6 +155,12 @@ class DeceptionEngine:
             if any(t in ("-s", "-o") for t in tokens[1:]):
                 return "Linux" if "-s" in tokens[1:] else "GNU/Linux"
             return "Linux"
+
+        if binary in ("true", ":"):
+            return ""
+
+        if binary in ("false", "test") and len(tokens) == 1:
+            return ""
 
         # 2. Conversational non-binaries: bash strictly prints command not found
         conversational_non_binaries = {

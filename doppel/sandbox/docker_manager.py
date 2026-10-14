@@ -88,6 +88,15 @@ class DockerSandboxManager:
 
         container_name = f"doppel_sandbox_{session_id[:8]}"
         try:
+            # Check if container already exists
+            try:
+                existing = self.client.containers.get(container_name)
+                if existing.status == "running":
+                    return existing.id
+                existing.remove(force=True)
+            except Exception:
+                pass
+
             # Ensure base image exists
             try:
                 self.client.images.get(self.image)

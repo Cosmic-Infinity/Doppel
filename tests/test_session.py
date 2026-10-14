@@ -425,3 +425,45 @@ def test_conversational_leak_suppression():
     cleaned_echo = engine._clean_output(echo_output, command=echo_cmd, user="ubuntu")
     assert cleaned_echo == 'I am root'
 
+
+@pytest.mark.asyncio
+async def test_session_container_id_propagation_and_builtins():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        config = DoppelConfig()
+        config.sandbox.enabled = True
+        llm = LLMClient(mock_mode=True)
+        engine = DeceptionEngine(llm)
+        sandbox = DockerSandboxManager(enabled=True)
+        sandbox.is_available = True
+        sandbox.create_sandbox_session = lambda sid, username="ubuntu": f"container_{sid[:8]}"
+
+        router = HybridRouter(sandbox_available=True)
+        db = TelemetryDB(db_path=os.path.join(tmpdir, "test.db"))
+        await db.initialize()
+        observer = ThreatObserver(llm, db)
+        reporter = IncidentReporter(llm, db, reports_dir=tmpdir)
+
+        mgr = SessionManager(
+            config=config,
+            deception_engine=engine,
+            sandbox_manager=sandbox,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        session = await mgr.create_session(
+            remote_ip="10.0.0.1",
+            remote_port=55555,
+            username="ubuntu",
+        )
+        assert session.container_id is not None
+        assert session.container_id == f"container_{session.session_id[:8]}"
+
+        # Test deterministic builtins (test, true, who mom likes)
+        assert engine.deterministic_posix_response("test", "ubuntu") == ""
+        assert engine.deterministic_posix_response("true", "ubuntu") == ""
+        assert "ubuntu   pts/0" in engine.deterministic_posix_response("who mom likes", "ubuntu")
+
+
