@@ -77,13 +77,15 @@ class FakeFilesystem:
     # Public API used by DeceptionEngine
     # ------------------------------------------------------------------
 
-    def update_from_command(self, command: str, output: str, cwd: str = "/home/ubuntu") -> None:
+    def update_from_command(self, command: str, output: str, cwd: str = "/home/ubuntu") -> List[str]:
         """
         Parse a shell command and update the in-memory filesystem state.
         `output` is the LLM's response (used to infer content for downloads).
+        Returns a list of file paths that were created or modified.
         """
+        mutated_paths: List[str] = []
         if len(self._files) >= _MAX_FILES:
-            return  # cap memory usage
+            return mutated_paths  # cap memory usage
 
         cmd = command.strip()
 
@@ -93,6 +95,7 @@ class FakeFilesystem:
         ):
             path = self._resolve(m.group(1), cwd=cwd)
             self._dirs.add(path)
+            mutated_paths.append(path)
             logger.debug(f"FakeFS: mkdir {path}")
 
         # ---- touch ---------------------------------------------------------
@@ -100,6 +103,7 @@ class FakeFilesystem:
             path = self._resolve(m.group(1), cwd=cwd)
             if path not in self._files:
                 self._files[path] = FakeFile()
+            mutated_paths.append(path)
             logger.debug(f"FakeFS: touch {path}")
 
         # ---- redirect (create/overwrite): … > file -------------------------
@@ -108,6 +112,7 @@ class FakeFilesystem:
             path = self._resolve(m.group(1), cwd=cwd)
             content = self._extract_redirect_content(cmd, operator=">")
             self._files[path] = FakeFile(content=content)
+            mutated_paths.append(path)
             logger.debug(f"FakeFS: write {path!r} ({len(content)} chars)")
 
         # ---- append: … >> file ---------------------------------------------
@@ -120,6 +125,7 @@ class FakeFilesystem:
                 self._files[path] = FakeFile(content=existing + "\n" + content)
             else:
                 self._files[path] = FakeFile(content=content)
+            mutated_paths.append(path)
             logger.debug(f"FakeFS: append {path!r}")
 
         # ---- cp src dst ----------------------------------------------------
@@ -133,6 +139,7 @@ class FakeFilesystem:
                 )
             else:
                 self._files[dst] = FakeFile()
+            mutated_paths.append(dst)
             logger.debug(f"FakeFS: cp {src} → {dst}")
 
         # ---- mv src dst ----------------------------------------------------
@@ -141,6 +148,7 @@ class FakeFilesystem:
             src, dst = self._resolve(m.group(1), cwd=cwd), self._resolve(m.group(2), cwd=cwd)
             entry = self._files.pop(src, FakeFile())
             self._files[dst] = entry
+            mutated_paths.append(dst)
             logger.debug(f"FakeFS: mv {src} → {dst}")
 
         # ---- rm / rmdir ----------------------------------------------------
@@ -160,6 +168,7 @@ class FakeFilesystem:
             url_m = re.search(r"https?://\S+", cmd)
             stub = f"# Downloaded from {url_m.group(0) if url_m else 'remote'}\n"
             self._files[path] = FakeFile(content=stub, is_executable=True)
+            mutated_paths.append(path)
             logger.debug(f"FakeFS: download → {path}")
 
         # ---- chmod +x -------------------------------------------------------
@@ -170,6 +179,9 @@ class FakeFilesystem:
                 self._files[path].is_executable = True
             else:
                 self._files[path] = FakeFile(is_executable=True)
+            mutated_paths.append(path)
+
+        return mutated_paths
 
     def build_context_block(self) -> str:
         """

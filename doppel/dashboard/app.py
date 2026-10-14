@@ -12,8 +12,6 @@ from pydantic import BaseModel
 
 from doppel.dashboard.controller import HoneypotController
 from doppel.dashboard.ip_filter import IPAllowlistMiddleware
-from doppel.api.analytics import router as analytics_router
-from doppel.telemetry.recorder import get_recorder
 from doppel.deception.honeytokens import get_honeytoken_manager
 
 logger = logging.getLogger("doppel.dashboard.api")
@@ -35,9 +33,6 @@ app.add_middleware(
     IPAllowlistMiddleware,
     get_allowed=lambda: controller.config.access.dashboard_allowed_ips,
 )
-
-# Mount Analytics API
-app.include_router(analytics_router)
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -142,11 +137,6 @@ async def update_config_endpoint(req: ConfigUpdateRequest):
     return {"message": "Configuration updated", "config": controller.get_config_dict()}
 
 
-@app.post("/api/test-llm")
-async def test_llm_endpoint():
-    res = await controller.test_llm()
-    return res
-
 
 @app.get("/api/sessions")
 async def get_sessions():
@@ -196,6 +186,7 @@ async def get_session_details(session_id: str):
         # Check in memory if it's brand new
         if controller.session_manager and session_id in controller.session_manager.sessions:
             live = controller.session_manager.sessions[session_id]
+            prof_state = getattr(live, "profiler_state", None)
             return {
                 "session_id": live.session_id,
                 "remote_ip": live.remote_ip,
@@ -206,6 +197,9 @@ async def get_session_details(session_id: str):
                 "max_threat_score": live.threat_score,
                 "cwd": live.cwd,
                 "is_active": True,
+                "attacker_type": getattr(prof_state, "attacker_type", "unknown") if prof_state else "unknown",
+                "type_confidence": getattr(prof_state, "type_confidence", 0.0) if prof_state else 0.0,
+                "current_phase": getattr(prof_state, "current_phase", "Reconnaissance") if prof_state else "Reconnaissance",
                 "commands": [
                     {"command": h["command"], "output": h["output"], "cwd": h["cwd"], "timestamp": ""}
                     for h in live.history
@@ -221,6 +215,10 @@ async def get_session_details(session_id: str):
         live = controller.session_manager.sessions[session_id]
         details["cwd"] = live.cwd
         details["max_threat_score"] = max(details.get("max_threat_score") or 0, live.threat_score)
+        if hasattr(live, "profiler_state") and live.profiler_state:
+            details["attacker_type"] = getattr(live.profiler_state, "attacker_type", details.get("attacker_type"))
+            details["type_confidence"] = getattr(live.profiler_state, "type_confidence", details.get("type_confidence"))
+            details["current_phase"] = getattr(live.profiler_state, "current_phase", details.get("current_phase"))
         db_cmds = details.get("commands", [])
         if len(live.history) > len(db_cmds):
             live_cmds = [
@@ -252,37 +250,6 @@ async def get_session_report(session_id: str):
         content = f.read()
     return PlainTextResponse(content)
 
-
-@app.get("/api/sessions/{session_id}/cast")
-async def get_session_asciinema_cast(session_id: str):
-    """Retrieve asciinema v2 .cast terminal replay log for an interactive session."""
-    recorder = get_recorder()
-    cast_data = recorder.get_cast(session_id)
-    if not cast_data:
-        # Check if session exists in DB to synthesize from historical commands
-        session_details = await controller.db.get_session_details(session_id)
-        if session_details and session_details.get("commands"):
-            cast_data = recorder.synthesize_cast_from_history(
-                session_id=session_id,
-                commands=session_details["commands"],
-                username=session_details.get("username", "ubuntu"),
-                hostname=controller.config.honeypot.hostname,
-                motd=controller.config.honeypot.motd,
-            )
-        elif controller.session_manager and session_id in controller.session_manager.sessions:
-            live = controller.session_manager.sessions[session_id]
-            cast_data = recorder.synthesize_cast_from_history(
-                session_id=session_id,
-                commands=live.history,
-                username=live.username,
-                hostname=controller.config.honeypot.hostname,
-                motd=controller.config.honeypot.motd,
-            )
-
-    if not cast_data:
-        raise HTTPException(status_code=404, detail="Asciinema recording not found for session")
-
-    return PlainTextResponse(cast_data, media_type="text/plain; charset=utf-8")
 
 
 @app.api_route("/auth/v1/verify", methods=["GET", "POST"])

@@ -91,6 +91,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const emptyInspector = document.getElementById('empty-inspector');
   const sessionDetail = document.getElementById('session-detail');
   const detailLivePill = document.getElementById('detail-live-pill');
+  const detailPhasePill = document.getElementById('detail-phase-pill');
+  const detailProfileTag = document.getElementById('detail-profile-tag');
+  const sensorTicker = document.getElementById('sensor-ticker');
+  let sensorTickerTimer = null;
   const detailIp = document.getElementById('detail-ip');
   const detailUser = document.getElementById('detail-user');
   const detailSessionId = document.getElementById('detail-session-id');
@@ -121,6 +125,63 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const assistantInput = document.getElementById('assistant-input');
   const btnSendAssistant = document.getElementById('btn-send-assistant');
   let userChosenAssistantModel = localStorage.getItem('doppel_assistant_model') || '';
+
+  // --- Signal Helpers: Kill-Chain, Profile, and Sensor Ticker ---
+
+  function updatePhaseBadge(phaseName) {
+    if (!detailPhasePill) return;
+    const cleanPhase = phaseName || 'Reconnaissance';
+    detailPhasePill.textContent = cleanPhase;
+    detailPhasePill.className = 'phase-pill';
+    const lower = cleanPhase.toLowerCase();
+    if (lower.includes('privilege') || lower.includes('credential')) {
+      detailPhasePill.classList.add('phase-priv-esc');
+    } else if (lower.includes('exfiltration') || lower.includes('impact')) {
+      detailPhasePill.classList.add('phase-exfil');
+    } else if (lower.includes('execution') || lower.includes('persistence') || lower.includes('installation')) {
+      detailPhasePill.classList.add('phase-exec');
+    } else {
+      detailPhasePill.classList.add('phase-recon');
+    }
+  }
+
+  function updateProfileTag(profile) {
+    if (!detailProfileTag || !profile) return;
+    const type = profile.attacker_type || 'unknown';
+    const conf = Math.round((profile.type_confidence || 0) * 100);
+    detailProfileTag.className = 'profile-tag';
+
+    if (type === 'bot') {
+      detailProfileTag.textContent = `Bot / Script (${conf}%)`;
+      detailProfileTag.classList.add('bot');
+    } else if (type === 'human') {
+      detailProfileTag.textContent = `Human Operator (${conf}%)`;
+      detailProfileTag.classList.add('human');
+    } else if (type === 'semi-automated') {
+      detailProfileTag.textContent = `Automated Mass Scanner (${conf}%)`;
+      detailProfileTag.classList.add('scanner');
+    } else {
+      detailProfileTag.textContent = 'Profiling...';
+    }
+  }
+
+  function showWebProbeAlert(data) {
+    if (!sensorTicker) return;
+    const ip = data.remote_ip || 'unknown';
+    const method = data.method || 'GET';
+    const path = data.path || '/';
+    const label = data.probe_label || 'probe';
+    sensorTicker.innerHTML = `
+      <span class="sensor-ticker-tag">HTTP SENSOR</span>
+      <span>${escapeHtml(ip)} &rarr; ${escapeHtml(method)} ${escapeHtml(path)} (${escapeHtml(label)})</span>
+      <span style="font-size: 10px; color: var(--text-muted);">${new Date().toLocaleTimeString()}</span>
+    `;
+    sensorTicker.classList.remove('hidden');
+    if (sensorTickerTimer) clearTimeout(sensorTickerTimer);
+    sensorTickerTimer = setTimeout(() => {
+      sensorTicker.classList.add('hidden');
+    }, 4000);
+  }
 
   // --- View Management ---
 
@@ -971,6 +1032,28 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const data = msg.data;
       console.warn('[CANARY TRIPWIRE ACTIVATION]', data);
       showHoneytokenNotice(data);
+    } else if (msg.type === 'phase_transition') {
+      const data = msg.data;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].current_phase = data.to_phase;
+      }
+      if (activeSessionId === data.session_id) {
+        updatePhaseBadge(data.to_phase);
+      }
+    } else if (msg.type === 'profile_updated') {
+      const data = msg.data;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].profile = data.profile;
+        if (data.profile) {
+          sessionsCache[data.session_id].attacker_type = data.profile.attacker_type;
+          sessionsCache[data.session_id].type_confidence = data.profile.type_confidence;
+        }
+      }
+      if (activeSessionId === data.session_id && data.profile) {
+        updateProfileTag(data.profile);
+      }
+    } else if (msg.type === 'web_probe') {
+      showWebProbeAlert(msg.data);
     }
   }
 
@@ -1092,6 +1175,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     detailCmdCount.textContent = Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0);
     detailCwd.textContent = session.cwd || '/home/ubuntu';
 
+    updatePhaseBadge(session.current_phase || (sessionsCache[session.session_id] && sessionsCache[session.session_id].current_phase) || 'Reconnaissance');
+    updateProfileTag({
+      attacker_type: session.attacker_type || (sessionsCache[session.session_id] && sessionsCache[session.session_id].attacker_type),
+      type_confidence: session.type_confidence || (sessionsCache[session.session_id] && sessionsCache[session.session_id].type_confidence),
+    });
+
     const serverCmds = session.commands || [];
     const currentTerminalLines = terminalOutput.children.length;
     if (serverCmds.length > 0 || currentTerminalLines === 0) {
@@ -1171,9 +1260,6 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const targetContent = document.getElementById(tabId);
       if (targetContent) targetContent.classList.add('active');
 
-      if (btn.dataset.tab === 'analytics') {
-        loadAnalyticsCharts();
-      }
     });
   });
 
@@ -1426,358 +1512,6 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
   });
 
-  // --- Feature 2: Side-Docked Asciinema Replay Window ---
-  const btnWatchReplay = document.getElementById('btn-watch-replay');
-  const replayDrawer = document.getElementById('replay-drawer');
-  const replayBackdrop = document.getElementById('replay-backdrop');
-  const btnCloseReplay = document.getElementById('btn-close-replay');
-  const btnRestartReplay = document.getElementById('btn-restart-replay');
-  const replaySessionBadge = document.getElementById('replay-session-badge');
-  const asciinemaMount = document.getElementById('asciinema-mount-container');
-  let currentReplaySessionId = null;
-
-  function openReplayDrawer(sessionId) {
-    const targetId = sessionId || activeSessionId;
-    if (!targetId) return;
-
-    currentReplaySessionId = targetId;
-    replaySessionBadge.textContent = `Session: ${targetId.substring(0, 8)}`;
-    replayDrawer.classList.remove('hidden');
-    replayBackdrop.classList.remove('hidden');
-    mountAsciinemaPlayer(targetId);
-  }
-
-  function closeReplayDrawer() {
-    replayDrawer.classList.add('hidden');
-    replayBackdrop.classList.add('hidden');
-    if (asciinemaMount) asciinemaMount.innerHTML = '';
-  }
-
-  async function mountAsciinemaPlayer(sessionId) {
-    if (!asciinemaMount) return;
-    asciinemaMount.innerHTML = '<div class="replay-placeholder-state">Loading terminal session recording...</div>';
-
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/cast`);
-      if (!res.ok) throw new Error('Recording not available');
-      const castText = await res.text();
-
-      asciinemaMount.innerHTML = '';
-      if (window.AsciinemaPlayer && typeof window.AsciinemaPlayer.create === 'function') {
-        const blob = new Blob([castText], { type: 'text/plain' });
-        const blobUrl = URL.createObjectURL(blob);
-        window.AsciinemaPlayer.create(blobUrl, asciinemaMount, {
-          theme: 'monokai',
-          autoPlay: true,
-          fit: 'width',
-          preload: true,
-          terminalFontFamily: 'JetBrains Mono, monospace'
-        });
-      } else {
-        renderCustomTerminalPlayback(castText, asciinemaMount);
-      }
-    } catch (err) {
-      asciinemaMount.innerHTML = `<div class="replay-placeholder-state">Session recording not ready yet: ${escapeHtml(err.message)}</div>`;
-    }
-  }
-
-  function renderCustomTerminalPlayback(castText, container) {
-    container.innerHTML = `
-      <div style="padding:16px;font-family:var(--font-mono);font-size:12px;color:#f8fafc;background:#05080f;height:100%;overflow-y:auto;white-space:pre-wrap;" id="custom-term-pre"></div>
-    `;
-    const pre = document.getElementById('custom-term-pre');
-    const lines = castText.split('\n');
-    let idx = 1;
-
-    function playNext() {
-      if (!replayDrawer || replayDrawer.classList.contains('hidden')) return;
-      if (idx >= lines.length) return;
-      const lineStr = lines[idx].trim();
-      idx++;
-      if (!lineStr) {
-        playNext();
-        return;
-      }
-      try {
-        const event = JSON.parse(lineStr);
-        if (Array.isArray(event) && event[1] === 'o') {
-          pre.textContent += event[2];
-          pre.scrollTop = pre.scrollHeight;
-        }
-      } catch (e) {}
-      setTimeout(playNext, 70);
-    }
-    playNext();
-  }
-
-  if (btnWatchReplay) {
-    btnWatchReplay.addEventListener('click', () => {
-      openReplayDrawer(activeSessionId);
-    });
-  }
-
-  if (btnCloseReplay) {
-    btnCloseReplay.addEventListener('click', closeReplayDrawer);
-  }
-
-  if (replayBackdrop) {
-    replayBackdrop.addEventListener('click', closeReplayDrawer);
-  }
-
-  if (btnRestartReplay) {
-    btnRestartReplay.addEventListener('click', () => {
-      if (currentReplaySessionId) {
-        mountAsciinemaPlayer(currentReplaySessionId);
-      }
-    });
-  }
-
-  // --- Feature 5: Real-Time & Historical Web Analytics Charts ---
-  let chartRealtime = null;
-  let chartHistorical = null;
-  let chartMitre = null;
-
-  async function loadAnalyticsCharts() {
-    try {
-      const res = await fetch('/api/v1/analytics/attack-trends');
-      if (!res.ok) return;
-      const data = await res.json();
-      renderAnalyticsCharts(data);
-    } catch (e) {
-      console.error('Failed to load attack analytics trends:', e);
-    }
-  }
-
-  function renderAnalyticsCharts(data) {
-    if (!window.Chart) {
-      console.warn('Chart.js library is not loaded');
-      return;
-    }
-
-    // Chart.js Default Dark Theme Styling
-    Chart.defaults.color = '#94a3b8';
-    Chart.defaults.font.family = "Inter, -apple-system, BlinkMacSystemFont, sans-serif";
-
-    // 1. Graph A: Real-Time Smooth Area Chart
-    const canvasRealtime = document.getElementById('chart-realtime');
-    if (canvasRealtime) {
-      const ctx = canvasRealtime.getContext('2d');
-      const gradient = ctx.createLinearGradient(0, 0, 0, 200);
-      gradient.addColorStop(0, 'rgba(0, 245, 212, 0.35)');
-      gradient.addColorStop(1, 'rgba(0, 245, 212, 0.0)');
-
-      const gradConn = ctx.createLinearGradient(0, 0, 0, 200);
-      gradConn.addColorStop(0, 'rgba(59, 130, 246, 0.25)');
-      gradConn.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
-
-      if (chartRealtime) {
-        chartRealtime.destroy();
-      }
-
-      chartRealtime = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: data.realtime.labels,
-          datasets: [
-            {
-              label: 'Command Executions',
-              data: data.realtime.commands,
-              fill: true,
-              backgroundColor: gradient,
-              borderColor: '#00f5d4',
-              borderWidth: 2,
-              tension: 0.4,
-              pointRadius: 3,
-              pointBackgroundColor: '#00f5d4',
-            },
-            {
-              label: 'Ingress Connections',
-              data: data.realtime.connections,
-              fill: true,
-              backgroundColor: gradConn,
-              borderColor: '#3b82f6',
-              borderWidth: 1.5,
-              borderDash: [4, 4],
-              tension: 0.4,
-              pointRadius: 2,
-              pointBackgroundColor: '#3b82f6',
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: 'top',
-              align: 'end',
-              labels: { boxWidth: 10, font: { size: 11 } }
-            },
-            tooltip: {
-              backgroundColor: '#0f172a',
-              borderColor: '#334155',
-              borderWidth: 1,
-              titleColor: '#f8fafc',
-              bodyColor: '#cbd5e1'
-            }
-          },
-          scales: {
-            x: {
-              grid: { color: 'rgba(255, 255, 255, 0.04)' },
-              ticks: { font: { size: 10 } }
-            },
-            y: {
-              beginAtZero: true,
-              grid: { color: 'rgba(255, 255, 255, 0.04)' },
-              ticks: { font: { size: 10 }, precision: 0 }
-            }
-          }
-        }
-      });
-    }
-
-    // 2. Graph B1: Historical Volume Stacked Bar + Threat Score Overlay (Combo Chart)
-    const canvasHist = document.getElementById('chart-historical');
-    if (canvasHist) {
-      const ctxHist = canvasHist.getContext('2d');
-      if (chartHistorical) {
-        chartHistorical.destroy();
-      }
-
-      chartHistorical = new Chart(ctxHist, {
-        data: {
-          labels: data.historical.dates,
-          datasets: [
-            {
-              type: 'bar',
-              label: 'Sandbox Commands',
-              data: data.historical.sandbox_commands,
-              backgroundColor: '#3b82f6',
-              stack: 'vol',
-              borderRadius: 3,
-            },
-            {
-              type: 'bar',
-              label: 'Deception Syntheses',
-              data: data.historical.deception_commands,
-              backgroundColor: '#8b5cf6',
-              stack: 'vol',
-              borderRadius: 3,
-            },
-            {
-              type: 'line',
-              label: 'Avg Threat Score',
-              data: data.historical.avg_threat_scores,
-              borderColor: '#f43f5e',
-              backgroundColor: '#f43f5e',
-              borderWidth: 2,
-              tension: 0.35,
-              pointRadius: 4,
-              pointBackgroundColor: '#f43f5e',
-              yAxisID: 'yThreat',
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: 'top',
-              align: 'end',
-              labels: { boxWidth: 10, font: { size: 11 } }
-            },
-            tooltip: {
-              backgroundColor: '#0f172a',
-              borderColor: '#334155',
-              borderWidth: 1,
-            }
-          },
-          scales: {
-            x: {
-              stacked: true,
-              grid: { color: 'rgba(255, 255, 255, 0.04)' },
-              ticks: { font: { size: 10 } }
-            },
-            y: {
-              stacked: true,
-              position: 'left',
-              beginAtZero: true,
-              grid: { color: 'rgba(255, 255, 255, 0.04)' },
-              ticks: { font: { size: 10 }, precision: 0 },
-              title: { display: true, text: 'Command Volume', color: '#94a3b8', font: { size: 10 } }
-            },
-            yThreat: {
-              position: 'right',
-              min: 0,
-              max: 100,
-              grid: { display: false },
-              ticks: { font: { size: 10 } },
-              title: { display: true, text: 'Threat Score (0-100)', color: '#f43f5e', font: { size: 10 } }
-            }
-          }
-        }
-      });
-    }
-
-    // 3. Graph B2: MITRE ATT&CK Doughnut Chart
-    const canvasMitre = document.getElementById('chart-mitre-doughnut');
-    if (canvasMitre) {
-      const ctxMitre = canvasMitre.getContext('2d');
-      if (chartMitre) {
-        chartMitre.destroy();
-      }
-
-      const palette = ['#00f5d4', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#64748b'];
-
-      chartMitre = new Chart(ctxMitre, {
-        type: 'doughnut',
-        data: {
-          labels: data.mitre_categories.labels,
-          datasets: [
-            {
-              data: data.mitre_categories.percentages,
-              backgroundColor: palette.slice(0, data.mitre_categories.labels.length),
-              borderColor: '#111726',
-              borderWidth: 2,
-              hoverOffset: 6,
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: '65%',
-          plugins: {
-            legend: {
-              position: 'right',
-              labels: {
-                boxWidth: 10,
-                font: { size: 11 },
-                generateLabels: (chart) => {
-                  const d = chart.data;
-                  return d.labels.map((label, i) => ({
-                    text: `${label} (${d.datasets[0].data[i]}%)`,
-                    fillStyle: d.datasets[0].backgroundColor[i],
-                    hidden: false,
-                    index: i
-                  }));
-                }
-              }
-            },
-            tooltip: {
-              backgroundColor: '#0f172a',
-              borderColor: '#334155',
-              borderWidth: 1,
-              callbacks: {
-                label: (ctx) => ` ${ctx.label}: ${ctx.raw}%`
-              }
-            }
-          }
-        }
-      });
-    }
-  }
 
   function showHoneytokenNotice(data) {
     if (systemWarningBanner && warningBannerMessages) {

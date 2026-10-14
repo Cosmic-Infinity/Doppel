@@ -216,6 +216,30 @@ class DockerSandboxManager:
             logger.error(f"Error executing command in container {container_id}: {e}")
             return ExecutionResult(stdout="", stderr=str(e), exit_code=1)
 
+    def sync_file_to_sandbox(self, container_id: str, path: str, content: str = "") -> bool:
+        """Synchronize a file created or modified in FakeFS into the active container."""
+        if not self.is_available or not self.client or not container_id:
+            return False
+
+        try:
+            import base64
+            import posixpath
+            container = self.client.containers.get(container_id)
+            parent_dir = posixpath.dirname(path)
+            if parent_dir:
+                container.exec_run(["mkdir", "-p", parent_dir], user="0:0")
+
+            b64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            container.exec_run(
+                ["/bin/sh", "-c", f"echo '{b64_content}' | base64 -d > '{path}'"],
+                user="0:0",
+            )
+            logger.debug(f"Synced FakeFS file '{path}' into container {container_id[:8]}")
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to sync file '{path}' into container {container_id[:8]}: {e}")
+            return False
+
     def destroy_sandbox_session(self, container_id: str):
         """Stop and remove the container on session termination."""
         if not self.is_available or not self.client or not container_id:
@@ -227,3 +251,4 @@ class DockerSandboxManager:
             logger.info(f"Cleaned up sandbox container {container_id[:12]}")
         except Exception as e:
             logger.debug(f"Container cleanup notice for {container_id[:12]}: {e}")
+

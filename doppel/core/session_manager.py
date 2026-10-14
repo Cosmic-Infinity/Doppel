@@ -33,9 +33,11 @@ class SessionState:
     threat_score: int = 0
     is_active: bool = True
     credential_analysis: dict = field(default_factory=dict)
-    fake_fs: object = field(default=None)  # FakeFilesystem, typed as object to avoid circular
     geoip: dict = field(default_factory=dict)
     profiler_state: object = field(default=None)  # ProfilerState, typed as object
+    # Stateful Privilege Escalation
+    effective_user: str = "ubuntu"
+    is_elevated: bool = False
 
 
 class SessionManager:
@@ -123,11 +125,12 @@ class SessionManager:
             username=username,
             password=password,
             cwd=initial_cwd,
-            container_id=container_id,
             credential_analysis=credential_analysis or {},
             fake_fs=FakeFilesystem(),
             geoip=geoip or {},
             profiler_state=ProfilerState(),
+            effective_user=username,
+            is_elevated=(username == "root"),
         )
         self.sessions[sess_id] = session
 
@@ -156,7 +159,12 @@ class SessionManager:
     def get_session(self, session_id: str) -> Optional[SessionState]:
         return self.sessions.get(session_id)
 
-    async def process_command(self, session_id: str, raw_command: str) -> str:
+    async def process_command(
+        self,
+        session_id: str,
+        raw_command: str,
+        keystroke_timestamps: Optional[List[float]] = None,
+    ) -> str:
         """Process incoming command string and return the shell output."""
         session = self.get_session(session_id)
         if not session:
@@ -183,43 +191,67 @@ class SessionManager:
         # Check whether this session's IP is in the safe allowlist
         is_safe_ip = session.remote_ip in self.config.access.safe_ips
 
-        # 1. Routing classification
-        decision, route_reason = self.router.classify_command(cmd_clean, is_safe_ip=is_safe_ip)
-        output = ""
-
-        # 2. Command execution based on route decision
-        if decision == RouteDecision.BUILTIN:
-            output = self._handle_builtin(session, cmd_clean)
-        elif decision == RouteDecision.SANDBOX and session.container_id:
-            try:
-                res = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        self.sandbox_manager.execute_in_sandbox,
-                        container_id=session.container_id,
-                        command=cmd_clean,
-                        workdir=session.cwd,
-                        user=session.username,
-                    ),
-                    timeout=20.0,
-                )
-                output = (res.stdout or "") + (res.stderr or "")
-            except asyncio.TimeoutError:
-                logger.warning(f"Command '{cmd_clean}' timed out in sandbox")
-                output = f"bash: {cmd_clean.split()[0] if cmd_clean.split() else 'command'}: command timed out\n"
+        # 1. Check for interactive privilege elevation (sudo su, su, etc.)
+        elevation_cmds = (
+            "sudo su", "sudo su -", "sudo -i", "sudo -s",
+            "sudo bash", "sudo /bin/bash", "sudo sh", "sudo /bin/sh",
+            "su", "su -", "su root",
+        )
+        if cmd_clean in elevation_cmds:
+            session.effective_user = "root"
+            session.is_elevated = True
+            session.cwd = "/root"
+            decision = RouteDecision.BUILTIN
+            output = ""
         else:
-            # LLM Deception — inject fake filesystem context so the model
-            # knows about files the attacker created this session
-            output = await self.deception_engine.generate_command_output(
-                command=cmd_clean,
-                cwd=session.cwd,
-                user=session.username,
-                session_history=session.history,
-                fake_fs=session.fake_fs,
-                session_id=session.session_id,
-            )
-            # After LLM responds, update the fake filesystem from this command
-            if session.fake_fs:
-                session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
+            # Standard routing classification
+            decision, route_reason = self.router.classify_command(cmd_clean, is_safe_ip=is_safe_ip)
+            output = ""
+
+            # 2. Command execution based on route decision
+            if decision == RouteDecision.BUILTIN:
+                output = self._handle_builtin(session, cmd_clean)
+            elif decision == RouteDecision.SANDBOX and session.container_id:
+                try:
+                    res = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.sandbox_manager.execute_in_sandbox,
+                            container_id=session.container_id,
+                            command=cmd_clean,
+                            workdir=session.cwd,
+                            user=getattr(session, "effective_user", session.username),
+                        ),
+                        timeout=20.0,
+                    )
+                    output = (res.stdout or "") + (res.stderr or "")
+                except asyncio.TimeoutError:
+                    logger.warning(f"Command '{cmd_clean}' timed out in sandbox")
+                    output = f"bash: {cmd_clean.split()[0] if cmd_clean.split() else 'command'}: command timed out\n"
+            else:
+                # LLM Deception — inject fake filesystem context and effective user
+                output = await self.deception_engine.generate_command_output(
+                    command=cmd_clean,
+                    cwd=session.cwd,
+                    user=getattr(session, "effective_user", session.username),
+                    session_history=session.history,
+                    fake_fs=session.fake_fs,
+                    session_id=session.session_id,
+                )
+                # After LLM responds, update fake filesystem and sync mutations to container
+                if session.fake_fs:
+                    mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
+                    if mutated and session.container_id and self.sandbox_manager.is_available:
+                        for fpath in mutated:
+                            file_obj = getattr(session.fake_fs, "_files", {}).get(fpath)
+                            fcontent = file_obj.content if file_obj else ""
+                            asyncio.create_task(
+                                asyncio.to_thread(
+                                    self.sandbox_manager.sync_file_to_sandbox,
+                                    session.container_id,
+                                    fpath,
+                                    fcontent,
+                                )
+                            )
 
         # 3. Adaptive tar-pit delay — scales with attacker type
         base_delay_ms = self.config.deception.tar_pit_delay_ms
@@ -268,8 +300,9 @@ class SessionManager:
                 session=session,
                 command=cmd_clean,
                 output=output,
-                decision=decision.value,
+                decision=decision.value if hasattr(decision, "value") else str(decision),
                 cmd_id=cmd_id,
+                keystroke_timestamps=keystroke_timestamps,
             )
         )
         self._background_tasks.add(task)
@@ -281,10 +314,12 @@ class SessionManager:
             "command": cmd_clean,
             "cwd": session.cwd,
             "output": output,
-            "decision": decision.value,
+            "decision": decision.value if hasattr(decision, "value") else str(decision),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "attacker_type": _prof.attacker_type if _prof else "unknown",
             "current_phase": _prof.current_phase if _prof else "Reconnaissance",
+            "effective_user": getattr(session, "effective_user", session.username),
+            "is_elevated": getattr(session, "is_elevated", False),
         })
 
         return output
@@ -294,9 +329,11 @@ class SessionManager:
         cmd = tokens[0].lower()
 
         if cmd == "cd":
-            target = tokens[1] if len(tokens) > 1 else (f"/home/{session.username}" if session.username != "root" else "/root")
+            is_root = getattr(session, "effective_user", session.username) == "root"
+            home_dir = "/root" if is_root else f"/home/{session.username}"
+            target = tokens[1] if len(tokens) > 1 else home_dir
             if target == "~":
-                session.cwd = f"/home/{session.username}" if session.username != "root" else "/root"
+                session.cwd = home_dir
             elif target.startswith("/"):
                 session.cwd = target
             elif target == "..":
@@ -320,6 +357,7 @@ class SessionManager:
         output: str,
         decision: str,
         cmd_id: Optional[int] = None,
+        keystroke_timestamps: Optional[List[float]] = None,
     ):
         try:
             threat_meta = None
@@ -328,7 +366,7 @@ class SessionManager:
                     session_id=session.session_id,
                     command=command,
                     cwd=session.cwd,
-                    user=session.username,
+                    user=getattr(session, "effective_user", session.username),
                     session_history=[h["command"] for h in session.history],
                 )
                 if threat_meta:
@@ -355,7 +393,7 @@ class SessionManager:
                             )
                         )
 
-            # ── Attacker profiler (timing + phase) ──────────────────────────────
+            # ── Attacker profiler (timing + phase + keystroke flight dynamics) ──
             if session.profiler_state is not None:
                 tactics_list = threat_meta.get("tactics", []) if threat_meta else []
                 # Use the monotonic ts we stored in history for accurate gap measurement
@@ -365,6 +403,7 @@ class SessionManager:
                     command=command,
                     tactics=tactics_list,
                     now=cmd_ts,
+                    keystroke_timestamps=keystroke_timestamps,
                 )
                 session.profiler_state = updated_state
 

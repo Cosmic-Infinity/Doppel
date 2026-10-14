@@ -169,6 +169,12 @@ class ProfilerState:
     ctrl_c_count: int = 0          # Ctrl+C interrupts
     repeated_navigation: int = 0   # ls→cd→ls or pwd patterns
     bot_tool_hits: int = 0         # commands matching _BOT_TOOL_RE
+    # Keystroke inter-arrival dynamics
+    keystroke_timestamps: List[float] = field(default_factory=list)
+    keystroke_flight_times: List[float] = field(default_factory=list)
+    keystroke_entropy: float = 0.0
+    keystroke_cv: float = 0.0
+    keystroke_paste_detected: bool = False
     # Classification (updated each command)
     attacker_type: str = "unknown"
     type_confidence: float = 0.0
@@ -196,6 +202,7 @@ class AttackerProfiler:
         command: str,
         tactics: List[str],
         now: Optional[float] = None,
+        keystroke_timestamps: Optional[List[float]] = None,
     ) -> Tuple[ProfilerState, Optional[Dict[str, Any]]]:
         """
         Update profiler state for one command.
@@ -205,12 +212,22 @@ class AttackerProfiler:
             command: raw command string
             tactics: list of MITRE tactic strings from ThreatObserver
             now:     unix timestamp override (for testing)
+            keystroke_timestamps: list of microsecond timestamps for characters in this line
 
         Returns:
             (updated state, phase_transition_dict or None)
         """
         ts = now if now is not None else time.monotonic()
         state.command_timestamps.append(ts)
+
+        # ── Keystroke flight-time dynamics ────────────────────────────────────
+        if keystroke_timestamps and len(keystroke_timestamps) >= 2:
+            state.keystroke_timestamps = keystroke_timestamps
+            fts, cv, entropy, is_paste = self._compute_keystroke_metrics(keystroke_timestamps)
+            state.keystroke_flight_times = fts
+            state.keystroke_cv = cv
+            state.keystroke_entropy = entropy
+            state.keystroke_paste_detected = is_paste
 
         # ── Bot-tool hit detection ────────────────────────────────────────────
         if _BOT_TOOL_RE.search(command):
@@ -303,6 +320,20 @@ class AttackerProfiler:
         elif state.backspace_count >= 2:
             scores["human"] += 0.5
 
+        # ── Signal 6: keystroke flight-time dynamics ──────────────────────────
+        if state.keystroke_paste_detected:
+            # Script injection or copy-paste: heavy automation signal
+            scores["bot"] += 3.5
+        elif state.keystroke_cv > 0.35 and state.keystroke_entropy > 1.2:
+            # High natural variability and entropy = authentic human typing rhythm
+            scores["human"] += 2.5
+        elif state.keystroke_flight_times:
+            median_ft = statistics.median(state.keystroke_flight_times)
+            if median_ft < 15.0:
+                scores["bot"] += 2.0
+            elif median_ft > 60.0:
+                scores["human"] += 1.5
+
         # ── Pick winner ───────────────────────────────────────────────────────
         total = sum(scores.values()) or 1.0
         label = max(scores, key=scores.__getitem__)
@@ -381,7 +412,54 @@ class AttackerProfiler:
 
         return None  # unclassifiable; don't advance phase
 
-    # ── Helper ────────────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_keystroke_metrics(timestamps: List[float]) -> Tuple[List[float], float, float, bool]:
+        """
+        Compute inter-keystroke flight times, coefficient of variation (CV),
+        Shannon entropy over rolling window, and automated paste flag.
+        """
+        if len(timestamps) < 2:
+            return [], 0.0, 0.0, False
+
+        # Flight times in milliseconds
+        flight_times = [
+            max(0.0, (timestamps[i] - timestamps[i - 1]) * 1000.0)
+            for i in range(1, len(timestamps))
+        ]
+
+        # Check for automated paste / script injection:
+        # If > 8 characters arrived with median flight time < 5ms or all in < 25ms total
+        median_ft = statistics.median(flight_times)
+        total_span = (timestamps[-1] - timestamps[0]) * 1000.0
+        is_paste = (len(flight_times) >= 8 and median_ft < 5.0) or (len(flight_times) >= 15 and total_span < 25.0)
+
+        # Coefficient of variation (CV)
+        cv = 0.0
+        if len(flight_times) >= 3:
+            try:
+                stdev_ft = statistics.stdev(flight_times)
+                cv = round(stdev_ft / (median_ft + 0.001), 3)
+            except statistics.StatisticsError:
+                cv = 0.0
+
+        # Shannon entropy of flight-time distribution (discretized into 20ms bins)
+        import math
+        entropy = 0.0
+        if len(flight_times) >= 4:
+            bins: Dict[int, int] = {}
+            for ft in flight_times:
+                b = int(ft // 20)  # 20ms buckets
+                bins[b] = bins.get(b, 0) + 1
+            n = len(flight_times)
+            for count in bins.values():
+                p = count / n
+                if p > 0:
+                    entropy -= p * math.log2(p)
+            entropy = round(entropy, 3)
+
+        return flight_times, cv, entropy, is_paste
 
     @staticmethod
     def _inter_command_gaps(timestamps: List[float]) -> List[float]:
@@ -396,15 +474,18 @@ class AttackerProfiler:
         """Compact dict safe to store in DB / send over WebSocket."""
         gaps = AttackerProfiler._inter_command_gaps(state.command_timestamps)
         return {
-            "attacker_type":       state.attacker_type,
-            "type_confidence":     state.type_confidence,
-            "current_phase":       state.current_phase,
-            "current_phase_index": state.current_phase_index,
-            "phase_history":       state.phase_history,
-            "command_count":       len(state.command_timestamps),
-            "median_gap_ms":       round(statistics.median(gaps) * 1000, 1) if gaps else None,
-            "bot_tool_hits":       state.bot_tool_hits,
-            "backspace_count":     state.backspace_count,
-            "empty_submits":       state.empty_submits,
-            "repeated_navigation": state.repeated_navigation,
+            "attacker_type":            state.attacker_type,
+            "type_confidence":          state.type_confidence,
+            "current_phase":            state.current_phase,
+            "current_phase_index":      state.current_phase_index,
+            "phase_history":            state.phase_history,
+            "command_count":            len(state.command_timestamps),
+            "median_gap_ms":            round(statistics.median(gaps) * 1000, 1) if gaps else None,
+            "bot_tool_hits":            state.bot_tool_hits,
+            "backspace_count":          state.backspace_count,
+            "empty_submits":            state.empty_submits,
+            "repeated_navigation":      state.repeated_navigation,
+            "keystroke_entropy":        state.keystroke_entropy,
+            "keystroke_cv":             state.keystroke_cv,
+            "keystroke_paste_detected": state.keystroke_paste_detected,
         }

@@ -254,36 +254,6 @@ class HoneypotController:
             self.error_message = str(e)
             return {"status": self.status, "error": str(e)}
 
-    async def test_llm(self) -> Dict[str, Any]:
-        """Test latency and status of configured LLM endpoint."""
-        client = LLMClient(
-            base_url=self.config.llm.base_url,
-            model=self.config.llm.model,
-            api_key=self.config.llm.api_key,
-            timeout=self.config.llm.timeout_seconds,
-            mock_mode=self.config.llm.mock_mode,
-        )
-        start_t = time.time()
-        try:
-            resp = await client.chat_completion([
-                {"role": "user", "content": "ubuntu:/home/ubuntu# uname -a"}
-            ])
-            elapsed = time.time() - start_t
-            return {
-                "success": True,
-                "latency_seconds": round(elapsed, 3),
-                "model": self.config.llm.model,
-                "endpoint": self.config.llm.base_url,
-                "sample_output": resp.strip(),
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "model": self.config.llm.model,
-                "endpoint": self.config.llm.base_url,
-            }
-
     async def _prepare_assistant_context(
         self, message: str, model_override: Optional[str] = None
     ) -> Tuple[LLMClient, str, List[Dict[str, str]], Dict[str, Any]]:
