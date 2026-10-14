@@ -42,6 +42,8 @@ class HoneypotController:
 
         # Telemetry DB instance for dashboard queries even when honeypot is stopped
         self.db = TelemetryDB(db_path=self.config.analytics.db_path)
+        self.active_report_tasks: Dict[str, asyncio.Task] = {}
+        self.active_assistant_tasks: Dict[str, asyncio.Task] = {}
 
     async def initialize(self):
         """Initialize database so historical telemetry is accessible immediately."""
@@ -396,6 +398,62 @@ class HoneypotController:
                 "error": str(e),
                 "system_state": system_state,
             }
+
+    def stop_report_generation(self, session_id: str) -> bool:
+        """Cancel active report streaming generation task for a session."""
+        task = self.active_report_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+            logger.info(f"Aborted active report generation for session {session_id[:8]}")
+            return True
+        return False
+
+    def stop_assistant_stream(self, client_id: str = "default") -> bool:
+        """Cancel active streaming assistant query task."""
+        task = self.active_assistant_tasks.pop(client_id, None)
+        if task and not task.done():
+            task.cancel()
+            logger.info(f"Aborted active assistant stream for client '{client_id}'")
+            return True
+        return False
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete an attack session and all related records, files, and telemetry."""
+        from pathlib import Path
+
+        # 1. Close session if currently active in memory
+        if self.session_manager and session_id in self.session_manager.sessions:
+            try:
+                await self.session_manager.close_session(session_id)
+            except Exception as e:
+                logger.warning(f"Error closing active session during deletion: {e}")
+
+        # 2. Cancel any active report generation task
+        self.stop_report_generation(session_id)
+
+        # 3. Purge database records
+        db_success = await self.db.delete_session(session_id)
+
+        # 4. Remove generated incident report markdown files from disk
+        try:
+            reports_dir = Path(self.config.analytics.reports_dir)
+            if reports_dir.exists():
+                for report_path in reports_dir.glob(f"incident_{session_id[:8]}_*.md"):
+                    try:
+                        report_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Could not remove report files for session {session_id}: {e}")
+
+        # 5. Broadcast session_deleted event to all connected dashboard clients
+        await self.broadcast({
+            "type": "session_deleted",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": {"session_id": session_id},
+        })
+
+        return db_success
 
     async def _run_http_sensor(self, deception_engine) -> None:
         """Run the HTTP honeypot sensor safely using uvicorn with a pre-bound socket."""

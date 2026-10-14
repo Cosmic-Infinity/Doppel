@@ -212,8 +212,10 @@ class LLMClient:
         in_thinking = False
         target_model = self.model
 
+        stream_timeout = httpx.Timeout(connect=20.0, read=60.0, write=20.0, pool=20.0)
+
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=stream_timeout) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -244,22 +246,29 @@ class LLMClient:
                         )
 
                         emitted_delta = ""
+                        current_stage = "reasoning" if (reasoning_piece or in_thinking) else "compiling"
+
                         if reasoning_piece:
                             if not in_thinking:
                                 emitted_delta += "<think>\n"
                                 in_thinking = True
                             emitted_delta += reasoning_piece
+                            current_stage = "reasoning"
                         elif content_piece:
                             if in_thinking:
                                 emitted_delta += "\n</think>\n\n"
                                 in_thinking = False
                             emitted_delta += content_piece
+                            current_stage = "compiling"
 
                         if emitted_delta:
                             token_count += max(1, len(emitted_delta.split()))
                             elapsed = max(time.perf_counter() - start_t, 0.001)
                             yield {
                                 "delta": emitted_delta,
+                                "stage": current_stage,
+                                "thought": reasoning_piece,
+                                "content": content_piece if not in_thinking else "",
                                 "tokens": token_count,
                                 "latency_seconds": round(elapsed, 3),
                                 "tokens_per_second": round(token_count / elapsed, 1),
@@ -272,6 +281,9 @@ class LLMClient:
                 elapsed = max(time.perf_counter() - start_t, 0.001)
                 yield {
                     "delta": "\n</think>\n",
+                    "stage": "reasoning",
+                    "thought": "",
+                    "content": "",
                     "tokens": token_count,
                     "latency_seconds": round(elapsed, 3),
                     "tokens_per_second": round(token_count / elapsed, 1),
@@ -282,6 +294,9 @@ class LLMClient:
             elapsed = max(time.perf_counter() - start_t, 0.001)
             yield {
                 "delta": "",
+                "stage": "completed",
+                "thought": "",
+                "content": "",
                 "tokens": token_count,
                 "latency_seconds": round(elapsed, 3),
                 "tokens_per_second": round(token_count / elapsed, 1),
@@ -301,6 +316,9 @@ class LLMClient:
                 elapsed = max(time.perf_counter() - start_t, 0.001)
                 yield {
                     "delta": part,
+                    "stage": "compiling",
+                    "thought": "",
+                    "content": part,
                     "tokens": token_count,
                     "latency_seconds": round(elapsed, 3),
                     "tokens_per_second": round(token_count / elapsed, 1),
@@ -310,6 +328,9 @@ class LLMClient:
             elapsed = max(time.perf_counter() - start_t, 0.001)
             yield {
                 "delta": "",
+                "stage": "completed",
+                "thought": "",
+                "content": "",
                 "tokens": token_count,
                 "latency_seconds": round(elapsed, 3),
                 "tokens_per_second": round(token_count / elapsed, 1),
@@ -321,6 +342,36 @@ class LLMClient:
         """Deterministic mock response for offline/local development."""
         user_msg = messages[-1]["content"].lower() if messages else ""
         sys_msg = messages[0]["content"].lower() if (messages and messages[0].get("role") == "system") else ""
+
+        # Check if incident report is requested
+        if "incident report" in user_msg or "incident report" in sys_msg or "cyber incident response analyst" in sys_msg:
+            return (
+                "# Incident Response Report: Honeypot Session Analysis\n\n"
+                "**Status:** Analysis Completed  \n"
+                "**Attacker Classification:** Unauthorized Interactive Shell Probe  \n\n"
+                "---\n\n"
+                "## 1. Executive Summary\n"
+                "An unauthorized remote entity established an interactive SSH session targeting the honeypot sensor. "
+                "The observed session exhibited interactive host enumeration, permission reconnaissance, and credential harvesting attempts. "
+                "All malicious operations were contained within isolated deception boundaries without host risk.\n\n"
+                "---\n\n"
+                "## 2. MITRE ATT&CK Matrix Mapping\n"
+                "- **Discovery (TA0007)**: System Information Discovery (T1082), Account Discovery (T1087)\n"
+                "- **Credential Access (TA0006)**: OS Credential Dumping (T1003)\n"
+                "- **Execution (TA0002)**: Command and Scripting Interpreter (T1059.004)\n\n"
+                "---\n\n"
+                "## 3. Timeline of Significant Actions\n"
+                "The remote actor performed sequential environment inspection commands to map local file hierarchies and retrieve service tokens.\n\n"
+                "---\n\n"
+                "## 4. Indicators of Compromise (IOCs)\n"
+                "- Suspicious access attempts on administrative SSH credentials\n"
+                "- Targeted exploration of local configuration directories\n\n"
+                "---\n\n"
+                "## 5. Recommended Defensive Remediations\n"
+                "1. Enforce public-key authentication for SSH endpoints and disable interactive password authentication.\n"
+                "2. Implement network ingress filtering on administrative ports.\n"
+                "3. Revoke and rotate any decoy credentials accessed during this session.\n"
+            )
 
         # Check if Doppel Security Intelligence Assistant is being queried
         if "security intelligence assistant" in sys_msg or "security assistant" in sys_msg or "assistant" in sys_msg:
@@ -364,7 +415,7 @@ class LLMClient:
                 )
 
         # Check if threat intelligence is requested
-        if "mitre" in user_msg or "analyze command" in user_msg or "threat" in user_msg:
+        if "mitre" in user_msg or "analyze command" in user_msg or ("threat" in user_msg and "score:" not in user_msg and "incident" not in user_msg):
             return json.dumps({
                 "tactics": ["Discovery"],
                 "technique_id": "T1087",

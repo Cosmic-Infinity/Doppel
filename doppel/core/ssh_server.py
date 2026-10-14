@@ -16,6 +16,9 @@ logger = logging.getLogger("doppel.ssh")
 _credential_analyzer = CredentialAnalyzer()
 
 
+_closing_tasks: set = set()
+
+
 class DoppelSSHServerSession(asyncssh.SSHServerSession):
     """Handles an interactive PTY shell session for an SSH client."""
 
@@ -231,7 +234,9 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         self._closed = True
         if self.session:
             logger.info(f"SSH connection closed for session {self.session.session_id[:8]}")
-            asyncio.create_task(self.session_manager.close_session(self.session.session_id))
+            t = asyncio.create_task(self.session_manager.close_session(self.session.session_id))
+            _closing_tasks.add(t)
+            t.add_done_callback(_closing_tasks.discard)
 
     def connection_lost(self, exc):
         self.close_session()

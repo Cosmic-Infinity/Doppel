@@ -106,6 +106,21 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const telemetryTableBody = document.getElementById('telemetry-table-body');
   const reportEmpty = document.getElementById('report-empty');
   const reportContent = document.getElementById('report-content');
+  const btnDeleteSession = document.getElementById('btn-delete-session');
+  const reportToolbar = document.getElementById('report-toolbar');
+  const reportStatusBadge = document.getElementById('report-status-badge');
+  const reportStatusText = document.getElementById('report-status-text');
+  const btnStopReport = document.getElementById('btn-stop-report');
+  const btnToggleRegenReport = document.getElementById('btn-toggle-regen-report');
+  const btnCopyReport = document.getElementById('btn-copy-report');
+  const reportRegenCard = document.getElementById('report-regen-card');
+  const reportCustomInstructions = document.getElementById('report-custom-instructions');
+  const btnSubmitRegen = document.getElementById('btn-submit-regen');
+  const btnCancelRegen = document.getElementById('btn-cancel-regen');
+  const reportThoughtWrapper = document.getElementById('report-thought-wrapper');
+  const reportThoughtDetails = document.getElementById('report-thought-details');
+  const reportThoughtSummary = document.getElementById('report-thought-summary');
+  const reportThoughtBody = document.getElementById('report-thought-body');
 
   // DOM Elements - Info Modal
   const infoModal = document.getElementById('info-modal');
@@ -124,7 +139,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const assistantInputForm = document.getElementById('assistant-input-form');
   const assistantInput = document.getElementById('assistant-input');
   const btnSendAssistant = document.getElementById('btn-send-assistant');
+  const btnStopAssistant = document.getElementById('btn-stop-assistant');
   let userChosenAssistantModel = localStorage.getItem('doppel_assistant_model') || '';
+
+  // Active stream and task tracking
+  let activeReportAbortController = null;
+  let activeReportSessionId = null;
+  let activeAssistantAbortController = null;
 
   // --- Signal Helpers: Kill-Chain, Profile, and Sensor Ticker ---
 
@@ -1009,6 +1030,24 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         detailThreatScore.textContent = `${score} / 100`;
         updateLastTelemetryRow(data.threat);
       }
+    } else if (msg.type === 'session_closing') {
+      const data = msg.data;
+      if (sessionsCache[data.session_id]) {
+        sessionsCache[data.session_id].is_active = false;
+        const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
+        if (card) {
+          const dot = card.querySelector('.card-status-dot');
+          if (dot) {
+            dot.classList.remove('live');
+            dot.classList.add('ended');
+          }
+        }
+      }
+      if (activeSessionId === data.session_id) {
+        detailLivePill.textContent = 'ENDED';
+        detailLivePill.classList.add('ended');
+        setReportStatus('compiling', data.message || 'Session closed. Compiling incident report...');
+      }
     } else if (msg.type === 'session_closed') {
       const data = msg.data;
       if (sessionsCache[data.session_id]) {
@@ -1028,6 +1067,26 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         fetchSessionReport(data.session_id);
       }
       fetchSessions();
+    } else if (msg.type === 'session_deleted') {
+      const data = msg.data;
+      const deletedId = data.session_id;
+      delete sessionsCache[deletedId];
+      const card = document.querySelector(`.session-card[data-session-id="${deletedId}"]`);
+      if (card) card.remove();
+      const remainingCards = document.querySelectorAll('.session-card');
+      if (sessionCountPill) sessionCountPill.textContent = remainingCards.length;
+      if (remainingCards.length === 0 && sessionsEmpty) {
+        sessionsEmpty.classList.remove('hidden');
+      }
+      if (activeSessionId === deletedId) {
+        activeSessionId = null;
+        localStorage.removeItem('doppel_active_session_id');
+        if (sessionDetail) sessionDetail.classList.add('hidden');
+        if (emptyInspector) emptyInspector.classList.remove('hidden');
+        if (remainingCards.length > 0 && remainingCards[0].dataset.sessionId) {
+          selectSession(remainingCards[0].dataset.sessionId);
+        }
+      }
     } else if (msg.type === 'honeytoken_activated') {
       const data = msg.data;
       console.warn('[CANARY TRIPWIRE ACTIVATION]', data);
@@ -1141,21 +1200,203 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  function setReportStatus(status, text) {
+    if (!reportStatusBadge) return;
+    reportStatusBadge.className = 'report-status-badge';
+    const statusMap = {
+      reasoning: { label: 'Reasoning', cls: 'reasoning', defText: 'Model is reasoning...' },
+      compiling: { label: 'Compiling', cls: 'compiling', defText: 'Compiling report...' },
+      ready: { label: 'Ready', cls: 'ready', defText: 'Report ready' },
+      stopped: { label: 'Stopped', cls: 'stopped', defText: 'Generation stopped' },
+      error: { label: 'Failed', cls: 'error', defText: 'Generation error' },
+      neutral: { label: 'Report', cls: 'neutral', defText: '' },
+    };
+    const s = statusMap[status] || statusMap.neutral;
+    reportStatusBadge.classList.add(s.cls);
+    reportStatusBadge.textContent = s.label;
+    if (reportStatusText) {
+      reportStatusText.textContent = text !== undefined ? text : s.defText;
+    }
+  }
+
+  function showReportEmptyState(sessionId) {
+    if (reportEmpty) reportEmpty.classList.remove('hidden');
+    if (reportContent) reportContent.classList.add('hidden');
+    if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
+    setReportStatus('neutral', '');
+    const isLive = sessionsCache[sessionId] && Boolean(sessionsCache[sessionId].is_active);
+    if (reportEmpty) {
+      reportEmpty.textContent = isLive
+        ? 'Report will be compiled automatically when the session terminates. You can also generate now using the Regenerate button.'
+        : 'No report has been compiled for this session yet. Click Regenerate to compile an incident report.';
+    }
+  }
+
+  async function streamSessionReport(sessionId, customInstructions = '') {
+    if (!sessionId) return;
+
+    if (activeReportAbortController) {
+      activeReportAbortController.abort();
+      activeReportAbortController = null;
+    }
+
+    activeReportAbortController = new AbortController();
+    activeReportSessionId = sessionId;
+
+    // Reset UI for generation
+    if (reportEmpty) reportEmpty.classList.add('hidden');
+    if (reportContent) {
+      reportContent.classList.remove('hidden');
+      reportContent.innerHTML = `
+        <div class="assistant-loading-indicator">
+          <span class="assistant-spinner"></span>
+          <span>Initiating report generation stream...</span>
+        </div>
+      `;
+    }
+    if (reportThoughtBody) reportThoughtBody.innerHTML = '';
+    if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
+    if (reportThoughtDetails) reportThoughtDetails.open = true;
+    if (reportThoughtSummary) reportThoughtSummary.textContent = 'Model Reasoning';
+
+    if (btnStopReport) btnStopReport.classList.remove('hidden');
+    if (btnToggleRegenReport) btnToggleRegenReport.classList.add('hidden');
+    if (reportRegenCard) reportRegenCard.classList.add('hidden');
+    setReportStatus('reasoning', 'Initiating analysis...');
+
+    let accumulatedThought = '';
+    let accumulatedContent = '';
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/report/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_instructions: customInstructions || null }),
+        signal: activeReportAbortController.signal,
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+      if (!res.body) {
+        throw new Error('Streaming response body is unavailable');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr) continue;
+
+          try {
+            const chunk = JSON.parse(dataStr);
+            if (chunk.stage === 'reasoning') {
+              setReportStatus('reasoning', 'Model is reasoning...');
+              if (chunk.thought) {
+                accumulatedThought += chunk.thought;
+                if (reportThoughtWrapper) reportThoughtWrapper.classList.remove('hidden');
+                if (reportThoughtBody) {
+                  reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, true) + '<span class="assistant-streaming-cursor"></span>';
+                }
+              }
+            } else if (chunk.stage === 'compiling') {
+              setReportStatus('compiling', 'Compiling markdown report...');
+              if (chunk.content) {
+                accumulatedContent += chunk.content;
+                if (reportContent) {
+                  reportContent.innerHTML = renderMarkdown(accumulatedContent, true) + '<span class="assistant-streaming-cursor"></span>';
+                }
+              }
+            } else if (chunk.stage === 'ready' || chunk.done) {
+              if (chunk.report) {
+                accumulatedContent = chunk.report;
+              }
+              setReportStatus('ready', 'Completed');
+              if (reportContent) {
+                reportContent.innerHTML = renderMarkdown(accumulatedContent || 'Incident report completed.', false);
+              }
+              if (reportThoughtBody && accumulatedThought) {
+                reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, false);
+              }
+            } else if (chunk.stage === 'stopped' || chunk.stopped) {
+              setReportStatus('stopped', chunk.message || 'Generation stopped');
+              if (reportContent && accumulatedContent) {
+                reportContent.innerHTML = renderMarkdown(accumulatedContent, false) +
+                  '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">[Generation stopped by user]</div>';
+              }
+            } else if (chunk.stage === 'error' || chunk.error) {
+              setReportStatus('error', chunk.error || 'Generation failed');
+              if (reportContent) {
+                reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Failed to generate report: ${escapeHtml(chunk.error || 'Unknown error')}</div>`;
+              }
+            }
+          } catch (jsonErr) {
+            // Ignore partial JSON
+          }
+        }
+      }
+
+      if (accumulatedContent && reportContent) {
+        reportContent.innerHTML = renderMarkdown(accumulatedContent, false);
+      }
+      if (accumulatedThought && reportThoughtBody) {
+        reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, false);
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        setReportStatus('stopped', 'Generation stopped by user');
+        if (reportContent && accumulatedContent) {
+          reportContent.innerHTML = renderMarkdown(accumulatedContent, false) +
+            '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">[Generation stopped by user]</div>';
+        }
+      } else {
+        setReportStatus('error', err.message || 'Error streaming report');
+        if (reportContent) {
+          reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Report generation failed: ${escapeHtml(err.message)}</div>`;
+        }
+      }
+    } finally {
+      activeReportAbortController = null;
+      if (btnStopReport) btnStopReport.classList.add('hidden');
+      if (btnToggleRegenReport) btnToggleRegenReport.classList.remove('hidden');
+    }
+  }
+
   async function fetchSessionReport(sessionId) {
+    if (activeReportSessionId === sessionId && activeReportAbortController) {
+      return; // Generation actively streaming
+    }
+
     try {
       const res = await fetch(`/api/sessions/${sessionId}/report`);
       if (res.ok) {
         const markdown = await res.text();
-        reportEmpty.classList.add('hidden');
-        reportContent.classList.remove('hidden');
-        reportContent.innerHTML = renderMarkdown(markdown);
+        if (markdown && markdown.trim()) {
+          reportEmpty.classList.add('hidden');
+          reportContent.classList.remove('hidden');
+          reportContent.innerHTML = renderMarkdown(markdown);
+          if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
+          setReportStatus('ready', 'Completed');
+        } else {
+          showReportEmptyState(sessionId);
+        }
       } else {
-        reportEmpty.classList.remove('hidden');
-        reportContent.classList.add('hidden');
+        showReportEmptyState(sessionId);
       }
     } catch (e) {
-      reportEmpty.classList.remove('hidden');
-      reportContent.classList.add('hidden');
+      showReportEmptyState(sessionId);
     }
   }
 
@@ -1263,6 +1504,125 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
   });
 
+  // --- Attack Session Management & Report Toolbar Controls ---
+  if (btnDeleteSession) {
+    btnDeleteSession.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      const targetId = activeSessionId;
+      const confirmed = confirm(
+        `Are you sure you want to delete session ${targetId}?\nThis will permanently delete the attack session, command history, MITRE telemetry, and generated reports from the database.`
+      );
+      if (!confirmed) return;
+
+      try {
+        btnDeleteSession.disabled = true;
+        const res = await fetch(`/api/sessions/${targetId}`, { method: 'DELETE' });
+        if (!res.ok) {
+          throw new Error(`Failed to delete session (HTTP ${res.status})`);
+        }
+
+        delete sessionsCache[targetId];
+        const card = document.querySelector(`.session-card[data-session-id="${targetId}"]`);
+        if (card) card.remove();
+
+        const remainingCards = document.querySelectorAll('.session-card');
+        if (sessionCountPill) sessionCountPill.textContent = remainingCards.length;
+
+        if (activeSessionId === targetId) {
+          activeSessionId = null;
+          localStorage.removeItem('doppel_active_session_id');
+          if (sessionDetail) sessionDetail.classList.add('hidden');
+          if (emptyInspector) emptyInspector.classList.remove('hidden');
+
+          if (remainingCards.length > 0) {
+            const nextId = remainingCards[0].dataset.sessionId;
+            if (nextId) selectSession(nextId);
+          } else {
+            if (sessionsEmpty) sessionsEmpty.classList.remove('hidden');
+          }
+        }
+      } catch (err) {
+        alert(`Error deleting session: ${err.message}`);
+      } finally {
+        btnDeleteSession.disabled = false;
+      }
+    });
+  }
+
+  if (btnStopReport) {
+    btnStopReport.addEventListener('click', async () => {
+      if (activeReportAbortController) {
+        activeReportAbortController.abort();
+        activeReportAbortController = null;
+      }
+      if (activeSessionId) {
+        try {
+          await fetch(`/api/sessions/${activeSessionId}/report/stop`, { method: 'POST' });
+        } catch (e) {
+          console.warn('Error stopping server report task:', e);
+        }
+      }
+      setReportStatus('stopped', 'Generation stopped by user');
+      if (btnStopReport) btnStopReport.classList.add('hidden');
+      if (btnToggleRegenReport) btnToggleRegenReport.classList.remove('hidden');
+    });
+  }
+
+  if (btnToggleRegenReport) {
+    btnToggleRegenReport.addEventListener('click', () => {
+      if (!reportRegenCard) return;
+      reportRegenCard.classList.toggle('hidden');
+      if (!reportRegenCard.classList.contains('hidden') && reportCustomInstructions) {
+        reportCustomInstructions.focus();
+      }
+    });
+  }
+
+  if (btnCancelRegen) {
+    btnCancelRegen.addEventListener('click', () => {
+      if (reportRegenCard) reportRegenCard.classList.add('hidden');
+    });
+  }
+
+  if (btnSubmitRegen) {
+    btnSubmitRegen.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      const instructions = reportCustomInstructions ? reportCustomInstructions.value.trim() : '';
+      streamSessionReport(activeSessionId, instructions);
+    });
+  }
+
+  if (btnCopyReport) {
+    btnCopyReport.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      try {
+        const res = await fetch(`/api/sessions/${activeSessionId}/report`);
+        let textToCopy = '';
+        if (res.ok) {
+          textToCopy = await res.text();
+        } else if (reportContent && !reportContent.classList.contains('hidden')) {
+          textToCopy = reportContent.innerText || reportContent.textContent || '';
+        }
+        if (textToCopy) {
+          await navigator.clipboard.writeText(textToCopy);
+          const originalTitle = btnCopyReport.getAttribute('title') || 'Copy report markdown';
+          btnCopyReport.setAttribute('title', 'Copied to clipboard!');
+          const labelSpan = btnCopyReport.querySelector('span');
+          if (labelSpan) {
+            const originalText = labelSpan.textContent;
+            labelSpan.textContent = 'Copied!';
+            setTimeout(() => {
+              labelSpan.textContent = originalText;
+              btnCopyReport.setAttribute('title', originalTitle);
+            }, 1800);
+          }
+        }
+      } catch (err) {
+        console.warn('Clipboard copy failed:', err);
+      }
+    });
+  }
+
   // --- AI Assistant & Benchmark Console Logic ---
   function syncAssistantModels() {
     if (!assistantModelSelect) return;
@@ -1351,9 +1711,20 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     assistantChatBody.appendChild(botMsg);
     assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
 
-    // Disable input while running
+    // Setup AbortController for user-controlled stream stopping
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort();
+      activeAssistantAbortController = null;
+    }
+    activeAssistantAbortController = new AbortController();
+
+    // Disable input while running and toggle send/stop buttons
     assistantInput.disabled = true;
-    btnSendAssistant.disabled = true;
+    if (btnSendAssistant) btnSendAssistant.classList.add('hidden');
+    if (btnStopAssistant) {
+      btnStopAssistant.classList.remove('hidden');
+      btnStopAssistant.disabled = false;
+    }
 
     let accumulatedText = '';
     let lastMetrics = null;
@@ -1367,7 +1738,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const res = await fetch('/api/chat-assistant/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: activeAssistantAbortController.signal,
       });
 
       if (!res.ok) {
@@ -1462,7 +1834,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         `;
       }
     } catch (err) {
-      if (!accumulatedText) {
+      if (err.name === 'AbortError') {
+        bubble.innerHTML = renderMarkdown(accumulatedText || '', false) +
+          '<div style="color: var(--accent-orange); margin-top: 8px; font-size: 11px;">[Output stopped by user]</div>';
+      } else if (!accumulatedText) {
         bubble.innerHTML = `Failed to query assistant: ${escapeHtml(err.message || 'Unknown network error')}`;
         bubble.style.borderColor = 'var(--accent-red)';
         bubble.style.color = 'var(--accent-red)';
@@ -1471,11 +1846,39 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           `<div style="color: var(--accent-red); margin-top: 8px; font-size: 11px;">[Stream interrupted: ${escapeHtml(err.message)}]</div>`;
       }
     } finally {
+      if (btnStopAssistant) btnStopAssistant.classList.add('hidden');
+      if (btnSendAssistant) {
+        btnSendAssistant.classList.remove('hidden');
+        btnSendAssistant.disabled = false;
+      }
+      activeAssistantAbortController = null;
       assistantInput.disabled = false;
-      btnSendAssistant.disabled = false;
       assistantInput.focus();
       assistantChatBody.scrollTop = assistantChatBody.scrollHeight;
     }
+  }
+
+  if (btnStopAssistant) {
+    btnStopAssistant.addEventListener('click', async () => {
+      if (activeAssistantAbortController) {
+        activeAssistantAbortController.abort();
+        activeAssistantAbortController = null;
+      }
+      try {
+        await fetch('/api/chat-assistant/stop', { method: 'POST' });
+      } catch (e) {
+        console.warn('Error sending stop chat assistant:', e);
+      }
+      if (btnStopAssistant) btnStopAssistant.classList.add('hidden');
+      if (btnSendAssistant) {
+        btnSendAssistant.classList.remove('hidden');
+        btnSendAssistant.disabled = false;
+      }
+      if (assistantInput) {
+        assistantInput.disabled = false;
+        assistantInput.focus();
+      }
+    });
   }
 
   if (assistantInputForm) {

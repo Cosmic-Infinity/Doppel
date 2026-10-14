@@ -247,3 +247,81 @@ async def test_http_sensor_port_conflict_resilience():
         controller.config.honeypot.port = orig_hp_port
 
 
+def test_dashboard_stop_assistant_endpoint(client):
+    res = client.post("/api/chat-assistant/stop")
+    assert res.status_code == 200
+    assert "stopped" in res.json()
+
+
+def test_index_html_has_report_and_delete_elements(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert "btn-delete-session" in html
+    assert "btn-stop-report" in html
+    assert "btn-toggle-regen-report" in html
+    assert "report-thought-wrapper" in html
+    assert "btn-stop-assistant" in html
+
+
+@pytest.mark.asyncio
+async def test_session_report_stream_and_delete_flow(client):
+    import uuid
+    test_id = str(uuid.uuid4())
+
+    # 1. Seed a test session in the database
+    await controller.db.log_session_start(
+        session_id=test_id,
+        remote_ip="198.51.100.22",
+        remote_port=54321,
+        username="testuser",
+        password="secretpassword",
+    )
+    await controller.db.log_command(
+        session_id=test_id,
+        cwd="/home/testuser",
+        command="cat /etc/passwd",
+        output="root:x:0:0:root:/root:/bin/bash\ntestuser:x:1000:1000:Test User,,,:/home/testuser:/bin/bash",
+        route_decision="deception",
+        threat_meta={"tactics": ["Discovery"], "technique_id": "T1087", "technique_name": "Account Discovery", "threat_score": 45},
+    )
+    await controller.db.log_session_end(test_id)
+
+    # 2. Test streaming report endpoint
+    res = client.post(
+        f"/api/sessions/{test_id}/report/stream",
+        json={"custom_instructions": "Focus on credential theft."}
+    )
+    assert res.status_code == 200
+    body = res.text
+    assert "data:" in body
+
+    # Parse stream chunks
+    chunks = []
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            chunks.append(json.loads(line[5:].strip()))
+    assert len(chunks) > 0
+    stages = [c.get("stage") for c in chunks]
+    assert "ready" in stages or any(c.get("done") for c in chunks)
+
+    # 3. Test stop report endpoint
+    stop_res = client.post(f"/api/sessions/{test_id}/report/stop")
+    assert stop_res.status_code == 200
+    assert stop_res.json()["session_id"] == test_id
+
+    # 4. Test delete session endpoint
+    del_res = client.delete(f"/api/sessions/{test_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+
+    # 5. Verify records are purged from database
+    details = await controller.db.get_session_details(test_id)
+    assert details == {}
+
+    # Deleting again returns 404
+    del_res_404 = client.delete(f"/api/sessions/{test_id}")
+    assert del_res_404.status_code == 404
+
+

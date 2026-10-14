@@ -33,6 +33,7 @@ class SessionState:
     threat_score: int = 0
     is_active: bool = True
     credential_analysis: dict = field(default_factory=dict)
+    fake_fs: Optional[Any] = None
     geoip: dict = field(default_factory=dict)
     profiler_state: object = field(default=None)  # ProfilerState, typed as object
     # Stateful Privilege Escalation
@@ -457,19 +458,46 @@ class SessionManager:
 
         session.is_active = False
 
+        self._notify("session_closing", {
+            "session_id": session_id,
+            "stage": "initiating",
+            "message": "Session terminated. Compiling incident report...",
+        })
+
         if session.container_id:
-            await asyncio.to_thread(self.sandbox_manager.destroy_sandbox_session, session.container_id)
+            try:
+                await asyncio.to_thread(self.sandbox_manager.destroy_sandbox_session, session.container_id)
+            except Exception as e:
+                logger.warning(f"Error destroying sandbox container for {session_id[:8]}: {e}")
 
-        # Wait for all background tasks to complete database writes before closing session
+        # Wait up to 10 seconds for any running background MITRE analysis tasks
         if self._background_tasks:
-            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*list(self._background_tasks), return_exceptions=True),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Background MITRE tasks timed out for session {session_id[:8]}; proceeding with report.")
+            except Exception as e:
+                logger.debug(f"Background tasks finalization notice: {e}")
 
-        await self.db.log_session_end(session_id)
+        try:
+            await self.db.log_session_end(session_id)
+        except Exception as e:
+            logger.error(f"Error logging session end for {session_id[:8]}: {e}")
+
         logger.info(f"Session {session_id[:8]} closed. Generating incident report...")
 
-        report_path = await self.reporter.generate_session_report(session_id)
+        report_path = None
+        try:
+            report_path = await self.reporter.generate_session_report(session_id)
+        except Exception as e:
+            logger.error(f"Error generating incident report for session {session_id[:8]}: {e}")
+
         self._notify("session_closed", {
             "session_id": session_id,
             "report_path": str(report_path) if report_path else None,
         })
         return str(report_path) if report_path else None
+

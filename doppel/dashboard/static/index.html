@@ -265,7 +265,13 @@
                 <span class="stat-label">Directory</span>
                 <span class="stat-value" id="detail-cwd">/home/ubuntu</span>
               </div>
-
+              <button type="button" class="btn btn-secondary btn-delete-session" id="btn-delete-session" title="Delete this session and all associated data">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                <span>Delete</span>
+              </button>
             </div>
           </div>
 
@@ -309,12 +315,59 @@
           <!-- Tab 3: Incident Report -->
           <div class="tab-content" id="tab-report">
             <div class="report-view" id="report-view">
+              <div class="report-toolbar" id="report-toolbar">
+                <div class="report-toolbar-left">
+                  <span class="report-status-badge neutral" id="report-status-badge">Report</span>
+                  <span class="report-status-text" id="report-status-text"></span>
+                </div>
+                <div class="report-toolbar-right">
+                  <button type="button" class="btn btn-danger btn-sm hidden" id="btn-stop-report">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                      <rect x="6" y="6" width="12" height="12"></rect>
+                    </svg>
+                    <span>Stop</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-regen-report">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                    </svg>
+                    <span>Regenerate</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-report" title="Copy report markdown">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span>Copy</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Inline Re-generation Prompt Card (Hidden by default) -->
+              <div class="report-regen-card hidden" id="report-regen-card">
+                <label for="report-custom-instructions" class="regen-label">Analyst Directives & Focus Areas (Optional)</label>
+                <textarea id="report-custom-instructions" class="regen-textarea" rows="2" placeholder="e.g. Highlight persistence attempts, focus on credential harvesting, format as executive brief..."></textarea>
+                <div class="regen-actions">
+                  <button type="button" class="btn btn-primary btn-sm" id="btn-submit-regen">Generate Report</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-regen">Cancel</button>
+                </div>
+              </div>
+
+              <!-- Thought process container for reasoning models -->
+              <div class="report-thought-wrapper hidden" id="report-thought-wrapper">
+                <details class="thought-process" id="report-thought-details" open>
+                  <summary id="report-thought-summary">Model Reasoning</summary>
+                  <div class="thought-body" id="report-thought-body"></div>
+                </details>
+              </div>
+
               <div class="report-empty" id="report-empty">
                 Report will be compiled automatically when the session terminates.
               </div>
               <div class="report-content markdown-body hidden" id="report-content"></div>
             </div>
           </div>
+
 
         </div>
       </section>
@@ -380,7 +433,11 @@
           <button type="submit" class="btn btn-primary assistant-send-btn" id="btn-send-assistant">
             <span>Send</span>
           </button>
+          <button type="button" class="btn btn-danger assistant-stop-btn hidden" id="btn-stop-assistant">
+            <span>Stop</span>
+          </button>
         </form>
+
       </div>
     </div>
 

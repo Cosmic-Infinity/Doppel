@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 MITRE_ANALYSIS_SYSTEM_PROMPT = """You are a senior SOC analyst and threat intelligence engine.
 Analyze the provided attacker shell command in the context of an ongoing honeypot session.
@@ -51,7 +51,13 @@ Recent Session History:
 Analyze this command and output JSON only."""
 
 
-def build_incident_report_prompt(session_data: Dict[str, Any]) -> str:
+def build_incident_report_prompt(
+    session_data: Dict[str, Any], custom_instructions: Optional[str] = None
+) -> str:
+    analyst_section = ""
+    if custom_instructions and custom_instructions.strip():
+        analyst_section = f"\nAdditional Analyst Directives & Focus Areas:\n{custom_instructions.strip()}\n"
+
     return f"""Generate an incident report for the following honeypot session:
 Session ID: {session_data.get('session_id')}
 Attacker IP: {session_data.get('remote_ip')}
@@ -60,7 +66,11 @@ Start Time: {session_data.get('start_time')}
 End Time: {session_data.get('end_time')}
 Max Threat Score: {session_data.get('max_threat_score')}
 Total Commands: {len(session_data.get('commands', []))}
-
+{analyst_section}
 Commands & Telemetry:
-{session_data.get('commands_summary')}
+{session_data.get('commands_summary') or 'No commands recorded'}
+
+Instructions:
+Conclude any internal reasoning before outputting the report. Begin the final report directly with the top-level Markdown heading '# Incident Response Report'.
 """
+

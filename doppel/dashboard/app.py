@@ -57,6 +57,11 @@ class AssistantChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+class ReportStreamRequest(BaseModel):
+    custom_instructions: Optional[str] = None
+    model: Optional[str] = None
+
+
 @app.on_event("startup")
 async def startup_event():
     await controller.initialize()
@@ -86,6 +91,8 @@ async def chat_assistant_stream(req: AssistantChatRequest):
         try:
             async for chunk in controller.query_assistant_stream(message=req.message, model_override=req.model):
                 yield f"data: {json.dumps(chunk)}\n\n"
+        except asyncio.CancelledError:
+            yield f"data: {json.dumps({'delta': '', 'done': True, 'stopped': True})}\n\n"
         except Exception as e:
             err_data = {"error": str(e), "done": True}
             yield f"data: {json.dumps(err_data)}\n\n"
@@ -99,6 +106,14 @@ async def chat_assistant_stream(req: AssistantChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/chat-assistant/stop")
+async def stop_chat_assistant():
+    """Stop active streaming chat assistant query."""
+    stopped = controller.stop_assistant_stream()
+    return {"stopped": stopped}
+
 
 
 @app.get("/api/status")
@@ -249,6 +264,91 @@ async def get_session_report(session_id: str):
     with open(report_path, "r", encoding="utf-8") as f:
         content = f.read()
     return PlainTextResponse(content)
+
+
+@app.post("/api/sessions/{session_id}/report/stream")
+async def stream_session_report(session_id: str, req: Optional[ReportStreamRequest] = None):
+    """Stream live incident report generation with real-time reasoning and progress."""
+    instructions = req.custom_instructions if req else None
+    model_override = req.model if req else None
+
+    # Resolve reporter instance
+    if controller.session_manager and controller.session_manager.reporter:
+        reporter = controller.session_manager.reporter
+    else:
+        from doppel.analytics.reporter import IncidentReporter
+        from doppel.ai.llm_client import LLMClient
+        llm_client = LLMClient(
+            base_url=controller.config.llm.base_url,
+            model=model_override or controller.config.llm.model,
+            api_key=controller.config.llm.api_key,
+            timeout=controller.config.llm.timeout_seconds,
+            temperature=controller.config.llm.temperature,
+            mock_mode=controller.config.llm.mock_mode,
+        )
+        reporter = IncidentReporter(
+            llm_client=llm_client,
+            db=controller.db,
+            reports_dir=controller.config.analytics.reports_dir,
+        )
+
+    queue = asyncio.Queue()
+
+    async def run_generation():
+        try:
+            async for chunk in reporter.generate_session_report_stream(
+                session_id=session_id,
+                custom_instructions=instructions,
+                model_override=model_override,
+            ):
+                await queue.put(chunk)
+        except asyncio.CancelledError:
+            await queue.put({"stage": "stopped", "message": "Generation stopped by user", "done": True})
+        except Exception as e:
+            await queue.put({"stage": "error", "error": str(e), "done": True})
+        finally:
+            controller.active_report_tasks.pop(session_id, None)
+
+    task = asyncio.create_task(run_generation())
+    controller.active_report_tasks[session_id] = task
+
+    async def sse_generator():
+        try:
+            while True:
+                chunk = await queue.get()
+                yield f"data: {json.dumps(chunk)}\n\n"
+                if chunk.get("done"):
+                    break
+        except asyncio.CancelledError:
+            controller.stop_report_generation(session_id)
+            yield f"data: {json.dumps({'stage': 'stopped', 'message': 'Stream cancelled', 'done': True})}\n\n"
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/sessions/{session_id}/report/stop")
+async def stop_session_report(session_id: str):
+    """Cancel active report streaming generation for a session."""
+    stopped = controller.stop_report_generation(session_id)
+    return {"stopped": stopped, "session_id": session_id}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    """Purge an attack session, all related commands/phases, and disk artifacts."""
+    success = await controller.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or already deleted")
+    return {"success": True, "session_id": session_id}
+
 
 
 

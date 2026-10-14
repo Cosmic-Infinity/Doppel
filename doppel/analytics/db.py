@@ -356,3 +356,14 @@ class TelemetryDB:
                     s["last_command"] = last_cmd_row[0] if last_cmd_row else ""
 
             return sessions
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Purge a session and all its associated commands and phase transitions from the database."""
+        await self._ensure_initialized()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM commands WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM phase_transitions WHERE session_id = ?", (session_id,))
+            cur = await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
