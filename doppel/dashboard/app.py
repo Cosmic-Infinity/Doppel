@@ -260,6 +260,7 @@ async def get_session_report(session_id: str):
     if not matches:
         raise HTTPException(status_code=404, detail="Report not found for session")
 
+    matches.sort(key=lambda p: p.stat().st_mtime)
     report_path = matches[-1]
     with open(report_path, "r", encoding="utf-8") as f:
         content = f.read()

@@ -117,6 +117,7 @@ class IncidentReporter:
                 yield {
                     "stage": "compiling",
                     "delta": ch,
+                    "content": ch,
                     "done": False,
                 }
 
@@ -128,6 +129,7 @@ class IncidentReporter:
                 "stage": "completed",
                 "report_path": str(report_file),
                 "content": report_content,
+                "report": report_content,
                 "done": True,
             }
             return
@@ -159,6 +161,7 @@ class IncidentReporter:
                         yield {
                             "stage": "reasoning",
                             "delta": piece,
+                            "thought": piece,
                             "tokens": chunk.get("tokens", 0),
                             "tokens_per_second": chunk.get("tokens_per_second", 0),
                             "model": chunk.get("model", target_model),
@@ -171,6 +174,7 @@ class IncidentReporter:
                         yield {
                             "stage": "compiling",
                             "delta": piece,
+                            "content": piece,
                             "tokens": chunk.get("tokens", 0),
                             "tokens_per_second": chunk.get("tokens_per_second", 0),
                             "model": chunk.get("model", target_model),
@@ -204,6 +208,7 @@ class IncidentReporter:
                 "stage": "completed",
                 "report_path": str(report_file),
                 "content": clean_report,
+                "report": clean_report,
                 "done": True,
             }
 

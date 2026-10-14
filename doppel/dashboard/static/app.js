@@ -1268,10 +1268,16 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     let accumulatedContent = '';
 
     try {
+      const activeModel = (selectLlmModel && selectLlmModel.value) || (assistantModelSelect && assistantModelSelect.value) || '';
+      const payload = {
+        custom_instructions: customInstructions || null,
+        model: activeModel || null,
+      };
+
       const res = await fetch(`/api/sessions/${sessionId}/report/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ custom_instructions: customInstructions || null }),
+        body: JSON.stringify(payload),
         signal: activeReportAbortController.signal,
       });
 
@@ -1304,8 +1310,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
             const chunk = JSON.parse(dataStr);
             if (chunk.stage === 'reasoning') {
               setReportStatus('reasoning', 'Model is reasoning...');
-              if (chunk.thought) {
-                accumulatedThought += chunk.thought;
+              const piece = chunk.thought || chunk.delta || '';
+              if (piece) {
+                accumulatedThought += piece;
                 if (reportThoughtWrapper) reportThoughtWrapper.classList.remove('hidden');
                 if (reportThoughtBody) {
                   reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, true) + '<span class="assistant-streaming-cursor"></span>';
@@ -1313,15 +1320,17 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
               }
             } else if (chunk.stage === 'compiling') {
               setReportStatus('compiling', 'Compiling markdown report...');
-              if (chunk.content) {
-                accumulatedContent += chunk.content;
+              const piece = chunk.content || chunk.delta || '';
+              if (piece) {
+                accumulatedContent += piece;
                 if (reportContent) {
                   reportContent.innerHTML = renderMarkdown(accumulatedContent, true) + '<span class="assistant-streaming-cursor"></span>';
                 }
               }
-            } else if (chunk.stage === 'ready' || chunk.done) {
-              if (chunk.report) {
-                accumulatedContent = chunk.report;
+            } else if (chunk.stage === 'ready' || chunk.stage === 'completed' || chunk.done) {
+              const finalReport = chunk.report || chunk.content || accumulatedContent;
+              if (finalReport) {
+                accumulatedContent = finalReport;
               }
               setReportStatus('ready', 'Completed');
               if (reportContent) {
@@ -1349,7 +1358,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       }
 
       if (accumulatedContent && reportContent) {
+        if (reportEmpty) reportEmpty.classList.add('hidden');
+        reportContent.classList.remove('hidden');
         reportContent.innerHTML = renderMarkdown(accumulatedContent, false);
+      } else if (!accumulatedContent && activeSessionId === sessionId) {
+        await fetchSessionReport(sessionId);
       }
       if (accumulatedThought && reportThoughtBody) {
         reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, false);
@@ -1511,6 +1524,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const tabId = `tab-${btn.dataset.tab}`;
       const targetContent = document.getElementById(tabId);
       if (targetContent) targetContent.classList.add('active');
+
+      if (btn.dataset.tab === 'report' && activeSessionId) {
+        if (!activeReportAbortController) {
+          fetchSessionReport(activeSessionId);
+        }
+      }
 
     });
   });
