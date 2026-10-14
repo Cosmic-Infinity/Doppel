@@ -1448,8 +1448,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     const line = document.createElement('div');
     line.className = 'terminal-line';
 
-    const routeClass = decision === 'sandbox' ? 'sandbox' : 'deception';
-    const routeLabel = decision === 'sandbox' ? 'Sandbox' : (decision === 'builtin' ? 'Builtin' : 'Deception');
+    const routeClass = decision === 'sandbox' ? 'sandbox' : (decision === 'grounded_deception' ? 'grounded' : 'deception');
+    const routeLabel = decision === 'sandbox' ? 'Sandbox' : (decision === 'grounded_deception' ? 'Grounded' : (decision === 'builtin' ? 'Builtin' : 'Deception'));
     const formattedOutput = output ? escapeHtml(output).replace(/\r\n/g, '\n') : '';
 
     let reasoningHtml = '';

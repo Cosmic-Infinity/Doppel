@@ -374,7 +374,7 @@ class LLMClient:
             )
 
         # Check if Doppel Security Intelligence Assistant is being queried
-        if "security intelligence assistant" in sys_msg or "security assistant" in sys_msg or "assistant" in sys_msg:
+        if "security intelligence assistant" in sys_msg or "security assistant" in sys_msg:
             if "last attack" in user_msg or ("attack" in user_msg and "like" in user_msg):
                 return (
                     "Based on recorded honeypot telemetry, the last intrusion was initiated from remote IP 100.81.22.95 targeting SSH on port 2222 with user 'ubuntu'.\n\n"

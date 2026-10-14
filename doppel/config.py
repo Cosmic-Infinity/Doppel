@@ -36,6 +36,14 @@ class DeceptionSettings(BaseModel):
     intercept_sensitive_files: bool = True
     intercept_missing_tools: bool = True
     dynamic_honeytokens: bool = True
+    # Latency harmonization & jitter simulation
+    simulate_latency: bool = True
+    min_latency_ms: int = 120
+    max_latency_ms: int = 2200
+    jitter_percent: int = 25
+    spike_probability: float = 0.10
+    spike_min_ms: int = 600
+    spike_max_ms: int = 1400
 
 
 class SandboxSettings(BaseModel):
@@ -44,6 +52,7 @@ class SandboxSettings(BaseModel):
     network_disabled: bool = True
     memory_limit: str = "256m"
     cpu_quota: int = 50000
+    timeout_seconds: float = 10.0
 
 
 class AnalyticsSettings(BaseModel):

@@ -1096,6 +1096,10 @@ body {
   color: var(--accent-blue);
 }
 
+.terminal-route-tag.grounded {
+  color: var(--accent-cyan, #06b6d4);
+}
+
 .terminal-route-tag.deception {
   color: var(--accent-amber);
 }

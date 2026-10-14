@@ -149,7 +149,7 @@ sequenceDiagram
 
 ---
 
-## 🆕 What's New
+## What's New
 
 ### Session 1 — Safe IP Allowlist & Benign Command Passthrough
 

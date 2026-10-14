@@ -192,6 +192,11 @@ class SessionManager:
         # Check whether this session's IP is in the safe allowlist
         is_safe_ip = session.remote_ip in self.config.access.safe_ips
 
+        # Measure execution start time for latency harmonization
+        import time as _time
+        cmd_start_time = _time.monotonic()
+        sandbox_timeout = getattr(self.config.sandbox, "timeout_seconds", 10.0)
+
         # 1. Check for interactive privilege elevation (sudo su, su, etc.)
         elevation_cmds = (
             "sudo su", "sudo su -", "sudo -i", "sudo -s",
@@ -204,16 +209,18 @@ class SessionManager:
             session.cwd = "/root"
             decision = RouteDecision.BUILTIN
             output = ""
+            reasoning = None
         else:
-            # Standard routing classification
+            # Standard 3-tier routing classification
             decision, route_reason = self.router.classify_command(cmd_clean, is_safe_ip=is_safe_ip)
             output = ""
             reasoning = None
 
-            # 2. Command execution based on route decision
+            # 2. Command execution based on 3-tier route decision
             if decision == RouteDecision.BUILTIN:
                 output = self._handle_builtin(session, cmd_clean)
             elif decision == RouteDecision.SANDBOX and session.container_id:
+                # Tier 1: Direct Sandbox Execution (Zero-latency, authentic Linux output)
                 try:
                     res = await asyncio.wait_for(
                         asyncio.to_thread(
@@ -223,23 +230,75 @@ class SessionManager:
                             workdir=session.cwd,
                             user=getattr(session, "effective_user", session.username),
                         ),
-                        timeout=20.0,
+                        timeout=sandbox_timeout,
                     )
                     output = (res.stdout or "") + (res.stderr or "")
                 except asyncio.TimeoutError:
-                    logger.warning(f"Command '{cmd_clean}' timed out in sandbox")
-                    output = f"bash: {cmd_clean.split()[0] if cmd_clean.split() else 'command'}: command timed out\n"
+                    logger.warning(f"Command '{cmd_clean}' timed out in sandbox after {sandbox_timeout}s")
+                    output = "Killed\n"
+            elif decision == RouteDecision.GROUNDED_DECEPTION and session.container_id:
+                # Tier 2: Grounded Deception (Run in Sandbox -> LLM Camouflage & Honeytoken Injection)
+                try:
+                    res = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.sandbox_manager.execute_in_sandbox,
+                            container_id=session.container_id,
+                            command=cmd_clean,
+                            workdir=session.cwd,
+                            user=getattr(session, "effective_user", session.username),
+                        ),
+                        timeout=sandbox_timeout,
+                    )
+                    output, reasoning = await self.deception_engine.transform_grounded_output(
+                        command=cmd_clean,
+                        real_stdout=res.stdout or "",
+                        real_stderr=res.stderr or "",
+                        exit_code=res.exit_code,
+                        user=getattr(session, "effective_user", session.username),
+                        cwd=session.cwd,
+                        session_id=session.session_id,
+                        return_reasoning=True,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Grounded command '{cmd_clean}' timed out in sandbox; falling back to LLM synthesis")
+                    output, reasoning = await self.deception_engine.generate_command_output(
+                        command=cmd_clean,
+                        cwd=session.cwd,
+                        user=getattr(session, "effective_user", session.username),
+                        session_history=session.history,
+                        fake_fs=session.fake_fs,
+                        session_id=session.session_id,
+                        return_reasoning=True,
+                    )
+                if session.fake_fs:
+                    mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
+                    if mutated and session.container_id and self.sandbox_manager.is_available:
+                        for fpath in mutated:
+                            file_obj = getattr(session.fake_fs, "_files", {}).get(fpath)
+                            fcontent = file_obj.content if file_obj else ""
+                            asyncio.create_task(
+                                asyncio.to_thread(
+                                    self.sandbox_manager.sync_file_to_sandbox,
+                                    session.container_id,
+                                    fpath,
+                                    fcontent,
+                                )
+                            )
             else:
-                # LLM Deception — inject fake filesystem context and effective user
-                output, reasoning = await self.deception_engine.generate_command_output(
-                    command=cmd_clean,
-                    cwd=session.cwd,
-                    user=getattr(session, "effective_user", session.username),
-                    session_history=session.history,
-                    fake_fs=session.fake_fs,
-                    session_id=session.session_id,
-                    return_reasoning=True,
-                )
+                # Tier 3: Pure Simulation / Containment
+                if route_reason == "dos_containment":
+                    output = "Killed\n"
+                    reasoning = "DoS containment: simulated process termination"
+                else:
+                    output, reasoning = await self.deception_engine.generate_command_output(
+                        command=cmd_clean,
+                        cwd=session.cwd,
+                        user=getattr(session, "effective_user", session.username),
+                        session_history=session.history,
+                        fake_fs=session.fake_fs,
+                        session_id=session.session_id,
+                        return_reasoning=True,
+                    )
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:
                     mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
@@ -256,22 +315,49 @@ class SessionManager:
                                 )
                             )
 
-        # 3. Adaptive tar-pit delay — scales with attacker type
-        base_delay_ms = self.config.deception.tar_pit_delay_ms
-        if base_delay_ms > 0:
-            attacker_type = (
-                session.profiler_state.attacker_type
-                if session.profiler_state else "unknown"
-            )
-            # Bots get max delay to waste their resources;
-            # humans get a fraction so deception feels like real I/O.
-            multipliers = {"bot": 3.0, "semi-automated": 1.5, "human": 0.3, "unknown": 1.0}
-            multiplier = multipliers.get(attacker_type, 1.0)
-            effective_ms = base_delay_ms * multiplier
-            # Add ±20 % jitter so automated tools cannot fingerprint the constant delay
-            import random as _random
-            jitter = _random.uniform(0.8, 1.2)
-            await asyncio.sleep(effective_ms * jitter / 1000.0)
+        # 3. Latency Harmonization & Jitter Simulation (Timing Side-Channel Mitigation)
+        import random as _random
+        decep_cfg = getattr(self.config, "deception", None)
+        simulate_latency = getattr(decep_cfg, "simulate_latency", True) if decep_cfg else True
+
+        if simulate_latency:
+            tokens = cmd_clean.split()
+            first_cmd = tokens[0].lower() if tokens else ""
+            heavy_cmds = {"find", "grep", "du", "tree", "tar", "zip", "unzip", "nmap", "sqlmap", "ps", "top"}
+            medium_cmds = {"ls", "cat", "df", "netstat", "ss", "head", "tail", "wc", "sort", "uniq", "dmesg", "journalctl"}
+
+            if first_cmd in heavy_cmds or len(cmd_clean) > 80 or "|" in cmd_clean:
+                base_target_ms = _random.uniform(900, 1800)
+            elif first_cmd in medium_cmds:
+                base_target_ms = _random.uniform(300, 700)
+            else:
+                base_target_ms = _random.uniform(120, 280)
+
+            # Natural OS/network jitter
+            jitter_pct = getattr(decep_cfg, "jitter_percent", 25) / 100.0
+            jitter_mult = _random.uniform(1.0 - jitter_pct, 1.0 + jitter_pct)
+            target_ms = base_target_ms * jitter_mult
+
+            # 10% probability of an occasional cloud/disk lag spike (600ms - 1400ms)
+            spike_prob = getattr(decep_cfg, "spike_probability", 0.10)
+            if _random.random() < spike_prob:
+                target_ms += _random.uniform(
+                    getattr(decep_cfg, "spike_min_ms", 600),
+                    getattr(decep_cfg, "spike_max_ms", 1400),
+                )
+
+            # Tar-pit multiplier if attacker is a bot
+            base_tar_pit = getattr(decep_cfg, "tar_pit_delay_ms", 0)
+            if base_tar_pit > 0:
+                attacker_type = session.profiler_state.attacker_type if session.profiler_state else "unknown"
+                multipliers = {"bot": 3.0, "semi-automated": 1.5, "human": 0.3, "unknown": 1.0}
+                target_ms += base_tar_pit * multipliers.get(attacker_type, 1.0)
+
+            # Budget clamp: sleep only the remaining difference so LLM latency is masked
+            elapsed_ms = (_time.monotonic() - cmd_start_time) * 1000.0
+            remaining_ms = target_ms - elapsed_ms
+            if remaining_ms > 0:
+                await asyncio.sleep(remaining_ms / 1000.0)
 
         # 4. Record turn in session memory (with wall-clock timestamp for timing analysis)
         import time as _time

@@ -17,28 +17,41 @@ def test_builtin_routing():
 
 
 def test_sensitive_file_interception():
+    # Tier 2: With sandbox available, sensitive files route to GROUNDED_DECEPTION
     router = HybridRouter(intercept_sensitive_files=True, sandbox_available=True)
 
     decision, reason = router.classify_command("cat /etc/shadow")
-    assert decision == RouteDecision.LLM_DECEPTION
+    assert decision == RouteDecision.GROUNDED_DECEPTION
     assert "sensitive_file" in reason
 
     decision, reason = router.classify_command("head -n 20 .env")
-    assert decision == RouteDecision.LLM_DECEPTION
+    assert decision == RouteDecision.GROUNDED_DECEPTION
 
     decision, reason = router.classify_command("cat ~/.aws/credentials")
+    assert decision == RouteDecision.GROUNDED_DECEPTION
+
+    # Tier 3 fallback: Without sandbox, sensitive files route to LLM_DECEPTION
+    router_offline = HybridRouter(intercept_sensitive_files=True, sandbox_available=False)
+    decision, reason = router_offline.classify_command("cat /etc/shadow")
     assert decision == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
 
 
 def test_credential_harvesting_regex():
     router = HybridRouter(intercept_sensitive_files=True, sandbox_available=True)
 
     decision, reason = router.classify_command("grep -ri 'password' /var/www")
+    assert decision == RouteDecision.GROUNDED_DECEPTION
+    assert reason == "credential_harvesting_grounded"
+
+    router_offline = HybridRouter(intercept_sensitive_files=True, sandbox_available=False)
+    decision, reason = router_offline.classify_command("grep -ri 'password' /var/www")
     assert decision == RouteDecision.LLM_DECEPTION
     assert reason == "credential_harvesting"
 
 
 def test_missing_tools_interception():
+    # Penetration testing tools (Tier 3) always route to LLM_DECEPTION
     router = HybridRouter(intercept_missing_tools=True, sandbox_available=True)
 
     decision, reason = router.classify_command("nmap -sV localhost")
@@ -50,12 +63,12 @@ def test_missing_tools_interception():
 
 
 def test_sandbox_vs_simulation_fallback():
-    # When sandbox is available, standard command routes to SANDBOX
+    # When sandbox is available, standard command routes to SANDBOX (Tier 1)
     router_with_sandbox = HybridRouter(sandbox_available=True)
     decision, reason = router_with_sandbox.classify_command("ls -la /tmp")
     assert decision == RouteDecision.SANDBOX
 
-    # When sandbox is unavailable, standard command falls back to LLM_DECEPTION
+    # When sandbox is unavailable, standard command falls back to LLM_DECEPTION (Tier 3)
     router_without_sandbox = HybridRouter(sandbox_available=False)
     decision, reason = router_without_sandbox.classify_command("ls -la /tmp")
     assert decision == RouteDecision.LLM_DECEPTION
@@ -64,17 +77,32 @@ def test_sandbox_vs_simulation_fallback():
 def test_system_discovery_and_fingerprinting_routing():
     router = HybridRouter(sandbox_available=True)
 
-    # System queries must intercept to LLM deception
-    for cmd in ["uname -a", "ps aux", "shutdown", "reboot", "ip a", "netstat -tlpn", "apt update"]:
+    # Process and network discovery commands route to GROUNDED_DECEPTION (Tier 2) when sandbox available
+    for cmd in ["ps aux", "ip a", "netstat -tlpn"]:
         decision, reason = router.classify_command(cmd)
-        assert decision == RouteDecision.LLM_DECEPTION
-        assert "system_discovery" in reason
+        assert decision == RouteDecision.GROUNDED_DECEPTION
+        assert "grounded_discovery" in reason
 
-    # Release / container file targets must intercept to LLM deception
+    # Release / container file targets route to GROUNDED_DECEPTION (Tier 2)
     for target in ["cat /etc/os-release", "cat /proc/version", "cat /.dockerenv"]:
         decision, reason = router.classify_command(target)
-        assert decision == RouteDecision.LLM_DECEPTION
+        assert decision == RouteDecision.GROUNDED_DECEPTION
         assert "sensitive_file" in reason
+
+
+def test_dos_containment_routing():
+    router = HybridRouter(sandbox_available=True)
+
+    # Fork bombs and disk destruction route to LLM_DECEPTION (Tier 3 containment)
+    fork_bomb = ":(){ :|:& };:"
+    decision, reason = router.classify_command(fork_bomb)
+    assert decision == RouteDecision.LLM_DECEPTION
+    assert reason == "dos_containment"
+
+    dd_zero = "dd if=/dev/zero of=/dev/sda"
+    decision, reason = router.classify_command(dd_zero)
+    assert decision == RouteDecision.LLM_DECEPTION
+    assert reason == "dos_containment"
 
 
 def test_benign_commands_routing_and_priority():
@@ -98,19 +126,19 @@ def test_benign_commands_routing_and_priority():
     assert dec == RouteDecision.SANDBOX
     assert reason == "benign_command"
 
-    # CRITICAL: Even though 'cat' and 'grep' are in benign_commands,
-    # sensitive file access and credential harvesting MUST be intercepted by LLM!
+    # Even though 'cat' and 'grep' are in benign_commands,
+    # sensitive file access and credential harvesting MUST be intercepted by Grounded Deception!
     dec, reason = router.classify_command("cat /etc/shadow")
-    assert dec == RouteDecision.LLM_DECEPTION
+    assert dec == RouteDecision.GROUNDED_DECEPTION
     assert "sensitive_file" in reason
 
     dec, reason = router.classify_command("cat .env")
-    assert dec == RouteDecision.LLM_DECEPTION
+    assert dec == RouteDecision.GROUNDED_DECEPTION
     assert "sensitive_file" in reason
 
     dec, reason = router.classify_command("grep -i password /var/www/html/app.py")
-    assert dec == RouteDecision.LLM_DECEPTION
-    assert reason == "credential_harvesting"
+    assert dec == RouteDecision.GROUNDED_DECEPTION
+    assert reason == "credential_harvesting_grounded"
 
 
 def test_safe_ip_passthrough():
@@ -121,11 +149,11 @@ def test_safe_ip_passthrough():
         benign_commands={"ls"},
     )
 
-    # Untrusted session (is_safe_ip=False): intercepts sensitive targets
+    # Untrusted session (is_safe_ip=False): intercepts sensitive targets (Tier 2)
     dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=False)
-    assert dec == RouteDecision.LLM_DECEPTION
+    assert dec == RouteDecision.GROUNDED_DECEPTION
 
-    # Trusted session (is_safe_ip=True): passes through to sandbox
+    # Trusted session (is_safe_ip=True): passes through directly to sandbox (Tier 1)
     dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=True)
     assert dec == RouteDecision.SANDBOX
     assert reason == "safe_ip_passthrough"

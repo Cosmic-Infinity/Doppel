@@ -9,6 +9,7 @@ logger = logging.getLogger("doppel.router")
 class RouteDecision(Enum):
     BUILTIN = "builtin"
     SANDBOX = "sandbox"
+    GROUNDED_DECEPTION = "grounded_deception"
     LLM_DECEPTION = "llm_deception"
 
 
@@ -57,10 +58,9 @@ DECEPTION_TOOLS: Set[str] = {
     "msfconsole",
 }
 
-# System fingerprinting, kernel inspection, network config, and admin commands
-# that could betray container isolation or host kernel details
-SYSTEM_DISCOVERY_COMMANDS: Set[str] = {
-    "uname",
+# Commands where real Linux structure is necessary, but container telltales must be camouflaged
+# or honeytokens injected (Tier 2: Grounded Deception)
+GROUNDED_COMMANDS: Set[str] = {
     "ps",
     "top",
     "htop",
@@ -69,32 +69,27 @@ SYSTEM_DISCOVERY_COMMANDS: Set[str] = {
     "route",
     "netstat",
     "ss",
-    "uptime",
-    "w",
-    "who",
-    "last",
     "lsof",
-    "dpkg",
-    "apt",
-    "apt-get",
     "systemctl",
     "service",
     "journalctl",
-    "shutdown",
-    "reboot",
-    "poweroff",
-    "init",
-    "sudo",
-    "su",
     "crontab",
-    "lsb_release",
     "hostnamectl",
     "dmesg",
+    "env",
+    "printenv",
+    "export",
 }
+
+# Patterns indicating denial of service or container escape attempts that must stay in Tier 3 containment
+DOS_CONTAINMENT_PATTERNS = [
+    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),  # fork bomb
+    re.compile(r"mkfs|dd\s+if=/dev/zero\s+of=/dev/"),
+]
 
 
 class HybridRouter:
-    """Classifies commands and routes them either to the real isolated sandbox or the LLM deception engine."""
+    """Classifies commands and routes them across the 3-Tier Execution Architecture."""
 
     def __init__(
         self,
@@ -107,7 +102,7 @@ class HybridRouter:
         self.intercept_sensitive_files = intercept_sensitive_files
         self.intercept_missing_tools = intercept_missing_tools
         self.sandbox_available = sandbox_available
-        # Commands always routed to the real sandbox (never deception)
+        # Commands always routed directly to the real sandbox (never deception)
         self.benign_commands: Set[str] = benign_commands or set()
         # When True, ALL commands go to sandbox — no deception at all
         self.safe_ip_mode = safe_ip_mode
@@ -130,37 +125,48 @@ class HybridRouter:
         if safe_ip_active and self.sandbox_available:
             return RouteDecision.SANDBOX, "safe_ip_passthrough"
 
-        # 3. Check for missing/specialized penetration testing tools
+        # 3. Check for DoS / fork bomb payloads (Tier 3 Containment)
+        for pattern in DOS_CONTAINMENT_PATTERNS:
+            if pattern.search(cmd_clean):
+                return RouteDecision.LLM_DECEPTION, "dos_containment"
+
+        # 4. Check for payload downloaders (curl ... | sh, wget) (Tier 3 Containment)
+        if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
+            return RouteDecision.LLM_DECEPTION, "payload_download"
+
+        # 5. Check for missing/specialized penetration testing tools (Tier 3 Simulation)
         if self.intercept_missing_tools and any(tool in binary for tool in DECEPTION_TOOLS):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
 
-        # 4. Check for system discovery & fingerprinting queries (routed to deception to prevent container telltales)
-        if binary in SYSTEM_DISCOVERY_COMMANDS:
-            return RouteDecision.LLM_DECEPTION, f"system_discovery:{binary}"
-
-        # 5. Check if command touches sensitive files or honeytokens
+        # 6. Check if command touches sensitive files or honeytokens (Tier 2 Grounded if container available)
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
 
             # Regex search for active credential harvesting attempts (e.g. grep -i password)
             if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or ("find" in binary and ("perm" in cmd_lower or "pass" in cmd_lower)):
+                if self.sandbox_available:
+                    return RouteDecision.GROUNDED_DECEPTION, "credential_harvesting_grounded"
                 return RouteDecision.LLM_DECEPTION, "credential_harvesting"
 
             for pattern in SENSITIVE_TARGETS:
                 if pattern in cmd_lower:
+                    if self.sandbox_available:
+                        return RouteDecision.GROUNDED_DECEPTION, f"sensitive_file_grounded:{pattern}"
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
-        # 6. Check for payload downloaders (curl ... | sh, wget)
-        if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
-            return RouteDecision.LLM_DECEPTION, "payload_download"
+        # 7. Check for system discovery & process/network inspection (Tier 2 Grounded if container available)
+        if binary in GROUNDED_COMMANDS:
+            if self.sandbox_available:
+                return RouteDecision.GROUNDED_DECEPTION, f"grounded_discovery:{binary}"
+            return RouteDecision.LLM_DECEPTION, f"system_discovery:{binary}"
 
-        # 7. Explicitly benign commands: route to real sandbox when available
+        # 8. Explicitly benign commands: route to real sandbox when available
         if binary in self.benign_commands and self.sandbox_available:
             return RouteDecision.SANDBOX, "benign_command"
 
-        # 8. If sandbox is active and available, execute real command safely
+        # 9. Standard commands: Tier 1 Direct Sandbox Execution
         if self.sandbox_available:
             return RouteDecision.SANDBOX, "standard_execution"
 
-        # 9. Fallback to full LLM terminal simulation
+        # 10. Fallback to full LLM terminal simulation when Docker is disabled or offline
         return RouteDecision.LLM_DECEPTION, "simulated_terminal"
