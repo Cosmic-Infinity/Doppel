@@ -124,8 +124,31 @@ class DockerSandboxManager:
                     f"chown -R '{username}' /home/{username} 2>/dev/null || true; "
                 ) if username and username != "root" else ""
 
+                who_wrapper = (
+                    "printf '#!/bin/sh\\n' > /usr/local/bin/who && "
+                    "printf 'if [ $# -eq 0 ] || [ \"$1\" = \"-m\" ] || { [ $# -eq 2 ] && { [ \"$1 $2\" = \"am i\" ] || [ \"$1 $2\" = \"am I\" ] || [ \"$1 $2\" = \"mom likes\" ]; }; }; then\\n' >> /usr/local/bin/who && "
+                    "printf '    printf \"ubuntu   pts/0        %s (10.0.4.1)\\n\" \"$(date \"+%%Y-%%m-%%d %%H:%%M\")\"\\n' >> /usr/local/bin/who && "
+                    "printf '    exit 0\\n' >> /usr/local/bin/who && "
+                    "printf 'fi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ \"$1\" = \"-q\" ]; then\\n    printf \"ubuntu\\n# users=1\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ \"$1\" = \"-b\" ]; then\\n    printf \"         system boot  2026-08-30 18:20\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ \"$1\" = \"-r\" ]; then\\n    printf \"         run-level 5  2026-08-30 18:20\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ $# -gt 0 ]; then\\n    printf \"who: extra operand '\''%%s'\''\\nTry '\''who --help'\'' for more information.\\n\" \"$1\"\\n    exit 1\\nfi\\n' >> /usr/local/bin/who && "
+                    "chmod +x /usr/local/bin/who 2>/dev/null || true; "
+                )
+
+                decoy_seed = (
+                    "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
+                    "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:dGVzdF9rZXlfZG9wcGVsX2NhbmFyeV9hdXRoMQ==\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
+                    "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
+                    "printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > /home/ubuntu/.bash_history && "
+                    "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
+                    "chmod 600 /home/ubuntu/.bash_history 2>/dev/null || true; "
+                    "chown -R 1000:1000 /var/www/html /home/ubuntu 2>/dev/null || true; "
+                )
+
                 bootstrap_script = (
-                    "mkdir -p /home/ubuntu /var/www/html /root /var/log /tmp && "
+                    "mkdir -p /home/ubuntu /var/www/html /root /var/log /tmp /usr/local/bin && "
                     "(id -u ubuntu >/dev/null 2>&1 || adduser -D -u 1000 ubuntu 2>/dev/null || useradd -m -u 1000 ubuntu 2>/dev/null || true) && "
                     "chown -R 1000:1000 /home/ubuntu 2>/dev/null || true; "
                     f"{user_cmds}"
@@ -136,7 +159,9 @@ class DockerSandboxManager:
                     "printf '#!/bin/sh\\nexec ls -la \"$@\"\\n' > /bin/ll 2>/dev/null && chmod +x /bin/ll 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -A \"$@\"\\n' > /bin/la 2>/dev/null && chmod +x /bin/la 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -CF \"$@\"\\n' > /bin/l 2>/dev/null && chmod +x /bin/l 2>/dev/null || true; "
-                    "touch /tmp/.doppel_env && chmod 666 /tmp/.doppel_env 2>/dev/null || true"
+                    "touch /tmp/.doppel_env && chmod 666 /tmp/.doppel_env 2>/dev/null || true; "
+                    f"{who_wrapper}"
+                    f"{decoy_seed}"
                 )
                 container.exec_run(["/bin/sh", "-c", bootstrap_script])
             except Exception as init_err:

@@ -1394,6 +1394,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     try {
       const res = await fetch(`/api/sessions/${sessionId}/report`);
+      if (res.status === 202) {
+        setReportStatus('compiling', 'Compiling incident report...');
+        if (reportEmpty) reportEmpty.classList.add('hidden');
+        if (reportContent) {
+          reportContent.classList.remove('hidden');
+          reportContent.innerHTML = `
+            <div class="assistant-loading-indicator">
+              <span class="assistant-spinner"></span>
+              <span>Compiling incident report in background...</span>
+            </div>
+          `;
+        }
+        setTimeout(() => {
+          if (activeSessionId === sessionId && !activeReportAbortController) {
+            fetchSessionReport(sessionId);
+          }
+        }, 3000);
+        return;
+      }
       if (res.ok) {
         const markdown = await res.text();
         if (markdown && markdown.trim()) {

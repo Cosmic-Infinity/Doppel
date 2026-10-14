@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -258,6 +258,11 @@ async def get_session_report(session_id: str):
     reports_dir = Path(controller.config.analytics.reports_dir)
     matches = list(reports_dir.glob(f"incident_{session_id[:8]}_*.md"))
     if not matches:
+        if session_id in controller.active_report_tasks and not controller.active_report_tasks[session_id].done():
+            return JSONResponse(
+                status_code=202,
+                content={"status": "compiling", "message": "Incident report is compiling in the background..."},
+            )
         raise HTTPException(status_code=404, detail="Report not found for session")
 
     matches.sort(key=lambda p: p.stat().st_mtime)
