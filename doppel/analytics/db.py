@@ -43,7 +43,8 @@ class TelemetryDB:
                     attacker_type TEXT DEFAULT 'unknown',
                     type_confidence REAL DEFAULT 0.0,
                     current_phase TEXT DEFAULT 'Reconnaissance',
-                    credential_risk TEXT
+                    credential_risk TEXT,
+                    campaign_id TEXT
                 )
             """)
             await db.execute("""
@@ -137,6 +138,15 @@ class TelemetryDB:
                 logger.warning(f"Database schema migration notice: {mig_err}")
 
             await db.commit()
+
+            # Idempotent migration: add campaign_id if upgrading from older schema
+            try:
+                await db.execute("ALTER TABLE sessions ADD COLUMN campaign_id TEXT")
+                await db.commit()
+                logger.info("Migrated sessions table: added campaign_id column")
+            except Exception:
+                pass  # Column already exists
+
             self._initialized = True
             logger.info(f"Telemetry database initialized at {self.db_path}")
 
@@ -336,6 +346,164 @@ class TelemetryDB:
                 session_dict["commands"] = [dict(r) for r in cmd_rows]
 
             return session_dict
+
+    # ── Session Replay ────────────────────────────────────────────────────────
+
+    async def get_session_replay(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return session metadata plus commands with inter-command delay_ms fields."""
+        await self._ensure_initialized()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ) as cur:
+                sess_row = await cur.fetchone()
+            if not sess_row:
+                return None
+            session = dict(sess_row)
+
+            async with db.execute(
+                "SELECT * FROM commands WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ) as cur:
+                rows = [dict(r) for r in await cur.fetchall()]
+
+        # Compute inter-command timing from stored timestamps
+        events = []
+        prev_ts: Optional[datetime] = None
+        for cmd in rows:
+            ts_str = cmd.get("timestamp") or ""
+            try:
+                ts = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                ts = None
+            delay_ms = 0
+            if ts and prev_ts:
+                delta = (ts - prev_ts).total_seconds()
+                delay_ms = max(0, int(delta * 1000))
+            events.append({**cmd, "delay_ms": delay_ms})
+            if ts:
+                prev_ts = ts
+
+        session["events"] = events
+        session["total_duration_ms"] = (
+            sum(e["delay_ms"] for e in events[1:]) if len(events) > 1 else 0
+        )
+        return session
+
+    # ── Campaign Correlation ──────────────────────────────────────────────────
+
+    async def correlate_campaigns(self) -> int:
+        """
+        Group sessions into campaign_id buckets by shared attacker signals:
+          1. Same remote_ip
+          2. Same username+password credential pair
+          3. Same command playbook fingerprint (top-3 commands sorted)
+
+        Returns the number of distinct campaigns written.
+        """
+        await self._ensure_initialized()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT session_id, remote_ip, username, password FROM sessions") as cur:
+                sessions = [dict(r) for r in await cur.fetchall()]
+
+            # Build command fingerprint per session (sorted top-3 commands)
+            fingerprints: Dict[str, str] = {}
+            for s in sessions:
+                async with db.execute(
+                    "SELECT command FROM commands WHERE session_id = ? ORDER BY id ASC LIMIT 10",
+                    (s["session_id"],),
+                ) as cur:
+                    cmds = [r[0].strip().split()[0] for r in await cur.fetchall() if r[0] and r[0].strip()]
+                top3 = "|".join(sorted(set(cmds))[:3])
+                fingerprints[s["session_id"]] = top3
+
+            # Union-Find for grouping
+            parent: Dict[str, str] = {s["session_id"]: s["session_id"] for s in sessions}
+
+            def find(x: str) -> str:
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+
+            def union(a: str, b: str):
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+
+            # Group by shared IP
+            ip_map: Dict[str, str] = {}
+            for s in sessions:
+                ip = s.get("remote_ip") or ""
+                if ip:
+                    if ip in ip_map:
+                        union(s["session_id"], ip_map[ip])
+                    else:
+                        ip_map[ip] = s["session_id"]
+
+            # Group by shared credential pair (non-empty)
+            cred_map: Dict[str, str] = {}
+            for s in sessions:
+                u, p = (s.get("username") or ""), (s.get("password") or "")
+                if u and p:
+                    key = f"{u}:{p}"
+                    if key in cred_map:
+                        union(s["session_id"], cred_map[key])
+                    else:
+                        cred_map[key] = s["session_id"]
+
+            # Group by command fingerprint (non-empty, min 2 commands)
+            fp_map: Dict[str, str] = {}
+            for s in sessions:
+                fp = fingerprints.get(s["session_id"], "")
+                if fp and "|" in fp:  # at least 2 distinct commands
+                    if fp in fp_map:
+                        union(s["session_id"], fp_map[fp])
+                    else:
+                        fp_map[fp] = s["session_id"]
+
+            # Assign stable campaign IDs (root → deterministic hex prefix)
+            import hashlib
+            root_to_campaign: Dict[str, str] = {}
+            for s in sessions:
+                root = find(s["session_id"])
+                if root not in root_to_campaign:
+                    cid = "cmp-" + hashlib.md5(root.encode()).hexdigest()[:8]
+                    root_to_campaign[root] = cid
+                campaign_id = root_to_campaign[root]
+                await db.execute(
+                    "UPDATE sessions SET campaign_id = ? WHERE session_id = ?",
+                    (campaign_id, s["session_id"]),
+                )
+
+            await db.commit()
+            return len(root_to_campaign)
+
+    async def get_campaigns(self) -> List[Dict[str, Any]]:
+        """Return grouped campaign summary list."""
+        await self._ensure_initialized()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT campaign_id,
+                       COUNT(*) AS session_count,
+                       COUNT(DISTINCT remote_ip) AS unique_ips,
+                       MAX(max_threat_score) AS peak_threat,
+                       MIN(start_time) AS first_seen,
+                       MAX(COALESCE(end_time, start_time)) AS last_seen,
+                       GROUP_CONCAT(DISTINCT username) AS usernames,
+                       GROUP_CONCAT(DISTINCT remote_ip) AS ips
+                FROM sessions
+                WHERE campaign_id IS NOT NULL
+                GROUP BY campaign_id
+                ORDER BY last_seen DESC
+                """
+            ) as cur:
+                rows = [dict(r) for r in await cur.fetchall()]
+        return rows
 
     async def get_all_sessions(self) -> List[Dict[str, Any]]:
         await self._ensure_initialized()
