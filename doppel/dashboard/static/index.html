@@ -104,7 +104,7 @@
               <span class="diag-pill" id="pill-llm">Checking...</span>
             </div>
             <p class="card-desc" id="desc-llm">Probing local Ollama / vLLM endpoint...</p>
-            
+
             <div class="card-controls">
               <div class="control-row">
                 <label for="select-llm-model">Active Model</label>
@@ -221,10 +221,22 @@
           <span class="count-pill" id="session-count-pill">0</span>
         </div>
 
+        <div class="sidebar-tabs">
+          <button class="sidebar-tab active" data-sidebar="sessions">Sessions</button>
+          <button class="sidebar-tab" data-sidebar="campaigns">Campaigns</button>
+        </div>
+
         <div class="sessions-list" id="sessions-container">
           <div class="empty-state" id="sessions-empty">
             <p>No active attack probes.</p>
             <span class="hint">Connect via SSH to observe live attacker sessions here.</span>
+          </div>
+        </div>
+
+        <div class="sessions-list hidden" id="campaigns-container">
+          <div class="empty-state" id="campaigns-empty">
+            <p>No campaigns detected yet.</p>
+            <span class="hint">Campaigns group attacker sessions by shared IP, credentials, or command patterns.</span>
           </div>
         </div>
       </aside>
@@ -279,6 +291,7 @@
           <div class="tabs-bar">
             <button class="tab-btn active" data-tab="terminal">Terminal Feed</button>
             <button class="tab-btn" data-tab="telemetry">MITRE Telemetry</button>
+            <button class="tab-btn" data-tab="replay">Replay</button>
             <button class="tab-btn" data-tab="report">Incident Report</button>
           </div>
 
@@ -312,7 +325,32 @@
             </div>
           </div>
 
-          <!-- Tab 3: Incident Report -->
+          <!-- Tab 3: Replay -->
+          <div class="tab-content" id="tab-replay">
+            <div class="replay-view">
+              <div class="replay-controls">
+                <button class="btn btn-secondary btn-sm" id="replay-play-btn">▶ Play</button>
+                <button class="btn btn-secondary btn-sm" id="replay-pause-btn" disabled>⏸ Pause</button>
+                <button class="btn btn-secondary btn-sm" id="replay-reset-btn">↺ Reset</button>
+                <label class="replay-speed-label">Speed:
+                  <select id="replay-speed" class="select-input-sm">
+                    <option value="4">4× Fast</option>
+                    <option value="2">2× Fast</option>
+                    <option value="1" selected>1× Real-time</option>
+                    <option value="0.5">0.5× Slow</option>
+                  </select>
+                </label>
+                <span class="replay-progress-label">
+                  Step <span id="replay-step-cur">0</span> / <span id="replay-step-total">0</span>
+                </span>
+              </div>
+              <div class="terminal-window" id="replay-terminal-window">
+                <div class="terminal-body" id="replay-terminal-output"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 4: Incident Report -->
           <div class="tab-content" id="tab-report">
             <div class="report-view" id="report-view">
               <div class="report-toolbar" id="report-toolbar">

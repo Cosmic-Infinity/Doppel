@@ -253,6 +253,34 @@ async def get_session_details(session_id: str):
     return details
 
 
+@app.get("/api/sessions/{session_id}/replay")
+async def get_session_replay(session_id: str):
+    """Return session commands with inter-command delay_ms for timeline replay."""
+    data = await controller.db.get_session_replay(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
+@app.get("/api/campaigns")
+async def get_campaigns():
+    """Return attacker campaign groups correlated by IP, credential, and command fingerprint."""
+    # Re-run correlation on every call so it reflects latest sessions
+    campaign_count = await controller.db.correlate_campaigns()
+    campaigns = await controller.db.get_campaigns()
+    return {"campaign_count": campaign_count, "campaigns": campaigns}
+
+
+@app.get("/api/campaigns/{campaign_id}")
+async def get_campaign_sessions(campaign_id: str):
+    """Return all sessions belonging to a campaign."""
+    all_sessions = await controller.db.get_all_sessions()
+    members = [s for s in all_sessions if s.get("campaign_id") == campaign_id]
+    if not members:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"campaign_id": campaign_id, "sessions": members}
+
+
 @app.get("/api/sessions/{session_id}/report")
 async def get_session_report(session_id: str):
     reports_dir = Path(controller.config.analytics.reports_dir)
