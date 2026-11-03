@@ -2046,3 +2046,271 @@ html.init-dashboard #view-dashboard {
 
 
 
+
+.btn:disabled,
+.btn:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background-color: var(--bg-surface-elevated);
+}
+
+.terminal-route-tag.builtin {
+  color: var(--text-muted);
+}
+
+/* =======================================================
+   Sidebar Tabs (Sessions / Campaigns)
+   ======================================================= */
+.sidebar-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 9px 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.sidebar-tab:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--border-focus);
+}
+
+/* =======================================================
+   Campaigns
+   ======================================================= */
+.campaign-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  transition: border-color 0.15s;
+}
+
+.campaign-card.expanded {
+  border-color: #333c4f;
+}
+
+.campaign-card-header {
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background-color 0.15s;
+}
+
+.campaign-card-header:hover {
+  background-color: var(--bg-surface-elevated);
+}
+
+.campaign-card-header:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
+.campaign-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.campaign-card.expanded .campaign-chevron {
+  transform: rotate(90deg);
+}
+
+.campaign-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.campaign-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-left: 18px;
+}
+
+.campaign-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding-left: 18px;
+}
+
+.campaign-tag {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+.campaign-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 8px 8px;
+}
+
+.campaign-members .session-card {
+  background: var(--bg-base);
+}
+
+.campaign-members-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 4px;
+}
+
+.campaign-pill {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.campaign-pill:hover {
+  background: rgba(59, 130, 246, 0.22);
+}
+
+/* =======================================================
+   Session Replay
+   ======================================================= */
+.replay-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.replay-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.replay-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.replay-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.replay-option input[type="checkbox"] {
+  accent-color: var(--accent-blue);
+  margin: 0;
+}
+
+.select-input-sm {
+  height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.replay-progress {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay-progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--bg-surface-elevated);
+  overflow: hidden;
+}
+
+.replay-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent-blue);
+  transition: width 0.2s linear;
+}
+
+.replay-progress-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.replay-progress-sep {
+  margin: 0 4px;
+}
+
+.replay-notice {
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.replay-session-start {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+
+.terminal-line.awaiting-output::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 4px;
+  vertical-align: text-bottom;
+  background: var(--text-secondary);
+  animation: replay-cursor-blink 1s steps(1) infinite;
+}
+
+@keyframes replay-cursor-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-line.awaiting-output::after { animation: none; }
+  .replay-progress-fill,
+  .campaign-chevron { transition: none; }
+}

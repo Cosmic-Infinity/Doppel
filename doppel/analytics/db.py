@@ -1,11 +1,23 @@
 import json
+import hashlib
 import logging
 import aiosqlite
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from doppel.core.credential_analyzer import CredentialAnalyzer
 
 logger = logging.getLogger("doppel.analytics.db")
+
+_credential_analyzer: Optional[CredentialAnalyzer] = None
+
+
+def _get_credential_analyzer() -> CredentialAnalyzer:
+    global _credential_analyzer
+    if _credential_analyzer is None:
+        _credential_analyzer = CredentialAnalyzer()
+    return _credential_analyzer
 
 
 class TelemetryDB:
@@ -44,7 +56,8 @@ class TelemetryDB:
                     type_confidence REAL DEFAULT 0.0,
                     current_phase TEXT DEFAULT 'Reconnaissance',
                     credential_risk TEXT,
-                    campaign_id TEXT
+                    campaign_id TEXT,
+                    campaign_reasons TEXT
                 )
             """)
             await db.execute("""
@@ -61,6 +74,8 @@ class TelemetryDB:
                     tactics TEXT,
                     threat_score INTEGER,
                     reasoning TEXT,
+                    duration_ms INTEGER,
+                    prompt_user TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             """)
@@ -112,6 +127,8 @@ class TelemetryDB:
                     "credential_risk": "TEXT",
                     "summary": "TEXT",
                     "max_threat_score": "INTEGER DEFAULT 0",
+                    "campaign_id": "TEXT",
+                    "campaign_reasons": "TEXT",
                 }
                 for col_name, col_type in needed_session_cols.items():
                     if col_name not in cols:
@@ -127,25 +144,22 @@ class TelemetryDB:
                     "tactics": "TEXT",
                     "threat_score": "INTEGER DEFAULT 0",
                     "reasoning": "TEXT",
+                    "duration_ms": "INTEGER",
+                    "prompt_user": "TEXT",
                 }
                 for col_name, col_type in needed_cmd_cols.items():
                     if col_name not in cmd_cols:
                         await db.execute(f"ALTER TABLE commands ADD COLUMN {col_name} {col_type}")
 
                 # Clean up any orphaned sessions from previous runs
-                await db.execute("UPDATE sessions SET end_time = CURRENT_TIMESTAMP WHERE end_time IS NULL")
+                await db.execute(
+                    "UPDATE sessions SET end_time = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now') "
+                    "WHERE end_time IS NULL"
+                )
             except Exception as mig_err:
                 logger.warning(f"Database schema migration notice: {mig_err}")
 
             await db.commit()
-
-            # Idempotent migration: add campaign_id if upgrading from older schema
-            try:
-                await db.execute("ALTER TABLE sessions ADD COLUMN campaign_id TEXT")
-                await db.commit()
-                logger.info("Migrated sessions table: added campaign_id column")
-            except Exception:
-                pass  # Column already exists
 
             self._initialized = True
             logger.info(f"Telemetry database initialized at {self.db_path}")
@@ -194,9 +208,17 @@ class TelemetryDB:
         route_decision: str,
         threat_meta: Optional[Dict[str, Any]] = None,
         reasoning: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        prompt_user: Optional[str] = None,
     ) -> int:
+        """
+        Record one command. `timestamp` is when the command was received and
+        `cwd`/`prompt_user` describe the prompt it was typed at; `duration_ms`
+        is how long the response took to come back.
+        """
         await self._ensure_initialized()
-        now = datetime.now(timezone.utc).isoformat()
+        now = timestamp or datetime.now(timezone.utc).isoformat()
         meta = threat_meta or {}
         tactics_str = json.dumps(meta.get("tactics", []))
         score = meta.get("threat_score", 0)
@@ -206,8 +228,9 @@ class TelemetryDB:
                 """
                 INSERT INTO commands
                 (session_id, timestamp, cwd, command, output, route_decision,
-                 technique_id, technique_name, tactics, threat_score, reasoning)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 technique_id, technique_name, tactics, threat_score, reasoning,
+                 duration_ms, prompt_user)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -221,6 +244,8 @@ class TelemetryDB:
                     tactics_str,
                     score,
                     reasoning,
+                    duration_ms,
+                    prompt_user,
                 ),
             )
             cmd_id = cur.lastrowid
@@ -349,8 +374,29 @@ class TelemetryDB:
 
     # ── Session Replay ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+        """Parse a stored timestamp into an aware UTC datetime (None if unparseable)."""
+        if not value:
+            return None
+        try:
+            ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
     async def get_session_replay(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Return session metadata plus commands with inter-command delay_ms fields."""
+        """
+        Return session metadata plus its commands as timed replay events.
+
+        Each event carries:
+          delay_ms     idle time before the command was typed, measured from the
+                       moment the previous output appeared (or from login for
+                       the first command)
+          duration_ms  time the response took to appear after the command
+        """
         await self._ensure_initialized()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -368,59 +414,73 @@ class TelemetryDB:
             ) as cur:
                 rows = [dict(r) for r in await cur.fetchall()]
 
-        # Compute inter-command timing from stored timestamps
         events = []
-        prev_ts: Optional[datetime] = None
+        output_shown_at = self._parse_ts(session.get("start_time"))
         for cmd in rows:
-            ts_str = cmd.get("timestamp") or ""
-            try:
-                ts = datetime.fromisoformat(ts_str)
-            except (ValueError, TypeError):
-                ts = None
+            ts = self._parse_ts(cmd.get("timestamp"))
+            duration_ms = max(0, int(cmd.get("duration_ms") or 0))
             delay_ms = 0
-            if ts and prev_ts:
-                delta = (ts - prev_ts).total_seconds()
-                delay_ms = max(0, int(delta * 1000))
-            events.append({**cmd, "delay_ms": delay_ms})
+            if ts and output_shown_at:
+                delay_ms = max(0, int((ts - output_shown_at).total_seconds() * 1000))
+            events.append({**cmd, "delay_ms": delay_ms, "duration_ms": duration_ms})
             if ts:
-                prev_ts = ts
+                output_shown_at = ts + timedelta(milliseconds=duration_ms)
 
         session["events"] = events
-        session["total_duration_ms"] = (
-            sum(e["delay_ms"] for e in events[1:]) if len(events) > 1 else 0
-        )
+        session["total_duration_ms"] = sum(e["delay_ms"] + e["duration_ms"] for e in events)
         return session
 
     # ── Campaign Correlation ──────────────────────────────────────────────────
 
+    LINK_SHARED_IP = "shared_ip"
+    LINK_SHARED_CREDENTIALS = "shared_credentials"
+    LINK_COMMAND_SEQUENCE = "command_sequence"
+    _LINK_ORDER = (LINK_SHARED_IP, LINK_SHARED_CREDENTIALS, LINK_COMMAND_SEQUENCE)
+
+    # A session's opening playbook is its first PLAYBOOK_LENGTH commands, in order.
+    # It only counts as a fingerprint when it is distinctive enough: at least
+    # PLAYBOOK_MIN_COMMANDS commands, or one long chained one-liner (typical of
+    # dropper bots that send everything in a single line).
+    PLAYBOOK_LENGTH = 5
+    PLAYBOOK_MIN_COMMANDS = 3
+    PLAYBOOK_MIN_CHARS = 40
+
     async def correlate_campaigns(self) -> int:
         """
-        Group sessions into campaign_id buckets by shared attacker signals:
-          1. Same remote_ip
-          2. Same username+password credential pair
-          3. Same command playbook fingerprint (top-3 commands sorted)
+        Group sessions into campaigns when they share any of:
+          1. the same source IP
+          2. the same username/password pair, unless the pair is generic
+             (defaults, common-wordlist passwords, username reuse, blanks)
+          3. the same opening command sequence
 
-        Returns the number of distinct campaigns written.
+        Every session receives a campaign_id (singletons included). A campaign is
+        named after its earliest session, so its ID does not change as later
+        sessions join. The signals that linked each campaign are stored in
+        campaign_reasons.
+
+        Returns the number of distinct groups written.
         """
         await self._ensure_initialized()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT session_id, remote_ip, username, password FROM sessions") as cur:
+            async with db.execute(
+                "SELECT session_id, remote_ip, username, password, start_time "
+                "FROM sessions ORDER BY start_time ASC, session_id ASC"
+            ) as cur:
                 sessions = [dict(r) for r in await cur.fetchall()]
+            if not sessions:
+                return 0
 
-            # Build command fingerprint per session (sorted top-3 commands)
-            fingerprints: Dict[str, str] = {}
-            for s in sessions:
-                async with db.execute(
-                    "SELECT command FROM commands WHERE session_id = ? ORDER BY id ASC LIMIT 10",
-                    (s["session_id"],),
-                ) as cur:
-                    cmds = [r[0].strip().split()[0] for r in await cur.fetchall() if r[0] and r[0].strip()]
-                top3 = "|".join(sorted(set(cmds))[:3])
-                fingerprints[s["session_id"]] = top3
+            playbooks: Dict[str, List[str]] = {}
+            async with db.execute("SELECT session_id, command FROM commands ORDER BY id ASC") as cur:
+                async for row in cur:
+                    seq = playbooks.setdefault(row[0], [])
+                    command = row[1]
+                    if len(seq) < self.PLAYBOOK_LENGTH and command and command.strip():
+                        seq.append(" ".join(command.split()))
 
-            # Union-Find for grouping
-            parent: Dict[str, str] = {s["session_id"]: s["session_id"] for s in sessions}
+            order = {s["session_id"]: i for i, s in enumerate(sessions)}
+            parent: Dict[str, str] = {sid: sid for sid in order}
 
             def find(x: str) -> str:
                 while parent[x] != x:
@@ -430,59 +490,70 @@ class TelemetryDB:
 
             def union(a: str, b: str):
                 ra, rb = find(a), find(b)
-                if ra != rb:
-                    parent[rb] = ra
+                if ra == rb:
+                    return
+                # The earliest session always stays the root
+                if order[rb] < order[ra]:
+                    ra, rb = rb, ra
+                parent[rb] = ra
 
-            # Group by shared IP
-            ip_map: Dict[str, str] = {}
-            for s in sessions:
-                ip = s.get("remote_ip") or ""
-                if ip:
-                    if ip in ip_map:
-                        union(s["session_id"], ip_map[ip])
+            links: List[Tuple[str, str]] = []
+
+            def link_by(key_fn: Callable[[Dict[str, Any]], Optional[str]], reason: str):
+                first_with_key: Dict[str, str] = {}
+                for s in sessions:
+                    key = key_fn(s)
+                    if not key:
+                        continue
+                    if key in first_with_key:
+                        union(s["session_id"], first_with_key[key])
+                        links.append((s["session_id"], reason))
                     else:
-                        ip_map[ip] = s["session_id"]
+                        first_with_key[key] = s["session_id"]
 
-            # Group by shared credential pair (non-empty)
-            cred_map: Dict[str, str] = {}
-            for s in sessions:
-                u, p = (s.get("username") or ""), (s.get("password") or "")
-                if u and p:
-                    key = f"{u}:{p}"
-                    if key in cred_map:
-                        union(s["session_id"], cred_map[key])
-                    else:
-                        cred_map[key] = s["session_id"]
+            analyzer = _get_credential_analyzer()
 
-            # Group by command fingerprint (non-empty, min 2 commands)
-            fp_map: Dict[str, str] = {}
-            for s in sessions:
-                fp = fingerprints.get(s["session_id"], "")
-                if fp and "|" in fp:  # at least 2 distinct commands
-                    if fp in fp_map:
-                        union(s["session_id"], fp_map[fp])
-                    else:
-                        fp_map[fp] = s["session_id"]
+            def credential_key(s: Dict[str, Any]) -> Optional[str]:
+                username, password = s.get("username") or "", s.get("password") or ""
+                if not username or analyzer.is_generic(username, password):
+                    return None
+                return f"{username}\x00{password}"
 
-            # Assign stable campaign IDs (root → deterministic hex prefix)
-            import hashlib
-            root_to_campaign: Dict[str, str] = {}
+            def playbook_key(s: Dict[str, Any]) -> Optional[str]:
+                seq = playbooks.get(s["session_id"], [])
+                if len(seq) >= self.PLAYBOOK_MIN_COMMANDS or (
+                    seq and sum(len(c) for c in seq) >= self.PLAYBOOK_MIN_CHARS
+                ):
+                    return "\x00".join(seq)
+                return None
+
+            link_by(lambda s: s.get("remote_ip") or None, self.LINK_SHARED_IP)
+            link_by(credential_key, self.LINK_SHARED_CREDENTIALS)
+            link_by(playbook_key, self.LINK_COMMAND_SEQUENCE)
+
+            reasons_by_root: Dict[str, set] = {}
+            for sid, reason in links:
+                reasons_by_root.setdefault(find(sid), set()).add(reason)
+
+            updates = []
+            roots = set()
             for s in sessions:
                 root = find(s["session_id"])
-                if root not in root_to_campaign:
-                    cid = "cmp-" + hashlib.md5(root.encode()).hexdigest()[:8]
-                    root_to_campaign[root] = cid
-                campaign_id = root_to_campaign[root]
-                await db.execute(
-                    "UPDATE sessions SET campaign_id = ? WHERE session_id = ?",
-                    (campaign_id, s["session_id"]),
-                )
+                roots.add(root)
+                campaign_id = "cmp-" + hashlib.md5(root.encode()).hexdigest()[:8]
+                found = reasons_by_root.get(root, set())
+                reasons = ",".join(r for r in self._LINK_ORDER if r in found) or None
+                updates.append((campaign_id, reasons, s["session_id"]))
 
+            await db.executemany(
+                "UPDATE sessions SET campaign_id = ?, campaign_reasons = ? WHERE session_id = ?",
+                updates,
+            )
             await db.commit()
-            return len(root_to_campaign)
+            return len(roots)
 
-    async def get_campaigns(self) -> List[Dict[str, Any]]:
-        """Return grouped campaign summary list."""
+    async def get_campaigns(self, min_sessions: int = 2) -> List[Dict[str, Any]]:
+        """Return campaign summaries with at least `min_sessions` member sessions."""
         await self._ensure_initialized()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -494,16 +565,57 @@ class TelemetryDB:
                        MAX(max_threat_score) AS peak_threat,
                        MIN(start_time) AS first_seen,
                        MAX(COALESCE(end_time, start_time)) AS last_seen,
+                       MAX(campaign_reasons) AS campaign_reasons,
                        GROUP_CONCAT(DISTINCT username) AS usernames,
-                       GROUP_CONCAT(DISTINCT remote_ip) AS ips
+                       GROUP_CONCAT(DISTINCT remote_ip) AS ips,
+                       GROUP_CONCAT(session_id) AS session_ids
                 FROM sessions
                 WHERE campaign_id IS NOT NULL
                 GROUP BY campaign_id
+                HAVING COUNT(*) >= ?
                 ORDER BY last_seen DESC
-                """
+                """,
+                (min_sessions,),
             ) as cur:
                 rows = [dict(r) for r in await cur.fetchall()]
+
+        for row in rows:
+            reasons = row.pop("campaign_reasons", None) or ""
+            row["link_reasons"] = [r for r in reasons.split(",") if r]
+            row["usernames"] = sorted(u for u in (row.get("usernames") or "").split(",") if u)
+            row["ips"] = sorted(ip for ip in (row.get("ips") or "").split(",") if ip)
+            row["session_ids"] = [sid for sid in (row.get("session_ids") or "").split(",") if sid]
         return rows
+
+    async def get_campaign_sessions(self, campaign_id: str) -> List[Dict[str, Any]]:
+        """Return the sessions in a campaign, newest first."""
+        await self._ensure_initialized()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM sessions WHERE campaign_id = ? ORDER BY start_time DESC",
+                (campaign_id,),
+            ) as cur:
+                sessions = [dict(r) for r in await cur.fetchall()]
+            await self._attach_command_stats(db, sessions)
+            return sessions
+
+    @staticmethod
+    async def _attach_command_stats(db: aiosqlite.Connection, sessions: List[Dict[str, Any]]):
+        """Add command_count and last_command to each session dict."""
+        for s in sessions:
+            async with db.execute(
+                "SELECT COUNT(*) FROM commands WHERE session_id = ?", (s["session_id"],)
+            ) as cur:
+                c_row = await cur.fetchone()
+                s["command_count"] = c_row[0] if c_row else 0
+
+            async with db.execute(
+                "SELECT command FROM commands WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                (s["session_id"],),
+            ) as cur:
+                last_cmd_row = await cur.fetchone()
+                s["last_command"] = last_cmd_row[0] if last_cmd_row else ""
 
     async def get_all_sessions(self) -> List[Dict[str, Any]]:
         await self._ensure_initialized()
@@ -512,21 +624,7 @@ class TelemetryDB:
             async with db.execute("SELECT * FROM sessions ORDER BY start_time DESC") as cur:
                 rows = await cur.fetchall()
                 sessions = [dict(r) for r in rows]
-
-            for s in sessions:
-                async with db.execute(
-                    "SELECT COUNT(*) FROM commands WHERE session_id = ?", (s["session_id"],)
-                ) as cur:
-                    c_row = await cur.fetchone()
-                    s["command_count"] = c_row[0] if c_row else 0
-
-                async with db.execute(
-                    "SELECT command FROM commands WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                    (s["session_id"],),
-                ) as cur:
-                    last_cmd_row = await cur.fetchone()
-                    s["last_command"] = last_cmd_row[0] if last_cmd_row else ""
-
+            await self._attach_command_stats(db, sessions)
             return sessions
 
     async def delete_session(self, session_id: str) -> bool:

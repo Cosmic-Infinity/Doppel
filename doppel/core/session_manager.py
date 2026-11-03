@@ -176,6 +176,14 @@ class SessionManager:
         if not cmd_clean:
             return ""
 
+        # Capture the prompt the command was typed at and when it arrived,
+        # before execution can change cwd/user or add latency.
+        import time as _time
+        received_at = datetime.now(timezone.utc).isoformat()
+        received_mono = _time.monotonic()
+        prompt_cwd = session.cwd
+        prompt_user = getattr(session, "effective_user", session.username)
+
         # If sandbox enabled but session lacks a container, check if Docker became available
         if self.config.sandbox.enabled and not session.container_id:
             if not self.sandbox_manager.is_available:
@@ -194,7 +202,6 @@ class SessionManager:
         is_safe_ip = session.remote_ip in self.config.access.safe_ips
 
         # Measure execution start time for latency harmonization
-        import time as _time
         cmd_start_time = _time.monotonic()
         sandbox_timeout = getattr(self.config.sandbox, "timeout_seconds", 10.0)
 
@@ -360,29 +367,37 @@ class SessionManager:
             if remaining_ms > 0:
                 await asyncio.sleep(remaining_ms / 1000.0)
 
-        # 4. Record turn in session memory (with wall-clock timestamp for timing analysis)
-        import time as _time
+        # 4. Record turn in session memory. "cwd" is the prompt directory the
+        # command was typed at; "ts" is monotonic for profiler timing.
+        completed_mono = _time.monotonic()
+        duration_ms = int((completed_mono - received_mono) * 1000)
+        cmd_reasoning = reasoning if "reasoning" in locals() else None
         session.history.append({
             "command": cmd_clean,
-            "cwd": session.cwd,
+            "cwd": prompt_cwd,
+            "user": prompt_user,
             "output": output,
             "route_decision": decision.value,
-            "reasoning": reasoning if "reasoning" in locals() else None,
-            "ts": _time.monotonic(),
+            "reasoning": cmd_reasoning,
+            "ts": completed_mono,
+            "timestamp": received_at,
+            "duration_ms": duration_ms,
         })
 
         # 5. Immediate DB logging so command is recorded right away
         cmd_id = None
-        cmd_reasoning = reasoning if "reasoning" in locals() else None
         try:
             cmd_id = await self.db.log_command(
                 session_id=session.session_id,
-                cwd=session.cwd,
+                cwd=prompt_cwd,
                 command=cmd_clean,
                 output=output,
                 route_decision=decision.value,
                 threat_meta=None,
                 reasoning=cmd_reasoning,
+                timestamp=received_at,
+                duration_ms=duration_ms,
+                prompt_user=prompt_user,
             )
         except Exception as db_err:
             logger.error(f"Failed to log command to DB: {db_err}")
@@ -396,6 +411,15 @@ class SessionManager:
                 decision=decision.value if hasattr(decision, "value") else str(decision),
                 cmd_id=cmd_id,
                 keystroke_timestamps=keystroke_timestamps,
+                cmd_ts=completed_mono,
+                history_snapshot=[h["command"] for h in session.history],
+                log_fields={
+                    "cwd": prompt_cwd,
+                    "timestamp": received_at,
+                    "duration_ms": duration_ms,
+                    "prompt_user": prompt_user,
+                    "reasoning": cmd_reasoning,
+                },
             )
         )
         self._background_tasks.add(task)
@@ -406,10 +430,13 @@ class SessionManager:
             "session_id": session_id,
             "command": cmd_clean,
             "cwd": session.cwd,
+            "prompt_cwd": prompt_cwd,
+            "prompt_user": prompt_user,
             "output": output,
             "decision": decision.value if hasattr(decision, "value") else str(decision),
             "reasoning": cmd_reasoning,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": received_at,
+            "duration_ms": duration_ms,
             "attacker_type": _prof.attacker_type if _prof else "unknown",
             "current_phase": _prof.current_phase if _prof else "Reconnaissance",
             "effective_user": getattr(session, "effective_user", session.username),
@@ -452,16 +479,25 @@ class SessionManager:
         decision: str,
         cmd_id: Optional[int] = None,
         keystroke_timestamps: Optional[List[float]] = None,
+        cmd_ts: Optional[float] = None,
+        history_snapshot: Optional[List[str]] = None,
+        log_fields: Optional[Dict[str, Any]] = None,
     ):
+        # This runs in the background, so later commands may already have been
+        # appended to session.history. Use the values captured for this command.
+        fields = log_fields or {}
         try:
             threat_meta = None
             if self.config.analytics.enable_mitre_tagging:
                 threat_meta = await self.observer.analyze_command(
                     session_id=session.session_id,
                     command=command,
-                    cwd=session.cwd,
-                    user=getattr(session, "effective_user", session.username),
-                    session_history=[h["command"] for h in session.history],
+                    cwd=fields.get("cwd", session.cwd),
+                    user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
+                    session_history=(
+                        history_snapshot if history_snapshot is not None
+                        else [h["command"] for h in session.history]
+                    ),
                 )
                 if threat_meta:
                     session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
@@ -490,8 +526,8 @@ class SessionManager:
             # ── Attacker profiler (timing + phase + keystroke flight dynamics) ──
             if session.profiler_state is not None:
                 tactics_list = threat_meta.get("tactics", []) if threat_meta else []
-                # Use the monotonic ts we stored in history for accurate gap measurement
-                cmd_ts = session.history[-1].get("ts") if session.history else None
+                if cmd_ts is None and session.history:
+                    cmd_ts = session.history[-1].get("ts")
                 updated_state, phase_event = self._profiler.record_command(
                     state=session.profiler_state,
                     command=command,
@@ -535,11 +571,15 @@ class SessionManager:
             elif cmd_id is None:
                 await self.db.log_command(
                     session_id=session.session_id,
-                    cwd=session.cwd,
+                    cwd=fields.get("cwd", session.cwd),
                     command=command,
                     output=output,
                     route_decision=decision,
                     threat_meta=threat_meta,
+                    reasoning=fields.get("reasoning"),
+                    timestamp=fields.get("timestamp"),
+                    duration_ms=fields.get("duration_ms"),
+                    prompt_user=fields.get("prompt_user"),
                 )
         except Exception as e:
             logger.error(f"Error in background threat analysis for session {session.session_id[:8]}: {e}", exc_info=True)

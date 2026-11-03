@@ -518,7 +518,15 @@ class HoneypotController:
             self.http_server = None
 
     def get_config_dict(self) -> Dict[str, Any]:
+        from doppel.config import get_active_preset
+        preset = get_active_preset(self.config) or {}
         return {
+            # Shell prompt as the SSH server renders it (the active preset overrides hostname)
+            "prompt": {
+                "hostname": preset.get("hostname", self.config.honeypot.hostname),
+                "format": preset.get("prompt_format", "{user}@{hostname}:{cwd}$ "),
+                "root_format": preset.get("root_prompt_format", "{user}@{hostname}:{cwd}# "),
+            },
             "honeypot_host": self.config.honeypot.host,
             "honeypot_port": self.config.honeypot.port,
             "http_sensor_port": getattr(self.config, "http_sensor_port", 8080),

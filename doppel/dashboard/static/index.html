@@ -235,8 +235,8 @@
 
         <div class="sessions-list hidden" id="campaigns-container">
           <div class="empty-state" id="campaigns-empty">
-            <p>No campaigns detected yet.</p>
-            <span class="hint">Campaigns group attacker sessions by shared IP, credentials, or command patterns.</span>
+            <p>No campaigns yet.</p>
+            <span class="hint">Sessions that share an IP, credentials, or command sequence are grouped here.</span>
           </div>
         </div>
       </aside>
@@ -258,6 +258,7 @@
                 <span class="live-pill" id="detail-live-pill">LIVE</span>
                 <span class="phase-pill" id="detail-phase-pill">Reconnaissance</span>
                 <span class="profile-tag" id="detail-profile-tag">Profiling...</span>
+                <button type="button" class="campaign-pill hidden" id="detail-campaign-pill" title="Show campaign"></button>
                 <span class="detail-ip" id="detail-ip">127.0.0.1:0</span>
                 <span class="detail-user" id="detail-user">user: ubuntu</span>
               </div>
@@ -329,21 +330,61 @@
           <div class="tab-content" id="tab-replay">
             <div class="replay-view">
               <div class="replay-controls">
-                <button class="btn btn-secondary btn-sm" id="replay-play-btn">▶ Play</button>
-                <button class="btn btn-secondary btn-sm" id="replay-pause-btn" disabled>⏸ Pause</button>
-                <button class="btn btn-secondary btn-sm" id="replay-reset-btn">↺ Reset</button>
-                <label class="replay-speed-label">Speed:
-                  <select id="replay-speed" class="select-input-sm">
-                    <option value="4">4× Fast</option>
-                    <option value="2">2× Fast</option>
-                    <option value="1" selected>1× Real-time</option>
-                    <option value="0.5">0.5× Slow</option>
+                <div class="replay-buttons">
+                  <button type="button" class="btn btn-secondary btn-sm" id="replay-play-btn" title="Play">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+                      <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                    </svg>
+                    <span>Play</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm hidden" id="replay-pause-btn" title="Pause">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+                      <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+                    </svg>
+                    <span>Pause</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="replay-step-btn" title="Show next command">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polygon points="5 4 15 12 5 20 5 4" fill="currentColor"></polygon>
+                      <line x1="19" y1="5" x2="19" y2="19"></line>
+                    </svg>
+                    <span>Step</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="replay-reset-btn" title="Back to start">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="1 4 1 10 7 10"></polyline>
+                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                    <span>Reset</span>
+                  </button>
+                </div>
+                <label class="replay-option">
+                  <span>Speed</span>
+                  <select id="replay-speed" class="select-input select-input-sm">
+                    <option value="0.5">0.5×</option>
+                    <option value="1" selected>1×</option>
+                    <option value="2">2×</option>
+                    <option value="4">4×</option>
+                    <option value="8">8×</option>
                   </select>
                 </label>
-                <span class="replay-progress-label">
-                  Step <span id="replay-step-cur">0</span> / <span id="replay-step-total">0</span>
-                </span>
+                <label class="replay-option" title="Shorten idle time and slow responses to 5 seconds">
+                  <input type="checkbox" id="replay-skip-idle" checked>
+                  <span>Skip pauses over 5s</span>
+                </label>
+                <div class="replay-progress">
+                  <div class="replay-progress-track">
+                    <div class="replay-progress-fill" id="replay-progress-fill"></div>
+                  </div>
+                  <span class="replay-progress-label">
+                    <span id="replay-step-cur">0</span> / <span id="replay-step-total">0</span>
+                    <span class="replay-progress-sep">·</span>
+                    <span id="replay-time-cur">0:00</span> / <span id="replay-time-total">0:00</span>
+                  </span>
+                </div>
               </div>
+              <div class="replay-notice hidden" id="replay-notice"></div>
               <div class="terminal-window" id="replay-terminal-window">
                 <div class="terminal-body" id="replay-terminal-output"></div>
               </div>

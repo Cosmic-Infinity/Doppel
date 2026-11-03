@@ -216,7 +216,15 @@ async def get_session_details(session_id: str):
                 "type_confidence": getattr(prof_state, "type_confidence", 0.0) if prof_state else 0.0,
                 "current_phase": getattr(prof_state, "current_phase", "Reconnaissance") if prof_state else "Reconnaissance",
                 "commands": [
-                    {"command": h["command"], "output": h["output"], "cwd": h["cwd"], "timestamp": ""}
+                    {
+                        "command": h["command"],
+                        "output": h["output"],
+                        "cwd": h["cwd"],
+                        "prompt_user": h.get("user"),
+                        "route_decision": h.get("route_decision"),
+                        "timestamp": h.get("timestamp", ""),
+                        "duration_ms": h.get("duration_ms"),
+                    }
                     for h in live.history
                 ],
             }
@@ -242,7 +250,9 @@ async def get_session_details(session_id: str):
                     "output": h["output"],
                     "cwd": h.get("cwd", live.cwd),
                     "route_decision": h.get("route_decision", "standard"),
-                    "timestamp": "",
+                    "prompt_user": h.get("user"),
+                    "timestamp": h.get("timestamp", ""),
+                    "duration_ms": h.get("duration_ms"),
                 }
                 for h in live.history
             ]
@@ -262,22 +272,28 @@ async def get_session_replay(session_id: str):
     return data
 
 
+def _active_session_ids() -> set:
+    return set(controller.session_manager.sessions.keys()) if controller.session_manager else set()
+
+
 @app.get("/api/campaigns")
 async def get_campaigns():
-    """Return attacker campaign groups correlated by IP, credential, and command fingerprint."""
-    # Re-run correlation on every call so it reflects latest sessions
-    campaign_count = await controller.db.correlate_campaigns()
+    """Return multi-session attacker campaigns linked by IP, credentials, or command sequence."""
+    # Re-run correlation on every call so it reflects the latest sessions
+    await controller.db.correlate_campaigns()
     campaigns = await controller.db.get_campaigns()
-    return {"campaign_count": campaign_count, "campaigns": campaigns}
+    return {"campaign_count": len(campaigns), "campaigns": campaigns}
 
 
 @app.get("/api/campaigns/{campaign_id}")
 async def get_campaign_sessions(campaign_id: str):
     """Return all sessions belonging to a campaign."""
-    all_sessions = await controller.db.get_all_sessions()
-    members = [s for s in all_sessions if s.get("campaign_id") == campaign_id]
+    members = await controller.db.get_campaign_sessions(campaign_id)
     if not members:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    active_ids = _active_session_ids()
+    for s in members:
+        s["is_active"] = s["session_id"] in active_ids
     return {"campaign_id": campaign_id, "sessions": members}
 
 

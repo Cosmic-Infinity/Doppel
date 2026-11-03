@@ -13,6 +13,42 @@ document.addEventListener('DOMContentLoaded', () => {
   let eventSource = null;
   let wsActive = false;
 
+  // Shell prompt as the SSH server renders it; replaced by /api/status config
+  let promptConfig = {
+    hostname: 'prod-api-node-01',
+    format: '{user}@{hostname}:{cwd}$ ',
+    root_format: '{user}@{hostname}:{cwd}# ',
+  };
+
+  // Campaigns (cross-session correlation)
+  let campaignsCache = [];
+  let campaignBySession = {};
+  let campaignsRefreshTimer = null;
+  let sessionListCount = 0;
+  const expandedCampaigns = new Set();
+  let activeSidebarTab = localStorage.getItem('doppel_sidebar_tab') === 'campaigns' ? 'campaigns' : 'sessions';
+
+  // Session replay playback state. Playback is a flat list of steps: for each
+  // recorded command, a 'command' step (after the idle delay) and an 'output'
+  // step (after the response time).
+  const REPLAY_PAUSE_CAP_MS = 5000;
+  const replay = {
+    sessionId: null,
+    data: null,
+    steps: [],
+    step: 0,
+    playing: false,
+    timer: null,
+    armedStep: -1,
+    armedAt: 0,
+    armedSpeed: 1,
+    remainingMs: 0,
+    lines: [],
+    shownEvents: 0,
+    elapsedMs: 0,
+    loadToken: 0,
+  };
+
   // Plain-English Explanations for Info Buttons
   const INFO_DEFINITIONS = {
     llm: `<strong>AI Deception Model</strong><br><br>
@@ -88,6 +124,26 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const sessionCountPill = document.getElementById('session-count-pill');
   const sessionsContainer = document.getElementById('sessions-container');
   const sessionsEmpty = document.getElementById('sessions-empty');
+  const sidebarTabs = document.querySelectorAll('.sidebar-tab');
+  const campaignsContainer = document.getElementById('campaigns-container');
+  const campaignsEmpty = document.getElementById('campaigns-empty');
+  const detailCampaignPill = document.getElementById('detail-campaign-pill');
+
+  // DOM Elements - Replay
+  const replayPlayBtn = document.getElementById('replay-play-btn');
+  const replayPauseBtn = document.getElementById('replay-pause-btn');
+  const replayStepBtn = document.getElementById('replay-step-btn');
+  const replayResetBtn = document.getElementById('replay-reset-btn');
+  const replaySpeedSelect = document.getElementById('replay-speed');
+  const replaySkipIdle = document.getElementById('replay-skip-idle');
+  const replayStepCur = document.getElementById('replay-step-cur');
+  const replayStepTotal = document.getElementById('replay-step-total');
+  const replayTimeCur = document.getElementById('replay-time-cur');
+  const replayTimeTotal = document.getElementById('replay-time-total');
+  const replayProgressFill = document.getElementById('replay-progress-fill');
+  const replayNotice = document.getElementById('replay-notice');
+  const replayTerminalWindow = document.getElementById('replay-terminal-window');
+  const replayTerminalOutput = document.getElementById('replay-terminal-output');
   const emptyInspector = document.getElementById('empty-inspector');
   const sessionDetail = document.getElementById('session-detail');
   const detailLivePill = document.getElementById('detail-live-pill');
@@ -362,6 +418,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   fetchStatus();
   fetchDiagnostics();
   fetchSessions();
+  fetchCampaigns();
   connectStream();
 
   // Background diagnostics auto-refresh every 8 seconds
@@ -857,6 +914,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (config) {
       metaPort.textContent = `Port: ${config.honeypot_port}`;
       metaModel.textContent = `Model: ${config.llm_model}`;
+      if (config.prompt) {
+        promptConfig = Object.assign({}, promptConfig, config.prompt);
+      }
     }
 
     if (status === 'RUNNING') {
@@ -971,6 +1031,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       renderSessionsList(Object.values(sessionsCache));
       selectSession(sess.session_id);
       switchView('dashboard');
+      scheduleCampaignsRefresh();
     } else if (msg.type === 'command_executed') {
       const data = msg.data;
       if (!sessionsCache[data.session_id]) {
@@ -1003,7 +1064,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       }
 
       if (activeSessionId === data.session_id) {
-        appendTerminalCommand(data.cwd, data.command, data.output, data.decision, data.reasoning);
+        appendTerminalCommand(
+          data.prompt_cwd || data.cwd,
+          data.command,
+          data.output,
+          data.decision,
+          data.reasoning,
+          data.prompt_user || sessionsCache[data.session_id].username
+        );
         appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
         detailCwd.textContent = data.cwd;
         detailCmdCount.textContent = (parseInt(detailCmdCount.textContent, 10) || 0) + 1;
@@ -1066,18 +1134,27 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         detailLivePill.classList.add('ended');
         fetchSessionReport(data.session_id);
       }
+      // The session's recording is now complete; reload replay if it is showing
+      if (replay.sessionId === data.session_id) {
+        replay.sessionId = null;
+        if (activeSessionId === data.session_id && isTabActive('replay')) {
+          loadReplay(data.session_id);
+        }
+      }
       fetchSessions();
+      scheduleCampaignsRefresh();
     } else if (msg.type === 'session_deleted') {
       const data = msg.data;
       const deletedId = data.session_id;
       delete sessionsCache[deletedId];
-      const card = document.querySelector(`.session-card[data-session-id="${deletedId}"]`);
-      if (card) card.remove();
-      const remainingCards = document.querySelectorAll('.session-card');
-      if (sessionCountPill) sessionCountPill.textContent = remainingCards.length;
+      document.querySelectorAll(`.session-card[data-session-id="${deletedId}"]`).forEach(c => c.remove());
+      const remainingCards = sessionsContainer.querySelectorAll('.session-card');
+      sessionListCount = remainingCards.length;
+      updateCountPill();
       if (remainingCards.length === 0 && sessionsEmpty) {
         sessionsEmpty.classList.remove('hidden');
       }
+      scheduleCampaignsRefresh();
       if (activeSessionId === deletedId) {
         activeSessionId = null;
         localStorage.removeItem('doppel_active_session_id');
@@ -1123,7 +1200,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       sessionsCache[s.session_id] = Object.assign(sessionsCache[s.session_id] || {}, s);
     });
 
-    sessionCountPill.textContent = sessions.length;
+    sessionListCount = sessions.length;
+    updateCountPill();
 
     if (sessions.length === 0) {
       sessionsEmpty.classList.remove('hidden');
@@ -1147,37 +1225,45 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
 
     sessions.forEach(sess => {
-      const card = document.createElement('div');
-      card.className = `session-card ${sess.session_id === activeSessionId ? 'selected' : ''}`;
-      card.dataset.sessionId = sess.session_id;
-
-      const isLive = Boolean(sess.is_active);
-      const score = sess.max_threat_score || sess.threat_score || 0;
-      const scoreClass = score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low');
-
-      card.innerHTML = `
-        <div class="card-top">
-          <div class="card-status">
-            <span class="card-status-dot ${isLive ? 'live' : 'ended'}"></span>
-            <span class="card-ip">${escapeHtml(sess.remote_ip || 'unknown')}</span>
-          </div>
-          <span class="card-score ${scoreClass}">${score}</span>
-        </div>
-        <div class="card-bottom">
-          <span>${escapeHtml(sess.username || 'user')}</span>
-          <span class="card-last-cmd">${escapeHtml(sess.last_command || 'connected')}</span>
-        </div>
-      `;
-
-      card.addEventListener('click', () => {
-        selectSession(sess.session_id);
-      });
-
-      sessionsContainer.appendChild(card);
+      sessionsContainer.appendChild(buildSessionCard(sess));
     });
   }
 
+  function threatClass(score) {
+    return score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low');
+  }
+
+  function buildSessionCard(sess) {
+    const card = document.createElement('div');
+    card.className = `session-card ${sess.session_id === activeSessionId ? 'selected' : ''}`;
+    card.dataset.sessionId = sess.session_id;
+
+    const isLive = Boolean(sess.is_active);
+    const score = sess.max_threat_score || sess.threat_score || 0;
+
+    card.innerHTML = `
+      <div class="card-top">
+        <div class="card-status">
+          <span class="card-status-dot ${isLive ? 'live' : 'ended'}"></span>
+          <span class="card-ip">${escapeHtml(sess.remote_ip || 'unknown')}</span>
+        </div>
+        <span class="card-score ${threatClass(score)}">${score}</span>
+      </div>
+      <div class="card-bottom">
+        <span>${escapeHtml(sess.username || 'user')}</span>
+        <span class="card-last-cmd">${escapeHtml(sess.last_command || 'connected')}</span>
+      </div>
+    `;
+
+    card.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectSession(sess.session_id);
+    });
+    return card;
+  }
+
   function selectSession(sessionId) {
+    const changed = activeSessionId !== sessionId;
     activeSessionId = sessionId;
     localStorage.setItem('doppel_active_session_id', sessionId);
 
@@ -1185,8 +1271,203 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       card.classList.toggle('selected', card.dataset.sessionId === sessionId);
     });
 
+    if (changed) {
+      stopReplay();
+      if (isTabActive('replay')) loadReplay(sessionId);
+    }
+    updateCampaignPill();
+
     fetchSessionDetails(sessionId);
     fetchSessionReport(sessionId);
+  }
+
+  // --- Sidebar Tabs & Campaigns ---
+
+  function updateCountPill() {
+    if (!sessionCountPill) return;
+    sessionCountPill.textContent = activeSidebarTab === 'campaigns' ? campaignsCache.length : sessionListCount;
+  }
+
+  function setSidebarTab(tab) {
+    activeSidebarTab = tab === 'campaigns' ? 'campaigns' : 'sessions';
+    localStorage.setItem('doppel_sidebar_tab', activeSidebarTab);
+    sidebarTabs.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.sidebar === activeSidebarTab);
+    });
+    sessionsContainer.classList.toggle('hidden', activeSidebarTab !== 'sessions');
+    campaignsContainer.classList.toggle('hidden', activeSidebarTab !== 'campaigns');
+    updateCountPill();
+  }
+
+  sidebarTabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      setSidebarTab(btn.dataset.sidebar);
+      if (activeSidebarTab === 'campaigns') fetchCampaigns();
+    });
+  });
+  setSidebarTab(activeSidebarTab);
+
+  function scheduleCampaignsRefresh(delayMs = 800) {
+    if (campaignsRefreshTimer) clearTimeout(campaignsRefreshTimer);
+    campaignsRefreshTimer = setTimeout(() => {
+      campaignsRefreshTimer = null;
+      fetchCampaigns();
+    }, delayMs);
+  }
+
+  async function fetchCampaigns() {
+    try {
+      const res = await fetch('/api/campaigns');
+      if (!res.ok) return;
+      const data = await res.json();
+      campaignsCache = data.campaigns || [];
+      campaignBySession = {};
+      campaignsCache.forEach(c => {
+        (c.session_ids || []).forEach(id => { campaignBySession[id] = c; });
+      });
+      renderCampaignsList();
+      updateCampaignPill();
+      updateCountPill();
+    } catch (e) {
+      console.error('Error fetching campaigns:', e);
+    }
+  }
+
+  const LINK_REASON_LABELS = {
+    shared_ip: 'Shared IP',
+    shared_credentials: 'Shared credentials',
+    command_sequence: 'Same command sequence',
+  };
+
+  function plural(n, one, many) {
+    return `${n} ${n === 1 ? one : many}`;
+  }
+
+  function parseServerTime(value) {
+    if (!value) return null;
+    // Older rows may hold "YYYY-MM-DD HH:MM:SS" (UTC) instead of ISO-8601
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
+    const d = new Date(normalized);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function formatRelativeTime(value) {
+    const d = parseServerTime(value);
+    if (!d) return '';
+    const seconds = Math.round((Date.now() - d.getTime()) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.round(hours / 24)}d ago`;
+  }
+
+  function renderCampaignsList() {
+    Array.from(campaignsContainer.children).forEach(child => {
+      if (child.id !== 'campaigns-empty') child.remove();
+    });
+    campaignsEmpty.classList.toggle('hidden', campaignsCache.length > 0);
+
+    campaignsCache.forEach(c => {
+      const card = document.createElement('div');
+      const expanded = expandedCampaigns.has(c.campaign_id);
+      card.className = `campaign-card ${expanded ? 'expanded' : ''}`;
+      card.dataset.campaignId = c.campaign_id;
+
+      const score = c.peak_threat || 0;
+      const tags = (c.link_reasons || [])
+        .map(r => `<span class="campaign-tag">${escapeHtml(LINK_REASON_LABELS[r] || r)}</span>`)
+        .join('');
+      const lastSeen = formatRelativeTime(c.last_seen);
+
+      card.innerHTML = `
+        <div class="campaign-card-header" role="button" tabindex="0" aria-expanded="${expanded}">
+          <div class="card-top">
+            <div class="card-status">
+              <svg class="campaign-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 6 15 12 9 18"></polyline>
+              </svg>
+              <span class="campaign-id">${escapeHtml(c.campaign_id)}</span>
+            </div>
+            <span class="card-score ${threatClass(score)}">${score}</span>
+          </div>
+          <div class="campaign-meta">
+            <span>${plural(c.session_count || 0, 'session', 'sessions')}</span>
+            <span>${plural(c.unique_ips || 0, 'IP', 'IPs')}</span>
+            ${lastSeen ? `<span>${escapeHtml(lastSeen)}</span>` : ''}
+          </div>
+          ${tags ? `<div class="campaign-tags">${tags}</div>` : ''}
+        </div>
+        <div class="campaign-members ${expanded ? '' : 'hidden'}"></div>
+      `;
+
+      const header = card.querySelector('.campaign-card-header');
+      const members = card.querySelector('.campaign-members');
+      const toggle = () => toggleCampaign(c.campaign_id, card, header, members);
+      header.addEventListener('click', toggle);
+      header.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      });
+
+      campaignsContainer.appendChild(card);
+      if (expanded) loadCampaignMembers(c.campaign_id, members);
+    });
+  }
+
+  function toggleCampaign(campaignId, card, header, members) {
+    const expand = !expandedCampaigns.has(campaignId);
+    if (expand) expandedCampaigns.add(campaignId);
+    else expandedCampaigns.delete(campaignId);
+    card.classList.toggle('expanded', expand);
+    header.setAttribute('aria-expanded', String(expand));
+    members.classList.toggle('hidden', !expand);
+    if (expand) loadCampaignMembers(campaignId, members);
+  }
+
+  async function loadCampaignMembers(campaignId, container) {
+    if (!container.children.length) {
+      container.innerHTML = '<div class="campaign-members-status">Loading...</div>';
+    }
+    try {
+      const res = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      container.innerHTML = '';
+      (data.sessions || []).forEach(s => {
+        container.appendChild(buildSessionCard(Object.assign({}, sessionsCache[s.session_id] || {}, s)));
+      });
+    } catch (e) {
+      container.innerHTML = '<div class="campaign-members-status">Sessions could not be loaded.</div>';
+    }
+  }
+
+  function updateCampaignPill() {
+    if (!detailCampaignPill) return;
+    const campaign = activeSessionId ? campaignBySession[activeSessionId] : null;
+    if (!campaign) {
+      detailCampaignPill.classList.add('hidden');
+      detailCampaignPill.dataset.campaignId = '';
+      return;
+    }
+    detailCampaignPill.textContent = `Campaign · ${plural(campaign.session_count || 0, 'session', 'sessions')}`;
+    detailCampaignPill.dataset.campaignId = campaign.campaign_id;
+    detailCampaignPill.classList.remove('hidden');
+  }
+
+  if (detailCampaignPill) {
+    detailCampaignPill.addEventListener('click', () => {
+      const campaignId = detailCampaignPill.dataset.campaignId;
+      if (!campaignId) return;
+      expandedCampaigns.add(campaignId);
+      setSidebarTab('campaigns');
+      renderCampaignsList();
+      const card = campaignsContainer.querySelector(`.campaign-card[data-campaign-id="${CSS.escape(campaignId)}"]`);
+      if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
   }
 
   async function fetchSessionDetails(sessionId) {
@@ -1459,7 +1740,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (serverCmds.length > 0 || currentTerminalLines === 0) {
       terminalOutput.innerHTML = '';
       serverCmds.forEach(cmd => {
-        appendTerminalCommand(cmd.cwd || session.cwd, cmd.command, cmd.output, cmd.route_decision, cmd.reasoning);
+        appendTerminalCommand(
+          cmd.cwd || session.cwd,
+          cmd.command,
+          cmd.output,
+          cmd.route_decision,
+          cmd.reasoning,
+          cmd.prompt_user || session.username
+        );
       });
 
       telemetryTableBody.innerHTML = '';
@@ -1476,13 +1764,31 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
-  function appendTerminalCommand(cwd, command, output, decision, reasoning = null) {
+  // Render the shell prompt the way the SSH server does (see ssh_server._get_prompt)
+  function formatPrompt(user, cwd) {
+    const name = user || 'ubuntu';
+    const isRoot = name === 'root';
+    const home = isRoot ? '/root' : `/home/${name}`;
+    let shownCwd = cwd || home;
+    if (shownCwd === home) shownCwd = '~';
+    else if (shownCwd.startsWith(home + '/')) shownCwd = '~' + shownCwd.slice(home.length);
+    const fmt = (isRoot ? promptConfig.root_format : promptConfig.format) || '{user}@{hostname}:{cwd}$ ';
+    return fmt
+      .replace(/\{user\}/g, name)
+      .replace(/\{hostname\}/g, promptConfig.hostname || '')
+      .replace(/\{cwd\}/g, shownCwd);
+  }
+
+  const ROUTE_TAGS = {
+    sandbox: { cls: 'sandbox', label: 'Sandbox' },
+    grounded_deception: { cls: 'grounded', label: 'Grounded' },
+    builtin: { cls: 'builtin', label: 'Builtin' },
+  };
+
+  function buildTerminalLine({ cwd, user, command, output = null, decision, reasoning = null }) {
     const line = document.createElement('div');
     line.className = 'terminal-line';
-
-    const routeClass = decision === 'sandbox' ? 'sandbox' : (decision === 'grounded_deception' ? 'grounded' : 'deception');
-    const routeLabel = decision === 'sandbox' ? 'Sandbox' : (decision === 'grounded_deception' ? 'Grounded' : (decision === 'builtin' ? 'Builtin' : 'Deception'));
-    const formattedOutput = output ? escapeHtml(output).replace(/\r\n/g, '\n') : '';
+    const route = ROUTE_TAGS[decision] || { cls: 'deception', label: 'Deception' };
 
     let reasoningHtml = '';
     if (reasoning) {
@@ -1496,17 +1802,275 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     line.innerHTML = `
       <div>
-        <span class="terminal-prompt">ubuntu@prod-api-node-01:${escapeHtml(cwd || '~')}$ </span>
+        <span class="terminal-prompt">${escapeHtml(formatPrompt(user, cwd))}</span>
         <span class="terminal-cmd">${escapeHtml(command)}</span>
-        <span class="terminal-route-tag ${routeClass}">${routeLabel}</span>
+        <span class="terminal-route-tag ${route.cls}">${route.label}</span>
       </div>
       ${reasoningHtml}
-      ${formattedOutput ? `<div class="terminal-output-block">${formattedOutput}</div>` : ''}
     `;
+    setTerminalLineOutput(line, output);
+    return line;
+  }
 
-    terminalOutput.appendChild(line);
+  function setTerminalLineOutput(line, output) {
+    if (!output) return;
+    const block = document.createElement('div');
+    block.className = 'terminal-output-block';
+    block.innerHTML = escapeHtml(output).replace(/\r\n/g, '\n');
+    line.appendChild(block);
+  }
+
+  function appendTerminalCommand(cwd, command, output, decision, reasoning = null, user = null) {
+    terminalOutput.appendChild(buildTerminalLine({ cwd, user, command, output, decision, reasoning }));
     terminalWindow.scrollTop = terminalWindow.scrollHeight;
   }
+
+  // --- Session Replay ---
+
+  function isTabActive(tab) {
+    const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+    return Boolean(btn && btn.classList.contains('active'));
+  }
+
+  function formatClock(ms) {
+    const total = Math.max(0, Math.round((ms || 0) / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+  }
+
+  function showReplayNotice(text) {
+    replayNotice.textContent = text || '';
+    replayNotice.classList.toggle('hidden', !text);
+  }
+
+  function clearReplayTimer() {
+    if (replay.timer) {
+      clearTimeout(replay.timer);
+      replay.timer = null;
+    }
+  }
+
+  // Stop the countdown for the current step but remember how much is left
+  function holdReplayTimer() {
+    if (!replay.timer) return;
+    clearReplayTimer();
+    const elapsedReal = performance.now() - replay.armedAt;
+    replay.remainingMs = Math.max(0, replay.remainingMs - elapsedReal * replay.armedSpeed);
+  }
+
+  function replaySpeed() {
+    return parseFloat(replaySpeedSelect.value) || 1;
+  }
+
+  function replayWaitFor(step) {
+    const wait = step.wait || 0;
+    return replaySkipIdle.checked ? Math.min(wait, REPLAY_PAUSE_CAP_MS) : wait;
+  }
+
+  function replayAvailable() {
+    return Boolean(replay.data && replay.steps.length);
+  }
+
+  function updateReplayControls() {
+    const available = replayAvailable();
+    const atEnd = replay.step >= replay.steps.length;
+    replayPlayBtn.classList.toggle('hidden', replay.playing);
+    replayPauseBtn.classList.toggle('hidden', !replay.playing);
+    replayPlayBtn.disabled = !available;
+    replayStepBtn.disabled = !available || atEnd;
+    replayResetBtn.disabled = !available || replay.step === 0;
+    replaySpeedSelect.disabled = !available;
+    replaySkipIdle.disabled = !available;
+  }
+
+  function updateReplayProgress() {
+    const events = replay.data ? replay.data.events || [] : [];
+    replayStepCur.textContent = replay.shownEvents;
+    replayStepTotal.textContent = events.length;
+    replayTimeCur.textContent = formatClock(replay.elapsedMs);
+    replayTimeTotal.textContent = formatClock(replay.data ? replay.data.total_duration_ms : 0);
+    const pct = replay.steps.length ? (replay.step / replay.steps.length) * 100 : 0;
+    replayProgressFill.style.width = `${pct}%`;
+  }
+
+  function resetReplay() {
+    clearReplayTimer();
+    replay.playing = false;
+    replay.step = 0;
+    replay.armedStep = -1;
+    replay.remainingMs = 0;
+    replay.lines = [];
+    replay.shownEvents = 0;
+    replay.elapsedMs = 0;
+    replayTerminalOutput.innerHTML = '';
+
+    if (replay.data && replay.steps.length) {
+      const started = parseServerTime(replay.data.start_time);
+      const header = document.createElement('div');
+      header.className = 'replay-session-start';
+      header.textContent = [
+        started ? `Session started ${started.toLocaleString()}` : 'Session started',
+        replay.data.remote_ip ? `from ${replay.data.remote_ip}` : '',
+        replay.data.username ? `as ${replay.data.username}` : '',
+      ].filter(Boolean).join(' ');
+      replayTerminalOutput.appendChild(header);
+    }
+    updateReplayControls();
+    updateReplayProgress();
+  }
+
+  // Full stop when leaving a session; the replay reloads when next shown
+  function stopReplay() {
+    clearReplayTimer();
+    replay.loadToken += 1;
+    replay.sessionId = null;
+    replay.data = null;
+    replay.steps = [];
+    showReplayNotice('');
+    resetReplay();
+  }
+
+  async function loadReplay(sessionId) {
+    if (!sessionId) return;
+    clearReplayTimer();
+    const token = ++replay.loadToken;
+    replay.sessionId = sessionId;
+    replay.data = null;
+    replay.steps = [];
+    resetReplay();
+
+    const cached = sessionsCache[sessionId];
+    if (cached && cached.is_active) {
+      showReplayNotice('Replay is available after the session ends.');
+      return;
+    }
+
+    showReplayNotice('Loading replay...');
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/replay`);
+      if (token !== replay.loadToken) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (token !== replay.loadToken) return;
+
+      replay.data = data;
+      replay.steps = [];
+      (data.events || []).forEach((ev, i) => {
+        replay.steps.push({ kind: 'command', i, wait: ev.delay_ms || 0 });
+        replay.steps.push({ kind: 'output', i, wait: ev.duration_ms || 0 });
+      });
+      showReplayNotice(replay.steps.length ? '' : 'No commands were recorded in this session.');
+      resetReplay();
+    } catch (e) {
+      if (token !== replay.loadToken) return;
+      console.error('Error loading replay:', e);
+      showReplayNotice('Replay could not be loaded.');
+    }
+  }
+
+  function executeReplayStep(step) {
+    const ev = replay.data.events[step.i];
+    if (step.kind === 'command') {
+      const line = buildTerminalLine({
+        cwd: ev.cwd,
+        user: ev.prompt_user || replay.data.username,
+        command: ev.command,
+        decision: ev.route_decision,
+      });
+      line.classList.add('awaiting-output');
+      replayTerminalOutput.appendChild(line);
+      replay.lines[step.i] = line;
+      replay.shownEvents = step.i + 1;
+      replay.elapsedMs += ev.delay_ms || 0;
+    } else {
+      const line = replay.lines[step.i];
+      if (line) {
+        line.classList.remove('awaiting-output');
+        setTerminalLineOutput(line, ev.output);
+      }
+      replay.elapsedMs += ev.duration_ms || 0;
+    }
+    replayTerminalWindow.scrollTop = replayTerminalWindow.scrollHeight;
+  }
+
+  function scheduleReplayStep() {
+    if (!replay.playing) return;
+    if (replay.step >= replay.steps.length) {
+      replay.playing = false;
+      updateReplayControls();
+      return;
+    }
+    if (replay.armedStep !== replay.step) {
+      replay.armedStep = replay.step;
+      replay.remainingMs = replayWaitFor(replay.steps[replay.step]);
+    }
+    replay.armedAt = performance.now();
+    replay.armedSpeed = replaySpeed();
+    replay.timer = setTimeout(() => {
+      replay.timer = null;
+      executeReplayStep(replay.steps[replay.step]);
+      replay.step += 1;
+      updateReplayProgress();
+      updateReplayControls();
+      scheduleReplayStep();
+    }, replay.remainingMs / replay.armedSpeed);
+  }
+
+  function playReplay() {
+    if (!replayAvailable()) return;
+    if (replay.step >= replay.steps.length) resetReplay();
+    replay.playing = true;
+    updateReplayControls();
+    scheduleReplayStep();
+  }
+
+  function pauseReplay() {
+    holdReplayTimer();
+    replay.playing = false;
+    updateReplayControls();
+  }
+
+  // Show the rest of the current command (its prompt line and output) immediately
+  function stepReplay() {
+    if (!replayAvailable() || replay.step >= replay.steps.length) return;
+    clearReplayTimer();
+    replay.playing = false;
+    const first = replay.steps[replay.step];
+    executeReplayStep(first);
+    replay.step += 1;
+    if (first.kind === 'command' && replay.step < replay.steps.length) {
+      executeReplayStep(replay.steps[replay.step]);
+      replay.step += 1;
+    }
+    replay.armedStep = -1;
+    updateReplayProgress();
+    updateReplayControls();
+  }
+
+  replayPlayBtn.addEventListener('click', playReplay);
+  replayPauseBtn.addEventListener('click', pauseReplay);
+  replayStepBtn.addEventListener('click', stepReplay);
+  replayResetBtn.addEventListener('click', resetReplay);
+
+  // Speed and pause-skipping apply to the step already counting down
+  replaySpeedSelect.addEventListener('change', () => {
+    if (replay.playing && replay.timer) {
+      holdReplayTimer();
+      scheduleReplayStep();
+    }
+  });
+  replaySkipIdle.addEventListener('change', () => {
+    if (replay.playing && replay.timer && replaySkipIdle.checked) {
+      holdReplayTimer();
+      replay.remainingMs = Math.min(replay.remainingMs, REPLAY_PAUSE_CAP_MS);
+      scheduleReplayStep();
+    }
+  });
+
+  updateReplayControls();
+  updateReplayProgress();
 
   function appendTelemetryRow(timestamp, command, decision, techId, techName, score) {
     const tr = document.createElement('tr');
@@ -1550,6 +2114,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         }
       }
 
+      if (btn.dataset.tab === 'replay') {
+        if (activeSessionId && replay.sessionId !== activeSessionId) {
+          loadReplay(activeSessionId);
+        }
+      } else if (replay.playing) {
+        pauseReplay();
+      }
+
     });
   });
 
@@ -1571,11 +2143,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         }
 
         delete sessionsCache[targetId];
-        const card = document.querySelector(`.session-card[data-session-id="${targetId}"]`);
-        if (card) card.remove();
+        document.querySelectorAll(`.session-card[data-session-id="${targetId}"]`).forEach(c => c.remove());
 
-        const remainingCards = document.querySelectorAll('.session-card');
-        if (sessionCountPill) sessionCountPill.textContent = remainingCards.length;
+        const remainingCards = sessionsContainer.querySelectorAll('.session-card');
+        sessionListCount = remainingCards.length;
+        updateCountPill();
+        scheduleCampaignsRefresh();
 
         if (activeSessionId === targetId) {
           activeSessionId = null;

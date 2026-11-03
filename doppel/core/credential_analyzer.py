@@ -126,6 +126,24 @@ class CredentialAnalyzer:
     # Public API
     # ------------------------------------------------------------------
 
+    def is_generic(self, username: str, password: str) -> bool:
+        """
+        True when a credential pair is so widely sprayed that sharing it says
+        nothing about who is behind two sessions (defaults, wordlist hits,
+        username reuse, keyboard walks, blanks). Silent: no logging.
+        """
+        if not password:
+            return True
+        pw_lower = password.lower()
+        if pw_lower == (username or "").lower():
+            return True
+        defaults_for_user = _DEFAULT_CREDENTIALS.get((username or "").lower(), set())
+        if password in defaults_for_user or pw_lower in defaults_for_user:
+            return True
+        if password in self._wordlist or pw_lower in self._wordlist:
+            return True
+        return pw_lower in _KEYBOARD_WALKS
+
     def analyze(self, username: str, password: str) -> Dict[str, Any]:
         """
         Returns a credential analysis dict with keys:

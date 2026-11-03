@@ -85,6 +85,57 @@ async def test_session_lifecycle_and_navigation():
 
 
 @pytest.mark.asyncio
+async def test_commands_logged_with_prompt_state_and_receive_time():
+    """Each command is logged with the prompt it was typed at and when it arrived."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "test_telemetry.db")
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.deception.simulate_latency = False
+        config.analytics.db_path = db_path
+        config.analytics.enable_mitre_tagging = False
+
+        llm_client = LLMClient(mock_mode=True)
+        db = TelemetryDB(db_path=db_path)
+        await db.initialize()
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=DeceptionEngine(llm_client),
+            sandbox_manager=DockerSandboxManager(enabled=False),
+            router=HybridRouter(sandbox_available=False),
+            db=db,
+            observer=ThreatObserver(llm_client, db),
+            reporter=IncidentReporter(llm_client, db, reports_dir=os.path.join(tmpdir, "reports")),
+        )
+        events = []
+        session_mgr.register_event_listener(lambda t, d: events.append((t, d)))
+
+        session = await session_mgr.create_session(
+            remote_ip="10.0.0.5", remote_port=40000, username="ubuntu", password="x",
+        )
+        await session_mgr.process_command(session.session_id, "cd /tmp")
+        await session_mgr.process_command(session.session_id, "sudo su")
+        await session_mgr.process_command(session.session_id, "pwd")
+
+        cmds = (await db.get_session_details(session.session_id))["commands"]
+        assert [(c["command"], c["cwd"], c["prompt_user"]) for c in cmds] == [
+            ("cd /tmp", "/home/ubuntu", "ubuntu"),
+            ("sudo su", "/tmp", "ubuntu"),
+            ("pwd", "/root", "root"),
+        ]
+        assert all(c["duration_ms"] is not None and c["duration_ms"] >= 0 for c in cmds)
+        assert cmds[0]["timestamp"] <= cmds[1]["timestamp"] <= cmds[2]["timestamp"]
+
+        executed = [d for t, d in events if t == "command_executed"]
+        assert executed[0]["prompt_cwd"] == "/home/ubuntu"
+        assert executed[0]["cwd"] == "/tmp"
+        assert executed[0]["timestamp"] == cmds[0]["timestamp"]
+
+        await session_mgr.close_session(session.session_id)
+
+
+@pytest.mark.asyncio
 async def test_ssh_session_exec_and_early_commands():
     from doppel.core.ssh_server import DoppelSSHServerSession
 
