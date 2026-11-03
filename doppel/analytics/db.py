@@ -27,6 +27,13 @@ class TelemetryDB:
         self.db_path = db_path
         self._initialized = False
 
+    # Seconds a write waits for another connection's lock before failing.
+    BUSY_TIMEOUT_S = 30.0
+
+    def _connect(self):
+        """Open a connection that waits for locks instead of failing after 5 s."""
+        return aiosqlite.connect(self.db_path, timeout=self.BUSY_TIMEOUT_S)
+
     async def _ensure_initialized(self):
         if not self._initialized:
             await self.initialize()
@@ -34,7 +41,10 @@ class TelemetryDB:
     async def initialize(self):
         """Create tables and indexes if they do not exist."""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
+            # WAL lets readers and the writer work concurrently; the setting is
+            # stored in the database file, so it only needs to be applied once.
+            await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
@@ -108,6 +118,17 @@ class TelemetryDB:
                     response_snippet TEXT
                 )
             """)
+            # Decoy credentials issued to sessions, so leaked tokens are still
+            # recognised after a restart
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS honeytokens (
+                    identifier TEXT PRIMARY KEY,
+                    token_type TEXT,
+                    session_id TEXT,
+                    canary_url TEXT,
+                    created_at TEXT
+                )
+            """)
 
             # Schema migration: dynamically add any newly introduced columns to existing database tables
             try:
@@ -178,7 +199,7 @@ class TelemetryDB:
         now = datetime.now(timezone.utc).isoformat()
         geo = geoip or {}
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with self._connect() as db:
                 await db.execute(
                     """
                     INSERT OR REPLACE INTO sessions
@@ -223,7 +244,7 @@ class TelemetryDB:
         tactics_str = json.dumps(meta.get("tactics", []))
         score = meta.get("threat_score", 0)
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cur = await db.execute(
                 """
                 INSERT INTO commands
@@ -273,7 +294,7 @@ class TelemetryDB:
         tactics_str = json.dumps(meta.get("tactics", []))
         score = meta.get("threat_score", 0)
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 """
                 UPDATE commands
@@ -311,7 +332,7 @@ class TelemetryDB:
         triggered_by: str,
     ):
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO phase_transitions
@@ -330,7 +351,7 @@ class TelemetryDB:
         current_phase: str,
     ):
         """Update the live profiling columns on the session row."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 """
                 UPDATE sessions
@@ -343,7 +364,7 @@ class TelemetryDB:
 
     async def log_session_end(self, session_id: str, summary: Optional[str] = None):
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 """
                 UPDATE sessions
@@ -354,9 +375,84 @@ class TelemetryDB:
             )
             await db.commit()
 
+    # ── HTTP decoy & honeytokens ───────────────────────────────────────────────
+
+    async def ensure_http_session(self, session_id: str, remote_ip: str, remote_port: int, timestamp: str):
+        """
+        Create the session row that groups an IP's web probes (one per IP per
+        UTC day) if it does not exist yet, and move its last-seen time forward.
+        """
+        await self._ensure_initialized()
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO sessions
+                (session_id, remote_ip, remote_port, username, password, start_time, end_time)
+                VALUES (?, ?, ?, 'http_probe', '', ?, ?)
+                """,
+                (session_id, remote_ip, remote_port, timestamp, timestamp),
+            )
+            await db.execute(
+                "UPDATE sessions SET end_time = ? WHERE session_id = ?",
+                (timestamp, session_id),
+            )
+            await db.commit()
+
+    async def log_web_probe(
+        self,
+        timestamp: str,
+        remote_ip: str,
+        remote_port: int,
+        method: str,
+        path: str,
+        query: str,
+        user_agent: str,
+        probe_label: str,
+        status_code: int,
+        response_snippet: str,
+    ):
+        await self._ensure_initialized()
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT INTO web_probes
+                (timestamp, remote_ip, remote_port, method, path, query, user_agent,
+                 probe_label, status_code, response_snippet)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (timestamp, remote_ip, remote_port, method, path[:2048], query[:2048],
+                 user_agent[:512], probe_label, status_code, response_snippet[:512]),
+            )
+            await db.commit()
+
+    async def save_honeytoken(self, token: Any):
+        """Persist a CanaryToken (or any object with the same attributes)."""
+        await self._ensure_initialized()
+        try:
+            async with self._connect() as db:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO honeytokens
+                    (identifier, token_type, session_id, canary_url, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (token.identifier, token.token_type, token.session_id, token.canary_url, token.created_at),
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist honeytoken {token.identifier[:12]}: {e}")
+
+    async def get_honeytoken(self, identifier: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_initialized()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM honeytokens WHERE identifier = ?", (identifier,)) as cur:
+                row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def get_session_details(self, session_id: str) -> Dict[str, Any]:
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)) as cur:
                 sess_row = await cur.fetchone()
@@ -398,7 +494,7 @@ class TelemetryDB:
           duration_ms  time the response took to appear after the command
         """
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
@@ -461,10 +557,11 @@ class TelemetryDB:
         Returns the number of distinct groups written.
         """
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT session_id, remote_ip, username, password, start_time "
+                "SELECT session_id, remote_ip, username, password, start_time, "
+                "(username = 'http_probe') AS is_http "
                 "FROM sessions ORDER BY start_time ASC, session_id ASC"
             ) as cur:
                 sessions = [dict(r) for r in await cur.fetchall()]
@@ -513,13 +610,20 @@ class TelemetryDB:
 
             analyzer = _get_credential_analyzer()
 
+            # Web probe groups only link by IP: scanners share wordlists and
+            # user agents, so their "credentials" and request sequences say
+            # nothing about who is behind them.
             def credential_key(s: Dict[str, Any]) -> Optional[str]:
+                if s.get("is_http"):
+                    return None
                 username, password = s.get("username") or "", s.get("password") or ""
                 if not username or analyzer.is_generic(username, password):
                     return None
                 return f"{username}\x00{password}"
 
             def playbook_key(s: Dict[str, Any]) -> Optional[str]:
+                if s.get("is_http"):
+                    return None
                 seq = playbooks.get(s["session_id"], [])
                 if len(seq) >= self.PLAYBOOK_MIN_COMMANDS or (
                     seq and sum(len(c) for c in seq) >= self.PLAYBOOK_MIN_CHARS
@@ -555,7 +659,7 @@ class TelemetryDB:
     async def get_campaigns(self, min_sessions: int = 2) -> List[Dict[str, Any]]:
         """Return campaign summaries with at least `min_sessions` member sessions."""
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
@@ -590,7 +694,7 @@ class TelemetryDB:
     async def get_campaign_sessions(self, campaign_id: str) -> List[Dict[str, Any]]:
         """Return the sessions in a campaign, newest first."""
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM sessions WHERE campaign_id = ? ORDER BY start_time DESC",
@@ -619,7 +723,7 @@ class TelemetryDB:
 
     async def get_all_sessions(self) -> List[Dict[str, Any]]:
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM sessions ORDER BY start_time DESC") as cur:
                 rows = await cur.fetchall()
@@ -630,9 +734,10 @@ class TelemetryDB:
     async def delete_session(self, session_id: str) -> bool:
         """Purge a session and all its associated commands and phase transitions from the database."""
         await self._ensure_initialized()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("DELETE FROM commands WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM phase_transitions WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM honeytokens WHERE session_id = ?", (session_id,))
             cur = await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             await db.commit()
             return cur.rowcount > 0

@@ -3,19 +3,75 @@ import logging
 from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple, Union
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.prompts.deception_prompts import build_deception_system_prompt
+from doppel.router.hybrid_router import COMMON_BINARIES
 if TYPE_CHECKING:
     from doppel.core.fake_filesystem import FakeFilesystem
 
 logger = logging.getLogger("doppel.ai.deception")
 
+# Host identity used by the deterministic fast path. Overridden per preset.
+DEFAULT_HOST_PROFILE: Dict[str, str] = {
+    "hostname": "prod-api-node-01",
+    "kernel_release": "5.15.0-105-generic",
+    "kernel_version": "#115-Ubuntu SMP Mon Apr 15 17:33:04 UTC 2024",
+    "uname_processor": "x86_64",
+    "user_groups": "4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),110(lxd)",
+}
+
+# Anything a shell would interpret (chaining, pipes, redirects, expansion,
+# quoting, globbing). Such commands are never answered by the fast path.
+_SHELL_META_RE = re.compile(r"[;&|<>`$(){}\\*?\[\]~!#'\"\n]")
+
+_UNAME_FIELDS = "snrvmpio"
+_UNAME_LONG = {
+    "--all": "a", "--kernel-name": "s", "--nodename": "n", "--kernel-release": "r",
+    "--kernel-version": "v", "--machine": "m", "--processor": "p",
+    "--hardware-platform": "i", "--operating-system": "o",
+}
+
+def _trim_blank_edges(text: str) -> str:
+    """Drop leading blank lines and trailing whitespace, keeping first-line indentation."""
+    return re.sub(r"\A(?:[ \t]*\r?\n)+", "", text).rstrip()
+
+
+_CONVERSATIONAL_NON_BINARIES = {
+    "what", "why", "how", "when", "where", "tell", "say", "describe",
+    "explain", "repeat", "hello", "hi", "hey", "are", "is", "can",
+    "could", "would", "please", "ignore", "system", "assistant", "ai",
+    "whoami?", "help?", "what?", "who?", "why?",
+}
+
 
 class DeceptionEngine:
     """Orchestrates LLM-based terminal emulation, persona camouflage, and dynamic bait injection."""
 
-    def __init__(self, llm_client: LLMClient, persona: str = "ubuntu_web_server"):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        persona: str = "ubuntu_web_server",
+        host_profile: Optional[Dict[str, Any]] = None,
+        dynamic_honeytokens: bool = True,
+    ):
         self.llm_client = llm_client
         self.persona = persona
         self.system_prompt = build_deception_system_prompt(persona)
+        self.host_profile: Dict[str, str] = dict(DEFAULT_HOST_PROFILE)
+        self.dynamic_honeytokens = dynamic_honeytokens
+        if host_profile:
+            self.set_host_profile(host_profile)
+
+    def set_persona(self, persona: str):
+        """Switch persona; the system prompt is derived from it, so rebuild it too."""
+        if persona and persona != self.persona:
+            self.persona = persona
+            self.system_prompt = build_deception_system_prompt(persona)
+
+    def set_host_profile(self, profile: Dict[str, Any]):
+        """Apply hostname/kernel/group details from a distribution preset."""
+        for key in DEFAULT_HOST_PROFILE:
+            value = profile.get(key)
+            if value:
+                self.host_profile[key] = str(value)
 
     @staticmethod
     def extract_reasoning(raw_output: str) -> Tuple[str, Optional[str]]:
@@ -32,7 +88,7 @@ class DeceptionEngine:
             content = match.group(2).strip()
             if content:
                 think_blocks.append(content)
-        stripped = closed_pattern.sub("", text).strip()
+        stripped = _trim_blank_edges(closed_pattern.sub("", text))
 
         # 2. Unclosed tag if model was truncated mid-thought: <think>...
         unclosed_pattern = re.compile(r"<(think|thought)>([\s\S]*)$", flags=re.IGNORECASE)
@@ -41,25 +97,42 @@ class DeceptionEngine:
             content = unclosed_match.group(2).strip()
             if content:
                 think_blocks.append(content)
-            stripped = unclosed_pattern.sub("", stripped).strip()
+            stripped = _trim_blank_edges(unclosed_pattern.sub("", stripped))
 
         reasoning = "\n\n".join(think_blocks) if think_blocks else None
         return stripped, reasoning
+
+    @staticmethod
+    def failure_output(command: str) -> str:
+        """
+        What to show when no believable output could be produced (LLM error,
+        timeout, or a suppressed leak). Utilities every server has print
+        nothing, which is far less suspicious than claiming cat or echo does
+        not exist; anything else gets the usual bash error.
+        """
+        tokens = command.strip().split()
+        if not tokens:
+            return ""
+        binary = tokens[0].rsplit("/", 1)[-1].lower()
+        if binary in COMMON_BINARIES:
+            return ""
+        return f"bash: {tokens[0]}: command not found"
 
     def _clean_output(self, raw_output: str, command: str = "", user: str = "ubuntu") -> str:
         """Strip markdown fences, thinking tags, hallucinated prompts, conversational preambles, and repeating loops."""
         # Strip thinking tags if present
         text, _ = self.extract_reasoning(raw_output)
-        text = text.strip()
+        # Keep the first line's indentation (history, wc and ps output start with spaces)
+        text = _trim_blank_edges(text)
 
         # Remove ```bash ... ``` or ``` ... ```
-        if text.startswith("```"):
-            lines = text.splitlines()
+        if text.lstrip().startswith("```"):
+            lines = text.lstrip().splitlines()
             if len(lines) >= 2 and lines[0].startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
-            text = "\n".join(lines).strip()
+            text = "\n".join(lines).rstrip()
 
         # Strip any quotes if the entire string is enclosed in them
         if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
@@ -103,8 +176,94 @@ class DeceptionEngine:
         result = "\n".join(collapsed_lines)
         return self._sanitize_conversational_leak(result, command=command, user=user)
 
+    # ── Deterministic fast path ───────────────────────────────────────────────
+
+    def _account(self, name: str) -> Tuple[int, int, List[Tuple[int, str]]]:
+        """uid, gid and (gid, name) group list for a login account."""
+        if name == "root":
+            return 0, 0, [(0, "root")]
+        groups = [(1000, name)]
+        for gid, gname in re.findall(r"(\d+)\(([^)]+)\)", self.host_profile.get("user_groups", "")):
+            groups.append((int(gid), gname))
+        return 1000, 1000, groups
+
+    def _id_response(self, args: List[str], user: str) -> Optional[str]:
+        flags = set()
+        target = None
+        for arg in args:
+            if arg.startswith("--"):
+                return None
+            if arg.startswith("-") and len(arg) > 1:
+                for ch in arg[1:]:
+                    if ch not in "ugGnrz":
+                        return f"id: invalid option -- '{ch}'\nTry 'id --help' for more information."
+                    flags.add(ch)
+            elif target is None:
+                target = arg
+            else:
+                return f"id: extra operand '{arg}'\nTry 'id --help' for more information."
+
+        name = target or user
+        if name not in (user, "root"):
+            return None  # other accounts are persona knowledge; let the model answer
+        uid, gid, groups = self._account(name)
+
+        choices = flags & {"u", "g", "G"}
+        if len(choices) > 1:
+            return 'id: cannot print "only" of more than one choice'
+        if not choices:
+            if flags & {"n", "r"}:
+                return "id: cannot print only names or real IDs in default format"
+            group_str = ",".join(f"{g}({n})" for g, n in groups)
+            return f"uid={uid}({name}) gid={gid}({name}) groups={group_str}"
+        names = "n" in flags
+        if "u" in choices:
+            return name if names else str(uid)
+        if "g" in choices:
+            return name if names else str(gid)
+        return " ".join(n if names else str(g) for g, n in groups)
+
+    def _uname_response(self, args: List[str]) -> Optional[str]:
+        wanted = set()
+        for arg in args:
+            if arg.startswith("--"):
+                if arg not in _UNAME_LONG:
+                    return f"uname: unrecognized option '{arg}'\nTry 'uname --help' for more information."
+                wanted.add(_UNAME_LONG[arg])
+            elif arg.startswith("-") and len(arg) > 1:
+                for ch in arg[1:]:
+                    if ch != "a" and ch not in _UNAME_FIELDS:
+                        return f"uname: invalid option -- '{ch}'\nTry 'uname --help' for more information."
+                    wanted.add(ch)
+            else:
+                return f"uname: extra operand '{arg}'\nTry 'uname --help' for more information."
+
+        hp = self.host_profile
+        processor = hp.get("uname_processor") or "x86_64"
+        values = {
+            "s": "Linux",
+            "n": hp["hostname"],
+            "r": hp["kernel_release"],
+            "v": hp["kernel_version"],
+            "m": "x86_64",
+            "p": processor,
+            "i": processor,
+            "o": "GNU/Linux",
+        }
+        if "a" in wanted:
+            fields = [f for f in _UNAME_FIELDS if not (f in "pi" and values[f] == "unknown")]
+        else:
+            fields = [f for f in _UNAME_FIELDS if f in wanted] or ["s"]
+        return " ".join(values[f] for f in fields)
+
     def deterministic_posix_response(self, command: str, user: str = "ubuntu") -> Optional[str]:
-        """Produce authentic POSIX responses for standard utilities, conversational queries, or non-binaries."""
+        """
+        Answer simple identity commands locally, without the model.
+
+        Only plain invocations are handled; anything a shell would interpret
+        (chaining, pipes, redirection, expansion, quoting) returns None so the
+        whole command line goes to the sandbox or the model instead.
+        """
         cmd_clean = command.strip()
         if not cmd_clean:
             return ""
@@ -112,65 +271,60 @@ class DeceptionEngine:
         tokens = cmd_clean.split()
         binary = tokens[0].lower()
 
-        # 1. who / whoami / id / hostname / uname
+        # Conversational input is a "command not found" regardless of punctuation
+        if binary in _CONVERSATIONAL_NON_BINARIES:
+            return f"bash: {tokens[0]}: command not found"
+
+        if _SHELL_META_RE.search(cmd_clean):
+            return None
+
+        args = tokens[1:]
+        hostname = self.host_profile["hostname"]
+
         if binary == "who":
             # who am i / who am I / who mom likes
-            if len(tokens) >= 3 and (
-                (tokens[1].lower() == "am" and tokens[2].lower() == "i")
-                or (tokens[1].lower() == "mom" and tokens[2].lower() == "likes")
+            if len(args) == 2 and (
+                (args[0].lower() == "am" and args[1].lower() == "i")
+                or (args[0].lower() == "mom" and args[1].lower() == "likes")
             ):
                 return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
-            # who with no arguments
-            if len(tokens) == 1:
+            if not args:
                 return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
-            # Valid standard flags
-            if len(tokens) == 2 and tokens[1] in ("-a", "-b", "-d", "-h", "-H", "-l", "-m", "-p", "-q", "-r", "-s", "-t", "-T", "-u"):
-                if tokens[1] == "-q":
+            if len(args) == 1 and args[0] in ("-a", "-b", "-d", "-h", "-H", "-l", "-m", "-p", "-q", "-r", "-s", "-t", "-T", "-u"):
+                if args[0] == "-q":
                     return f"{user}\n# users=1"
-                if tokens[1] == "-b":
+                if args[0] == "-b":
                     return "         system boot  2026-08-30 18:20"
-                if tokens[1] == "-r":
+                if args[0] == "-r":
                     return "         run-level 5  2026-08-30 18:20"
                 return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
-            # Invalid flags / conversational queries: e.g. 'who are you', 'who is this'
-            extra = tokens[1]
-            return f"who: extra operand '{extra}'\nTry 'who --help' for more information."
+            return f"who: extra operand '{args[0]}'\nTry 'who --help' for more information."
 
         if binary == "whoami":
-            return user
+            if not args:
+                return user
+            if args[0].startswith("-"):
+                return None
+            return f"whoami: extra operand '{args[0]}'\nTry 'whoami --help' for more information."
 
         if binary == "id":
-            return f"uid=1000({user}) gid=1000({user}) groups=1000({user}),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),110(lxd)"
+            return self._id_response(args, user)
 
         if binary == "hostname":
-            return "prod-api-node-01"
+            if not args:
+                return hostname
+            if args == ["-s"] or args == ["--short"]:
+                return hostname.split(".")[0]
+            return None
 
         if binary == "uname":
-            if any(t in ("-a", "--all") for t in tokens[1:]):
-                return "Linux prod-api-node-01 5.15.0-105-generic #115-Ubuntu SMP Mon Apr 15 17:33:04 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux"
-            if any("-r" in t for t in tokens[1:]):
-                return "5.15.0-105-generic"
-            if any("-m" in t for t in tokens[1:]):
-                return "x86_64"
-            if any(t in ("-s", "-o") for t in tokens[1:]):
-                return "Linux" if "-s" in tokens[1:] else "GNU/Linux"
-            return "Linux"
+            return self._uname_response(args)
 
         if binary in ("true", ":"):
             return ""
 
-        if binary in ("false", "test") and len(tokens) == 1:
+        if binary in ("false", "test") and not args:
             return ""
-
-        # 2. Conversational non-binaries: bash strictly prints command not found
-        conversational_non_binaries = {
-            "what", "why", "how", "when", "where", "tell", "say", "describe",
-            "explain", "repeat", "hello", "hi", "hey", "are", "is", "can",
-            "could", "would", "please", "ignore", "system", "assistant", "ai",
-            "whoami?", "help?", "what?", "who?", "why?"
-        }
-        if binary in conversational_non_binaries:
-            return f"bash: {tokens[0]}: command not found"
 
         return None
 
@@ -214,11 +368,7 @@ class DeceptionEngine:
         deterministic = self.deterministic_posix_response(command, user=user)
         if deterministic is not None:
             return deterministic
-
-        if not tokens:
-            return ""
-
-        return f"bash: {tokens[0]}: command not found"
+        return self.failure_output(command)
 
     async def generate_command_output(
         self,
@@ -247,7 +397,7 @@ class DeceptionEngine:
         # Inject dynamic canary honeytokens if accessing sensitive files or credentials
         cmd_lower = command.lower()
         sensitive_patterns = [".env", "aws", "credential", "config", "token", "secret", "key", "password", "cat", "grep", "id_rsa"]
-        if any(pat in cmd_lower for pat in sensitive_patterns):
+        if self.dynamic_honeytokens and any(pat in cmd_lower for pat in sensitive_patterns):
             try:
                 from doppel.deception.honeytokens import get_honeytoken_manager
                 ht_mgr = get_honeytoken_manager()
@@ -297,7 +447,7 @@ class DeceptionEngine:
             return cleaned
         except Exception as e:
             logger.error(f"Error generating deception output: {e}")
-            fallback = f"bash: {command.split()[0]}: command not found"
+            fallback = self.failure_output(command)
             if return_reasoning:
                 return fallback, None
             return fallback
@@ -327,7 +477,7 @@ class DeceptionEngine:
         # Inject dynamic canary honeytokens if applicable
         cmd_lower = command.lower()
         sensitive_patterns = [".env", "aws", "credential", "config", "token", "secret", "key", "password", "cat", "grep", "id_rsa"]
-        if any(pat in cmd_lower for pat in sensitive_patterns):
+        if self.dynamic_honeytokens and any(pat in cmd_lower for pat in sensitive_patterns):
             try:
                 from doppel.deception.honeytokens import get_honeytoken_manager
                 ht_mgr = get_honeytoken_manager()
@@ -358,7 +508,7 @@ class DeceptionEngine:
             return cleaned
         except Exception as e:
             logger.error(f"Error in grounded transformation: {e}")
-            fallback = (real_stdout + real_stderr).strip() or f"bash: {command.split()[0]}: command not found"
+            fallback = (real_stdout + real_stderr).strip() or self.failure_output(command)
             if return_reasoning:
                 return fallback, None
             return fallback

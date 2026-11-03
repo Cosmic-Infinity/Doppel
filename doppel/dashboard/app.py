@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from doppel.dashboard.controller import HoneypotController
 from doppel.dashboard.ip_filter import IPAllowlistMiddleware
-from doppel.deception.honeytokens import get_honeytoken_manager
 
 logger = logging.getLogger("doppel.dashboard.api")
 
@@ -400,83 +399,6 @@ async def delete_session_endpoint(session_id: str):
     return {"success": True, "session_id": session_id}
 
 
-
-
-@app.api_route("/auth/v1/verify", methods=["GET", "POST"])
-async def verify_canary_token(request: Request):
-    """
-    Canary verification tripwire endpoint. Catches, logs, and alerts whenever
-    stolen decoy credentials, API keys, or Canary URLs are accessed or tested.
-    """
-    import aiosqlite
-    from datetime import datetime, timezone
-
-    client_ip = request.client.host if request.client else "unknown"
-    user_agent = request.headers.get("user-agent", "unknown")
-    token_val = request.query_params.get("token") or request.query_params.get("key") or ""
-
-    # Check headers if not in query params
-    if not token_val:
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            token_val = auth_header.split(" ", 1)[1]
-        elif request.headers.get("x-api-key"):
-            token_val = request.headers.get("x-api-key", "")
-
-    # Check JSON body if POST
-    if not token_val and request.method == "POST":
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                token_val = body.get("token") or body.get("api_key") or body.get("key") or ""
-        except Exception:
-            pass
-
-    ht_mgr = get_honeytoken_manager()
-    activation = ht_mgr.verify_and_log_activation(
-        token_identifier=token_val or "probe_without_token",
-        remote_ip=client_ip,
-        user_agent=user_agent,
-        method=request.method,
-    )
-
-    # Log to database web_probes
-    try:
-        async with aiosqlite.connect(controller.config.analytics.db_path) as db:
-            await db.execute(
-                """
-                INSERT INTO web_probes
-                (timestamp, remote_ip, remote_port, method, path, query, user_agent, probe_label, status_code, response_snippet)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    datetime.now(timezone.utc).isoformat(),
-                    client_ip,
-                    request.client.port if request.client else 0,
-                    request.method,
-                    request.url.path,
-                    str(request.query_params),
-                    user_agent,
-                    f"HONEYTOKEN_ACTIVATED:{activation['token_type']}",
-                    401,
-                    "Decoy credential verification trapped",
-                ),
-            )
-            await db.commit()
-    except Exception as db_err:
-        logger.warning(f"Failed to log honeytoken probe to database: {db_err}")
-
-    # Broadcast tripwire alert to Web SOC dashboard
-    await controller.broadcast({
-        "type": "honeytoken_activated",
-        "data": activation,
-    })
-
-    return {
-        "status": "error",
-        "code": "invalid_credentials",
-        "message": "Token verification failed. Credential has expired or is invalid.",
-    }
 
 
 @app.websocket("/ws/stream")

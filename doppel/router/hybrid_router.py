@@ -58,6 +58,23 @@ DECEPTION_TOOLS: Set[str] = {
     "msfconsole",
 }
 
+# Utilities any server of the personas has installed. When no believable output
+# can be produced for these, printing nothing is safer than "command not found".
+COMMON_BINARIES: Set[str] = {
+    "cat", "ls", "ll", "la", "grep", "egrep", "find", "head", "tail", "echo", "printf", "yes",
+    "awk", "sed", "cut", "sort", "uniq", "wc", "tr", "tee", "less", "more", "file", "stat",
+    "df", "du", "free", "ps", "top", "htop", "kill", "pkill", "chmod", "chown", "cp", "mv", "rm",
+    "mkdir", "rmdir", "touch", "ln", "tar", "gzip", "gunzip", "zip", "unzip", "curl", "wget",
+    "ssh", "scp", "rsync", "python", "python3", "perl", "git", "nano", "vim", "vi", "which",
+    "whereis", "date", "uptime", "w", "last", "lastlog", "lscpu", "lsblk", "lsof", "mount",
+    "env", "printenv", "export", "history", "crontab", "systemctl", "service", "journalctl",
+    "ip", "ifconfig", "netstat", "ss", "route", "ping", "dig", "nslookup", "host", "nproc",
+    "base64", "md5sum", "sha256sum", "xargs", "sleep", "diff", "basename", "dirname",
+    "realpath", "id", "whoami", "who", "hostname", "uname", "sudo", "su", "apt", "apt-get",
+    "dpkg", "php", "node", "npm", "mysql", "redis-cli", "openssl", "dmesg", "hostnamectl",
+    "passwd", "groups", "getent", "locate", "strings", "od", "xxd", "nohup", "screen",
+}
+
 # Commands where real Linux structure is necessary, but container telltales must be camouflaged
 # or honeytokens injected (Tier 2: Grounded Deception)
 GROUNDED_COMMANDS: Set[str] = {

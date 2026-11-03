@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from doppel.config import get_config, DoppelConfig
+from doppel.config import get_config, get_active_preset, DoppelConfig
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
@@ -41,12 +41,19 @@ def build_system_stack(config: DoppelConfig) -> SessionManager:
         temperature=config.llm.temperature,
         mock_mode=config.llm.mock_mode,
     )
-    deception_engine = DeceptionEngine(llm_client=llm_client, persona=config.deception.persona)
+    preset = get_active_preset(config) or {}
+    deception_engine = DeceptionEngine(
+        llm_client=llm_client,
+        persona=preset.get("persona_context", config.deception.persona),
+        host_profile=preset,
+        dynamic_honeytokens=config.deception.dynamic_honeytokens,
+    )
     sandbox_manager = DockerSandboxManager(
         image=config.sandbox.image,
         network_disabled=config.sandbox.network_disabled,
         memory_limit=config.sandbox.memory_limit,
         enabled=config.sandbox.enabled,
+        hostname=preset.get("hostname", config.honeypot.hostname),
     )
     router = HybridRouter(
         intercept_sensitive_files=config.deception.intercept_sensitive_files,

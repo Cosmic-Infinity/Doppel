@@ -2,6 +2,7 @@
 honeypot:
   host: "0.0.0.0"
   port: 2222
+  # Used when the active preset defines no banner of its own
   server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
   hostname: "prod-api-node-01"
   default_user: "ubuntu"
@@ -36,6 +37,9 @@ deception:
   intercept_sensitive_files: true
   intercept_missing_tools: true
   dynamic_honeytokens: true
+  # Public address of the HTTP decoy, used in leaked canary URLs so that stolen
+  # tokens reach /auth/v1/verify. Empty: derived from honeypot host + http_sensor_port.
+  canary_base_url: ""
 
 sandbox:
   # When true, benign commands run in an ephemeral container.
@@ -50,6 +54,8 @@ analytics:
   db_path: "doppel_telemetry.db"
   enable_mitre_tagging: true
   reports_dir: "reports"
+  # Incident reports generated at the same time (each is an LLM call)
+  max_concurrent_reports: 2
 
 # IPs that bypass honeypot entirely and get a real sandbox shell.
 # Alert/logging still fires so you know they connected, but no deception.

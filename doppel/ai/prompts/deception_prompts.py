@@ -75,19 +75,19 @@ HONEYTOKENS (leak these when attacker reads the corresponding files)
     APP_KEY=base64:7L1x9Q5kJp99aX12mO98=
     DB_HOST=10.0.4.50
     DB_DATABASE=app_production
-    DB_USERNAME=doppel_db_user
+    DB_USERNAME=api_prod
     DB_PASSWORD=P@ssw0rdProd2026!
     REDIS_HOST=127.0.0.1
-    AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-    AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-    STRIPE_API_KEY=sk_live_51MzX90fakeStripeKey2026
+    AWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D
+    AWS_SECRET_ACCESS_KEY=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
+    STRIPE_API_KEY=sk_live_51MzX90Lq8RkV2nWb7TcYp4DfH3sJu6GeR
   /var/www/api/.env:
     JWT_SECRET=s3cr3t_jwt_k3y_9921_production
     MONGO_URI=mongodb://api_user:m0ng0Pr0d!@10.0.4.55:27017/api_db
   ~/.aws/credentials:
     [default]
-    aws_access_key_id = AKIAIOSFODNN7EXAMPLE
-    aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    aws_access_key_id = AKIA5WQZT3LRXN7KHB2D
+    aws_secret_access_key = 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
     region = us-east-1
   /etc/shadow (when accessible):
     root:$6$rounds=656000$v1J8G1$zR2xXk5.9Y1Lw9yNqLc3P:19741:0:99999:7:::
@@ -97,7 +97,7 @@ HONEYTOKENS (leak these when attacker reads the corresponding files)
     www-data:*:19065:0:99999:7:::
   ~/.mysql_history:
     SELECT user, host FROM mysql.user;
-    GRANT ALL PRIVILEGES ON app_production.* TO 'doppel_db_user'@'10.0.4.%' IDENTIFIED BY 'P@ssw0rdProd2026!';
+    GRANT ALL PRIVILEGES ON app_production.* TO 'api_prod'@'10.0.4.%' IDENTIFIED BY 'P@ssw0rdProd2026!';
     FLUSH PRIVILEGES;
   ~/.bash_history:
     cd /var/www/html
@@ -152,7 +152,7 @@ AWS METADATA (IMDSv2 responses at http://169.254.169.254)
   /latest/meta-data/placement/availability-zone : us-east-1b
   /latest/meta-data/iam/security-credentials/EKSNodeRole :
     AccessKeyId     : ASIA2OGYBQ6EXAMPLE01
-    SecretAccessKey  : S3cR3tK3y/Example+0123456789abcdef0
+    SecretAccessKey  : Hn4Tq9Wz2Lr7Xc5Vb8Mk1Pd6Fs3Gj0Ya8Ue2RiQ
     Token           : FwoGZXIvY...truncated...==
     Expiration      : 2026-10-12T06:45:00Z
 
@@ -171,7 +171,7 @@ KUBERNETES CONTEXT
 ~/.aws/credentials:
   [default]
   aws_access_key_id = ASIA2OGYBQ6EXAMPLE01
-  aws_secret_access_key = S3cR3tK3y/Example+0123456789abcdef0
+  aws_secret_access_key = Hn4Tq9Wz2Lr7Xc5Vb8Mk1Pd6Fs3Gj0Ya8Ue2RiQ
   region = us-east-1
 
 ~/.kube/config (simplified):
@@ -257,8 +257,8 @@ HONEYTOKENS
   /opt/fintech-api/.env.staging:
     DATABASE_URL=postgresql://fintech_admin:FinT3ch_Secure_2026@127.0.0.1:5432/payments
     REDIS_URL=redis://:r3d!sP@ss_staging@127.0.0.1:6379/0
-    STRIPE_SECRET_KEY=sk_test_51MzFakeKeyFintech2026
-    STRIPE_WEBHOOK_SECRET=whsec_test_FakeWebhookSigningSecret2026
+    STRIPE_SECRET_KEY=sk_live_51NbQ7xKz2LmV9pRw4TgYc8HdJ5sFa3UeT
+    STRIPE_WEBHOOK_SECRET=whsec_8fK2mQz7Lw4Rt9Vb1Nc6Xp3Jd5Hs0GaY
     JWT_PRIVATE_KEY_PATH=/opt/fintech-api/keys/private_key.pem
     JWT_ALGORITHM=RS256
     SENTRY_DSN=https://abc123@o456.ingest.sentry.io/789
@@ -274,7 +274,7 @@ HONEYTOKENS
       webhook_endpoint: /api/v1/webhooks/stripe
   /opt/fintech-api/keys/private_key.pem:
     -----BEGIN RSA PRIVATE KEY-----
-    MIIEpAIBAAKCAQEA1234567890FakeRSAKeyForHoneypot...
+    MIIEpAIBAAKCAQEAyV3k9Qm7tR2xL8bW5nZpC4jH6fD1sK0aG9eY3uT7iO2rN5vM...
     (truncated, 4096-bit RSA)
     -----END RSA PRIVATE KEY-----
 

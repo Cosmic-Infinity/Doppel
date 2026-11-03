@@ -27,11 +27,6 @@ async def db():
         yield _db
 
 
-def _ts(offset_seconds: float = 0) -> str:
-    """Return an ISO-8601 UTC timestamp offset from now."""
-    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
-
-
 async def _seed_session(db: TelemetryDB, session_id: str, ip: str,
                         username: str, password: str,
                         commands: list[tuple[str, str, float]],
@@ -47,11 +42,13 @@ async def _seed_session(db: TelemetryDB, session_id: str, ip: str,
         username=username,
         password=password,
     )
+    # One base time for the whole session so slow inserts cannot skew the gaps
+    base = datetime.now(timezone.utc)
     offset = 0.0
     for cmd, output, delay in commands:
         offset += delay
         # Manually insert with a controlled timestamp so replay math is deterministic
-        ts = _ts(offset)
+        ts = (base + timedelta(seconds=offset)).isoformat()
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute(
                 """INSERT INTO commands

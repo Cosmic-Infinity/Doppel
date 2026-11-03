@@ -31,11 +31,14 @@ class DockerSandboxManager:
         network_disabled: bool = True,
         memory_limit: str = "256m",
         enabled: bool = True,
+        hostname: str = "prod-api-node-01",
     ):
         self.image = image
         self.network_disabled = network_disabled
         self.memory_limit = memory_limit
         self.enabled = enabled
+        # Without this, `hostname` inside the container prints the container ID
+        self.hostname = hostname
         self.client = None
         self.is_available = False
 
@@ -107,6 +110,7 @@ class DockerSandboxManager:
             container = self.client.containers.run(
                 image=self.image,
                 name=container_name,
+                hostname=self.hostname,
                 detach=True,
                 tty=True,
                 stdin_open=True,
@@ -139,7 +143,7 @@ class DockerSandboxManager:
 
                 decoy_seed = (
                     "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
-                    "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:dGVzdF9rZXlfZG9wcGVsX2NhbmFyeV9hdXRoMQ==\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
+                    "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\\nAWS_SECRET_ACCESS_KEY=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\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
                     "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
                     "printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > /home/ubuntu/.bash_history && "
                     "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
@@ -159,7 +163,7 @@ class DockerSandboxManager:
                     "printf '#!/bin/sh\\nexec ls -la \"$@\"\\n' > /bin/ll 2>/dev/null && chmod +x /bin/ll 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -A \"$@\"\\n' > /bin/la 2>/dev/null && chmod +x /bin/la 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -CF \"$@\"\\n' > /bin/l 2>/dev/null && chmod +x /bin/l 2>/dev/null || true; "
-                    "touch /tmp/.doppel_env && chmod 666 /tmp/.doppel_env 2>/dev/null || true; "
+                    "touch /dev/shm/.bash_env && chmod 666 /dev/shm/.bash_env 2>/dev/null || true; "
                     f"{who_wrapper}"
                     f"{decoy_seed}"
                 )
@@ -187,15 +191,15 @@ class DockerSandboxManager:
         try:
             container = self.client.containers.get(container_id)
             # Safe execution: source shell env, ensure target directory exists, navigate inside shell
-            # If command exports a variable or alias, persist it in /tmp/.doppel_env
+            # If command exports a variable or alias, persist it in /dev/shm/.bash_env
             persist_env = ""
             stripped = command.strip()
             if stripped.startswith(("export ", "alias ")):
                 safe_val = stripped.replace("'", "'\\''")
-                persist_env = f"; echo '{safe_val}' >> /tmp/.doppel_env 2>/dev/null || true"
+                persist_env = f"; echo '{safe_val}' >> /dev/shm/.bash_env 2>/dev/null || true"
 
             safe_script = (
-                f"[ -f /tmp/.doppel_env ] && . /tmp/.doppel_env 2>/dev/null; "
+                f"[ -f /dev/shm/.bash_env ] && . /dev/shm/.bash_env 2>/dev/null; "
                 f"mkdir -p '{workdir}' 2>/dev/null; cd '{workdir}' 2>/dev/null || cd /; "
                 f"{command}{persist_env}"
             )

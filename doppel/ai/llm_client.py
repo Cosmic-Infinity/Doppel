@@ -506,7 +506,7 @@ class LLMClient:
                 "DB_HOST=10.0.4.50\n"
                 "DB_PORT=3306\n"
                 "DB_DATABASE=app_production\n"
-                "DB_USERNAME=doppel_db_user\n"
+                "DB_USERNAME=api_prod\n"
                 "DB_PASSWORD=P@ssw0rdProd2026!\n"
                 "\n"
                 "CACHE_DRIVER=redis\n"
@@ -523,13 +523,13 @@ class LLMClient:
                 "MAIL_PASSWORD=key-3abc456def789ghi\n"
                 "MAIL_ENCRYPTION=tls\n"
                 "\n"
-                "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n"
-                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+                "AWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\n"
+                "AWS_SECRET_ACCESS_KEY=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\n"
                 "AWS_DEFAULT_REGION=us-east-1\n"
                 "AWS_BUCKET=prod-assets-20260101\n"
                 "\n"
-                "STRIPE_API_KEY=sk_live_51MzX90fakeStripeKey2026\n"
-                "STRIPE_WEBHOOK_SECRET=whsec_live_FakeWebhookSecret2026\n"
+                "STRIPE_API_KEY=sk_live_51MzX90Lq8RkV2nWb7TcYp4DfH3sJu6GeR\n"
+                "STRIPE_WEBHOOK_SECRET=whsec_Tz4Qm8Rk2Lw6Vb0Nc9Xp5Jd3Hs7GaYf1\n"
                 "\n"
                 "JWT_SECRET=s3cr3t_jwt_k3y_9921_production\n"
                 "JWT_TTL=60"
@@ -539,8 +539,8 @@ class LLMClient:
         if ("aws" in user_msg and "credentials" in user_msg) or ".aws/credentials" in user_msg:
             return (
                 "[default]\n"
-                "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
-                "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+                "aws_access_key_id = AKIA5WQZT3LRXN7KHB2D\n"
+                "aws_secret_access_key = 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\n"
                 "region = us-east-1\n"
                 "\n"
                 "[deploy-role]\n"
@@ -993,7 +993,7 @@ class LLMClient:
 
         # --- cat / head / tail generic files ---
         if "authorized_keys" in user_msg:
-            return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeDeployKeyProd2026ABCDEFGHIJKLMNOP deploy@ci-runner-01"
+            return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7mQ2vR9tL4xW8bN3zP6cH1jF5sD0aG2eY9uT4iO7rM deploy@ci-runner-01"
 
         if ".bash_history" in user_msg or "bash_history" in user_msg:
             return (
@@ -1039,7 +1039,7 @@ class LLMClient:
             return (
                 "-- Journal begins at Thu 2026-08-30 17:08:42 UTC, ends at Sat 2026-10-12 02:30:14 UTC. --\n"
                 "Oct 12 02:25:01 prod-api-node-01 CRON[4012]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)\n"
-                "Oct 12 02:28:14 prod-api-node-01 sshd[3201]: Accepted publickey for ubuntu from 10.0.4.1 port 58420 ssh2: ED25519 SHA256:FakeFingerprint\n"
+                "Oct 12 02:28:14 prod-api-node-01 sshd[3201]: Accepted publickey for ubuntu from 10.0.4.1 port 58420 ssh2: ED25519 SHA256:q3Vt8mK1zR6wL9xN2bP5cH7jF0sD4aG1eY8uT3iO6rM\n"
                 "Oct 12 02:28:14 prod-api-node-01 sshd[3201]: pam_unix(sshd:session): session opened for user ubuntu(uid=1000) by (uid=0)\n"
                 "Oct 12 02:28:14 prod-api-node-01 systemd-logind[498]: New session 14 of user ubuntu.\n"
                 "Oct 12 02:30:01 prod-api-node-01 CRON[4098]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)"
@@ -1061,5 +1061,16 @@ class LLMClient:
             cmd_text = cmd_text.split("# ", 1)[1]
         tokens = cmd_text.strip().split()
         binary = tokens[0] if tokens else "command"
+        if binary == "echo":
+            import shlex
+            try:
+                return " ".join(shlex.split(cmd_text.strip())[1:])
+            except ValueError:
+                return " ".join(tokens[1:])
+        # Same rule as the live fallback: claiming cat or grep is missing would
+        # expose the honeypot, so standard utilities print nothing instead
+        from doppel.router.hybrid_router import COMMON_BINARIES
+        if binary.rsplit("/", 1)[-1].lower() in COMMON_BINARIES:
+            return ""
         return f"bash: {binary}: command not found"
 

@@ -39,6 +39,7 @@ class SessionState:
     # Stateful Privilege Escalation
     effective_user: str = "ubuntu"
     is_elevated: bool = False
+    pre_elevation_cwd: Optional[str] = None
 
 
 class SessionManager:
@@ -84,6 +85,14 @@ class SessionManager:
         self._background_tasks: set[asyncio.Task] = set()
         self.event_callbacks: List[Any] = []
         self._profiler = AttackerProfiler()
+        # Reports are LLM calls; a burst of short sessions must not swamp the model
+        max_reports = getattr(getattr(config, "analytics", None), "max_concurrent_reports", 2) or 1
+        self._report_slots = asyncio.Semaphore(max(1, int(max_reports)))
+
+    @staticmethod
+    def can_drop_privileges(session: "SessionState") -> bool:
+        """True inside a `sudo su`-style root shell opened by a non-root login."""
+        return bool(session.is_elevated and session.effective_user != session.username)
 
     def register_event_listener(self, callback: Any):
         self.event_callbacks.append(callback)
@@ -212,11 +221,22 @@ class SessionManager:
             "su", "su -", "su root",
         )
         if cmd_clean in elevation_cmds:
+            if not self.can_drop_privileges(session):
+                session.pre_elevation_cwd = session.cwd
             session.effective_user = "root"
             session.is_elevated = True
             session.cwd = "/root"
             decision = RouteDecision.BUILTIN
             output = ""
+            reasoning = None
+        elif cmd_clean in ("exit", "logout") and self.can_drop_privileges(session):
+            # Leaving the root shell returns to the user's shell where it was
+            session.effective_user = session.username
+            session.is_elevated = False
+            session.cwd = session.pre_elevation_cwd or f"/home/{session.username}"
+            session.pre_elevation_cwd = None
+            decision = RouteDecision.BUILTIN
+            output = "exit"
             reasoning = None
         else:
             # Standard 3-tier routing classification
@@ -624,7 +644,8 @@ class SessionManager:
 
         report_path = None
         try:
-            report_path = await self.reporter.generate_session_report(session_id)
+            async with self._report_slots:
+                report_path = await self.reporter.generate_session_report(session_id)
         except Exception as e:
             logger.error(f"Error generating incident report for session {session_id[:8]}: {e}")
 

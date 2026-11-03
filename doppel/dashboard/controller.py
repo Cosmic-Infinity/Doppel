@@ -6,7 +6,8 @@ from typing import Dict, Any, Optional, Set, Tuple, List, AsyncGenerator
 from datetime import datetime, timezone
 from fastapi import WebSocket
 
-from doppel.config import DoppelConfig, get_config
+from doppel.config import DoppelConfig, get_config, get_active_preset
+from doppel.deception.honeytokens import derive_canary_base_url, get_honeytoken_manager
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
@@ -137,14 +138,25 @@ class HoneypotController:
                 temperature=self.config.llm.temperature,
                 mock_mode=self.config.llm.mock_mode,
             )
+            preset = get_active_preset(self.config) or {}
             deception_engine = DeceptionEngine(
-                llm_client=llm_client, persona=self.config.deception.persona
+                llm_client=llm_client,
+                persona=preset.get("persona_context", self.config.deception.persona),
+                host_profile=preset,
+                dynamic_honeytokens=self.config.deception.dynamic_honeytokens,
             )
             sandbox_manager = DockerSandboxManager(
                 image=self.config.sandbox.image,
                 network_disabled=self.config.sandbox.network_disabled,
                 memory_limit=self.config.sandbox.memory_limit,
                 enabled=self.config.sandbox.enabled,
+                hostname=preset.get("hostname", self.config.honeypot.hostname),
+            )
+            # Leaked canary URLs point at the public HTTP decoy; tokens are
+            # stored so they are still recognised after a restart
+            get_honeytoken_manager().configure(
+                base_url=derive_canary_base_url(self.config, preset),
+                persist=self.db.save_honeytoken,
             )
             router = HybridRouter(
                 intercept_sensitive_files=self.config.deception.intercept_sensitive_files,
@@ -487,17 +499,21 @@ class HoneypotController:
         async def _event_cb(event_type: str, data: dict) -> None:
             self._on_session_event(event_type, data)
 
+        preset = get_active_preset(self.config) or {}
         sensor_app = create_http_sensor(
             deception_engine=deception_engine,
             db=self.db,
             persona=self.config.deception.persona,
             event_callback=_event_cb,
+            server_header=preset.get("http_server_header", "nginx/1.18.0 (Ubuntu)"),
         )
         cfg = uvicorn.Config(
             app=sensor_app,
             log_level="warning",
             access_log=False,
             lifespan="off",
+            # The decoy sets its own nginx Server header; uvicorn's would sit next to it
+            server_header=False,
         )
         server = uvicorn.Server(cfg)
         self.http_server = server
@@ -518,7 +534,6 @@ class HoneypotController:
             self.http_server = None
 
     def get_config_dict(self) -> Dict[str, Any]:
-        from doppel.config import get_active_preset
         preset = get_active_preset(self.config) or {}
         return {
             # Shell prompt as the SSH server renders it (the active preset overrides hostname)
@@ -547,12 +562,14 @@ class HoneypotController:
         if not self.session_manager:
             return
 
-        from doppel.config import get_active_preset
         preset = get_active_preset(self.config)
 
         if hasattr(self.session_manager, "deception_engine") and self.session_manager.deception_engine:
             target_persona = preset.get("persona_context", self.config.deception.persona) if preset else self.config.deception.persona
-            self.session_manager.deception_engine.persona = target_persona
+            self.session_manager.deception_engine.set_persona(target_persona)
+            if preset:
+                self.session_manager.deception_engine.set_host_profile(preset)
+            self.session_manager.deception_engine.dynamic_honeytokens = self.config.deception.dynamic_honeytokens
             if hasattr(self.session_manager.deception_engine, "llm_client") and self.session_manager.deception_engine.llm_client:
                 self.session_manager.deception_engine.llm_client.base_url = self.config.llm.base_url.rstrip("/")
                 self.session_manager.deception_engine.llm_client.model = self.config.llm.model
