@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from doppel.config import get_config, get_active_preset, DoppelConfig
+from doppel.config import get_config, get_active_preset, resolve_persona_key, DoppelConfig
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
@@ -81,36 +81,64 @@ def run(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config.yaml"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose debug logging"),
 ):
-    """Start the Doppel SSH Honeypot daemon."""
+    """Start the honeypot without the dashboard (SSH listener and HTTP decoy)."""
     setup_logging(verbose)
     config = get_config(config_path)
+    http_port = getattr(config, "http_sensor_port", 0)
 
     console.print(Panel.fit(
         f"[bold green]Doppel Honeypot System[/bold green]\n"
-        f"[cyan]Listening on:[/cyan] {config.honeypot.host}:{config.honeypot.port}\n"
+        f"[cyan]SSH:[/cyan] {config.honeypot.host}:{config.honeypot.port}\n"
+        f"[cyan]HTTP decoy:[/cyan] {f'{config.honeypot.host}:{http_port}' if http_port else 'Disabled'}\n"
         f"[cyan]LLM Backend:[/cyan] {config.llm.base_url} ({config.llm.model})\n"
         f"[cyan]Mock Mode:[/cyan] {'Enabled' if config.llm.mock_mode else 'Disabled'}\n"
-        f"[cyan]Persona:[/cyan] {config.deception.persona}\n"
+        f"[cyan]Persona:[/cyan] {resolve_persona_key(config)}\n"
         f"[cyan]Sandbox:[/cyan] {'Active' if config.sandbox.enabled else 'Disabled'}",
         title="Doppel Initialized",
         border_style="green"
     ))
 
     async def main():
-        session_mgr = build_system_stack(config)
-        await session_mgr.db.initialize()
-        server = await start_ssh_server(session_mgr, config)
+        # Same lifecycle as the dashboard, so both modes start the same services
+        from doppel.dashboard.controller import HoneypotController
+        controller = HoneypotController(config_path)
+        await controller.initialize()
+        await controller.start()
+        if controller.status != "RUNNING":
+            console.print(f"[bold red]Failed to start:[/bold red] {controller.error_message}")
+            return
         try:
-            await server.wait_closed()
+            await asyncio.Event().wait()
         except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
             console.print("\n[yellow]Shutting down honeypot...[/yellow]")
-            server.close()
-            await server.wait_closed()
+            await controller.stop()
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
+
+@app.command()
+def build_sandbox(
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config.yaml"),
+):
+    """Build (or pull) the sandbox image now instead of on first use."""
+    setup_logging(False)
+    config = get_config(config_path)
+    manager = DockerSandboxManager(image=config.sandbox.image, enabled=True)
+    if not manager.client:
+        console.print("[bold red]Docker is not reachable.[/bold red]")
+        raise typer.Exit(code=1)
+    if manager._image_thread:
+        manager._image_thread.join()
+    if manager.image_ready.is_set() or manager.ensure_image():
+        console.print(f"[bold green]Sandbox image ready:[/bold green] {config.sandbox.image}")
+    else:
+        console.print(f"[bold red]Could not prepare sandbox image:[/bold red] {config.sandbox.image}")
+        raise typer.Exit(code=1)
 
 
 @app.command()

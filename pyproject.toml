@@ -32,6 +32,12 @@ dev = [
 [project.scripts]
 doppel = "doppel.cli:app"
 
+[tool.setuptools.packages.find]
+include = ["doppel*"]
+
+[tool.setuptools.package-data]
+doppel = ["config/*.yaml", "sandbox/Dockerfile", "dashboard/static/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

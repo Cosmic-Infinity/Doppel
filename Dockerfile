@@ -21,7 +21,8 @@ COPY README.md ./
 # Create data directories
 RUN mkdir -p /app/data /app/reports
 
-EXPOSE 2222
+# SSH honeypot, HTTP decoy, dashboard
+EXPOSE 2222 8080 8000
 
 ENTRYPOINT ["python", "-m", "doppel.cli"]
 CMD ["run"]

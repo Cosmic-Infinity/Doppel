@@ -1773,9 +1773,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (shownCwd === home) shownCwd = '~';
     else if (shownCwd.startsWith(home + '/')) shownCwd = '~' + shownCwd.slice(home.length);
     const fmt = (isRoot ? promptConfig.root_format : promptConfig.format) || '{user}@{hostname}:{cwd}$ ';
+    const cwdBase = (shownCwd === '~' || shownCwd === '/') ? shownCwd : shownCwd.replace(/\/+$/, '').split('/').pop();
     return fmt
       .replace(/\{user\}/g, name)
       .replace(/\{hostname\}/g, promptConfig.hostname || '')
+      .replace(/\{cwd_base\}/g, cwdBase)
       .replace(/\{cwd\}/g, shownCwd);
   }
 

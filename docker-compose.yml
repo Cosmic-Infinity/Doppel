@@ -1,23 +1,34 @@
-version: '3.8'
-
 services:
   doppel:
     build: .
     container_name: doppel_honeypot
     restart: unless-stopped
+    # Headless mode: SSH listener + HTTP decoy. To use the dashboard instead,
+    # change the command to ["dashboard", "--host", "0.0.0.0"], publish 8000,
+    # and add the Docker gateway address to access.dashboard_allowed_ips.
+    command: ["run"]
     ports:
-      - "2222:2222"
+      - "2222:2222"   # SSH honeypot
+      - "8080:8080"   # HTTP decoy and canary verification endpoint
+      # - "127.0.0.1:8000:8000"   # dashboard (see note above)
     volumes:
-      # Mount Docker socket so Doppel can launch isolated ephemeral sandbox containers
+      # Lets Doppel start isolated sandbox containers on the host's Docker engine
       - /var/run/docker.sock:/var/run/docker.sock
+      # Telemetry DB and SSH host keys must survive redeploys; a new host key
+      # on every deploy changes the server fingerprint returning attackers see
       - ./data:/app/data
       - ./reports:/app/reports
       - ./config.yaml:/app/config.yaml:ro
     environment:
+      # Nested settings use a double underscore: DOPPEL_<SECTION>__<KEY>
       - PYTHONUNBUFFERED=1
-      - DOPPEL_LLM_BASE_URL=${DOPPEL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
-      - DOPPEL_LLM_MODEL=${DOPPEL_LLM_MODEL:-qwen2.5-coder:7b}
-      - DOPPEL_LLM_API_KEY=${DOPPEL_LLM_API_KEY:-ollama}
-      - DOPPEL_SANDBOX_ENABLED=true
+      - DOPPEL_LLM__BASE_URL=${DOPPEL_LLM__BASE_URL:-http://host.docker.internal:11434/v1}
+      - DOPPEL_LLM__MODEL=${DOPPEL_LLM__MODEL:-qwen2.5-coder:7b}
+      - DOPPEL_LLM__API_KEY=${DOPPEL_LLM__API_KEY:-ollama}
+      - DOPPEL_SANDBOX__ENABLED=true
+      - DOPPEL_ANALYTICS__DB_PATH=/app/data/doppel_telemetry.db
+      - DOPPEL_ANALYTICS__REPORTS_DIR=/app/reports
+      - DOPPEL_HONEYPOT__HOST_KEY_DIR=/app/data
+      - DOPPEL_DECEPTION__CANARY_BASE_URL=${DOPPEL_DECEPTION__CANARY_BASE_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

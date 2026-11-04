@@ -497,6 +497,8 @@ body {
 }
 
 .info-btn {
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: none;
   color: var(--text-muted);

@@ -1,9 +1,15 @@
 import re
 import logging
+import threading
+from pathlib import Path
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 
 logger = logging.getLogger("doppel.sandbox")
+
+# Image built from the Dockerfile next to this module (Ubuntu 22.04 userland)
+BUNDLED_IMAGE = "doppel-sandbox:ubuntu-22.04"
+BUNDLED_DOCKERFILE_DIR = Path(__file__).parent
 
 try:
     import docker
@@ -41,6 +47,10 @@ class DockerSandboxManager:
         self.hostname = hostname
         self.client = None
         self.is_available = False
+        # Set once the sandbox image exists locally; until then sessions use
+        # simulated execution instead of waiting for a pull or build
+        self.image_ready = threading.Event()
+        self._image_thread: Optional[threading.Thread] = None
 
         if self.enabled and DOCKER_INSTALLED:
             try:
@@ -49,6 +59,7 @@ class DockerSandboxManager:
                 self.is_available = True
                 logger.info(f"Docker sandbox initialized successfully. Base image: {self.image}")
                 self.cleanup_orphans()
+                self.prepare_image_async()
             except Exception as e:
                 logger.warning(f"Docker daemon not reachable ({e}). Sandbox will fall back to simulated execution.")
                 self.is_available = False
@@ -77,16 +88,59 @@ class DockerSandboxManager:
             self.is_available = True
             logger.info("Docker daemon connection established dynamically.")
             self.cleanup_orphans()
+            self.prepare_image_async()
             return True
         except Exception:
             self.is_available = False
             return False
+
+    def ensure_image(self) -> bool:
+        """
+        Make sure the sandbox image exists locally: build the bundled image from
+        its Dockerfile, or pull any other configured image. Blocking.
+        """
+        if not self.client:
+            return False
+        try:
+            self.client.images.get(self.image)
+            self.image_ready.set()
+            return True
+        except docker.errors.ImageNotFound:
+            pass
+        except Exception as e:
+            logger.warning(f"Could not inspect sandbox image {self.image}: {e}")
+            return False
+        try:
+            if self.image == BUNDLED_IMAGE:
+                logger.info(f"Building sandbox image {self.image} (one-time, needs network access)...")
+                self.client.images.build(
+                    path=str(BUNDLED_DOCKERFILE_DIR), dockerfile="Dockerfile", tag=self.image, rm=True,
+                )
+            else:
+                logger.info(f"Pulling sandbox image: {self.image}")
+                self.client.images.pull(self.image)
+            self.image_ready.set()
+            logger.info(f"Sandbox image {self.image} is ready")
+            return True
+        except Exception as e:
+            logger.error(f"Sandbox image {self.image} is unavailable: {e}. Using simulated execution.")
+            return False
+
+    def prepare_image_async(self):
+        """Prepare the image in the background so no session waits on it."""
+        if self.image_ready.is_set() or (self._image_thread and self._image_thread.is_alive()):
+            return
+        self._image_thread = threading.Thread(target=self.ensure_image, name="sandbox-image", daemon=True)
+        self._image_thread.start()
 
     def create_sandbox_session(self, session_id: str, username: str = "ubuntu") -> Optional[str]:
         """Spawn a new isolated container for an attacker session."""
         if not self.is_available:
             self.check_availability()
         if not self.is_available or not self.client:
+            return None
+        if not self.image_ready.is_set():
+            self.prepare_image_async()
             return None
 
         container_name = f"doppel_sandbox_{session_id[:8]}"
@@ -99,13 +153,6 @@ class DockerSandboxManager:
                 existing.remove(force=True)
             except Exception:
                 pass
-
-            # Ensure base image exists
-            try:
-                self.client.images.get(self.image)
-            except docker.errors.ImageNotFound:
-                logger.info(f"Pulling base sandbox image: {self.image}")
-                self.client.images.pull(self.image)
 
             container = self.client.containers.run(
                 image=self.image,

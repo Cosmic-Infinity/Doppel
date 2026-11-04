@@ -61,7 +61,6 @@
           <span id="btn-view-switch-label">Live Dashboard</span>
         </button>
         <button id="btn-toggle-honeypot" class="btn btn-primary">
-          <span class="btn-icon">▶</span>
           <span id="btn-toggle-label">Start Honeypot</span>
         </button>
       </div>
@@ -99,7 +98,7 @@
             <div class="card-header">
               <div class="card-title-wrap">
                 <span class="card-title">AI Deception Model</span>
-                <button class="info-btn" data-info="llm" title="What is this?">ⓘ</button>
+                <button class="info-btn" data-info="llm" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
               <span class="diag-pill" id="pill-llm">Checking...</span>
             </div>
@@ -126,7 +125,7 @@
             <div class="card-header">
               <div class="card-title-wrap">
                 <span class="card-title">Execution Sandbox</span>
-                <button class="info-btn" data-info="docker" title="What is this?">ⓘ</button>
+                <button class="info-btn" data-info="docker" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
               <span class="diag-pill" id="pill-docker">Checking...</span>
             </div>
@@ -144,7 +143,7 @@
             <div class="card-header">
               <div class="card-title-wrap">
                 <span class="card-title">SSH Listener Port</span>
-                <button class="info-btn" data-info="port" title="What is this?">ⓘ</button>
+                <button class="info-btn" data-info="port" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
               <span class="diag-pill" id="pill-port">Port 2222</span>
             </div>
@@ -167,7 +166,7 @@
             <div class="card-header">
               <div class="card-title-wrap">
                 <span class="card-title">Deception Persona</span>
-                <button class="info-btn" data-info="persona" title="What is this?">ⓘ</button>
+                <button class="info-btn" data-info="persona" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
               <span class="diag-pill neutral" id="pill-persona">Ubuntu Web Server</span>
             </div>
@@ -182,17 +181,17 @@
                 </div>
               </label>
               <label class="persona-option">
-                <input type="radio" name="persona-select" value="centos_database">
+                <input type="radio" name="persona-select" value="fintech_api">
                 <div class="persona-box">
-                  <span class="persona-name">CentOS 7 Database Host</span>
-                  <span class="persona-detail">PostgreSQL 14, MySQL 8, Enterprise audit logs</span>
+                  <span class="persona-name">Debian 12 Payments Server</span>
+                  <span class="persona-detail">FastAPI, PostgreSQL 15, Redis, Stripe and JWT keys</span>
                 </div>
               </label>
               <label class="persona-option">
-                <input type="radio" name="persona-select" value="debian_cloud_node">
+                <input type="radio" name="persona-select" value="cloud_worker">
                 <div class="persona-box">
-                  <span class="persona-name">Debian 12 Cloud Node</span>
-                  <span class="persona-detail">Debian Bookworm, Cloud worker, custom MOTD banner</span>
+                  <span class="persona-name">Amazon Linux 2023 Kubernetes Node</span>
+                  <span class="persona-detail">EKS worker, containerd, instance metadata credentials</span>
                 </div>
               </label>
             </div>
@@ -206,7 +205,7 @@
             <span class="summary-text" id="launch-summary-text">Ready to launch honeypot.</span>
           </div>
           <button id="btn-launch-primary" class="btn btn-primary btn-large">
-            <span>▶ Launch Honeypot Listener</span>
+            <span>Start Honeypot</span>
           </button>
         </div>
       </div>

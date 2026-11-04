@@ -45,7 +45,8 @@ sandbox:
   # When true, benign commands run in an ephemeral container.
   # If Docker is unavailable or enabled=false, falls back to full LLM simulation.
   enabled: true
-  image: "alpine:latest"
+  # Built locally from doppel/sandbox/Dockerfile on first use
+  image: "doppel-sandbox:ubuntu-22.04"
   network_disabled: true
   memory_limit: "256m"
   cpu_quota: 50000

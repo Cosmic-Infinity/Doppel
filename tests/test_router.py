@@ -122,9 +122,13 @@ def test_benign_commands_routing_and_priority():
     assert dec == RouteDecision.SANDBOX
     assert reason == "benign_command"
 
-    dec, reason = router.classify_command("pwd")
+    dec, reason = router.classify_command("whoami")
     assert dec == RouteDecision.SANDBOX
     assert reason == "benign_command"
+
+    # pwd is answered from the session's own working directory
+    dec, reason = router.classify_command("pwd")
+    assert dec == RouteDecision.BUILTIN
 
     # Even though 'cat' and 'grep' are in benign_commands,
     # sensitive file access and credential harvesting MUST be intercepted by Grounded Deception!

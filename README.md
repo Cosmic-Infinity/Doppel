@@ -4,10 +4,10 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Hybrid%20Sandbox%20%2B%20LLM-purple.svg)]()
 [![Web SOC](https://img.shields.io/badge/Web%20SOC-FastAPI%20%2B%20WebSockets-009688.svg)]()
 [![MITRE ATT&CK](https://img.shields.io/badge/MITRE%20ATT%26CK-Real--time%20Mapping-red.svg)]()
-[![GeoIP](https://img.shields.io/badge/GeoIP-MaxMind%20GeoLite2-orange.svg)]()
-[![HTTP Sensor](https://img.shields.io/badge/HTTP%20Sensor-Port%208080-teal.svg)]()
 
-**Doppel** is an intelligent, high-interaction honeypot system designed to deceive, monitor, and profile cyber adversaries in real time. By combining an **isolated Docker execution sandbox** with a **generative LLM deception layer**, Doppel achieves authentic Linux behaviour while dynamically synthesising contextual honeytokens, simulating missing penetration-testing tools, classifying attackers behaviourally, and generating real-time MITRE ATT&CK telemetry — all observable through a live Web SOC dashboard.
+**Doppel** is a high-interaction honeypot for observing and profiling attackers. Commands run either in an isolated Docker sandbox or through a generative LLM layer that keeps the system consistent with a chosen server persona. Every session is enriched (GeoIP, credential analysis, MITRE ATT&CK mapping, attacker classification), recorded for replay, correlated into campaigns, and shown live on a web dashboard.
+
+Open work is tracked in [TODO.md](TODO.md).
 
 ---
 
@@ -15,153 +15,108 @@
 
 ```mermaid
 flowchart TD
-    subgraph AdversaryIngress ["Adversary Ingress"]
-        Attacker["Adversary / Automated Scanner<br>(SSH Port 2222)"]
-        WebProbe["Web Attacker<br>(HTTP Port 8080)"]
+    subgraph Ingress ["Attacker Ingress"]
+        Attacker["SSH client / scanner<br>(port 2222)"]
+        WebProbe["Web scanner<br>(port 8080)"]
     end
 
-    subgraph CoreEngine ["Doppel Core Engine"]
-        SSH["AsyncSSH Daemon & PTY Session<br>(doppel.core.ssh_server)"]
-        GeoIP["GeoIP Enrichment<br>(doppel.core.geoip — MaxMind mmdb)"]
-        CredAnalyzer["Credential Analyzer<br>(doppel.core.credential_analyzer)"]
-        Router{"Hybrid Command Router<br>(doppel.router.hybrid_router)"}
-        FakeFS["Fake Filesystem<br>(doppel.core.fake_filesystem)"]
+    subgraph Core ["Core Engine"]
+        SSH["AsyncSSH server and PTY handling<br>(doppel.core.ssh_server)"]
+        GeoIP["GeoIP enrichment<br>(doppel.core.geoip)"]
+        CredAnalyzer["Credential analyzer<br>(doppel.core.credential_analyzer)"]
+        Router{"Hybrid command router<br>(doppel.router.hybrid_router)"}
+        FakeFS["Session filesystem state<br>(doppel.core.fake_filesystem)"]
     end
 
-    subgraph SandboxLayer ["Isolated Execution Sandbox"]
-        Docker["Ephemeral Alpine Container<br>(--network none | uid 1000)"]
+    subgraph Sandbox ["Isolated Execution"]
+        Docker["Ephemeral Ubuntu 22.04 container<br>(no network, per session)"]
     end
 
-    subgraph DeceptionLayer ["Generative Deception"]
-        LLM["LLM Deception Engine<br>(Ollama / vLLM / llama.cpp)"]
-        Persona["Deception Persona + Port Inventory<br>(Web Server / Cloud Worker / FinTech)"]
-        HttpSensor["HTTP Honeypot Sensor<br>(doppel.http_sensor — Port 8080)"]
+    subgraph Deception ["Generative Deception"]
+        LLM["LLM deception engine<br>(Ollama / vLLM / llama.cpp)"]
+        Persona["Persona prompt and host identity<br>(presets.yaml)"]
+        HttpSensor["HTTP decoy and canary endpoint<br>(doppel.http_sensor)"]
     end
 
-    subgraph IntelligenceLayer ["Threat Intelligence & Analytics"]
-        Observer["Async Threat Observer<br>(MITRE ATT&CK Mapping & Threat Scoring)"]
-        Profiler["Attacker Behavior Profiler<br>(doppel.analytics.profiler)"]
-        DB[("SQLite Telemetry DB<br>sessions · commands · phase_transitions · web_probes")]
-        Report["Incident Response Report<br>(Markdown in reports/)"]
+    subgraph Intel ["Threat Intelligence"]
+        Observer["MITRE ATT&CK tagging and threat scores"]
+        Profiler["Attacker profiler and kill-chain tracker"]
+        DB[("SQLite telemetry")]
+        Report["Incident reports (reports/)"]
     end
 
-    subgraph WebSOCLayer ["Web SOC & GUI Control Center"]
-        Controller["Lifecycle Controller & Diagnostics Engine"]
-        FastAPI["FastAPI Daemon (:8000)"]
-        WS["WebSocket / SSE Broadcaster"]
-        Browser["Browser UI<br>(Pre-Flight Launch Screen & Fleet Monitor)"]
+    subgraph SOC ["Web Dashboard"]
+        Controller["Lifecycle controller and diagnostics"]
+        FastAPI["FastAPI (:8000)"]
+        WS["WebSocket / SSE stream"]
     end
 
-    Attacker <-->|"Interactive PTY Session"| SSH
-    WebProbe -->|"HTTP Probes"| HttpSensor
-
+    Attacker <--> SSH
+    WebProbe --> HttpSensor
     SSH --> GeoIP
     SSH --> CredAnalyzer
     SSH --> Router
-
-    Router -->|"Benign / Safe-IP Commands"| Docker
-    Router -->|"Sensitive / Missing Tools / Deception"| LLM
-    Persona -.->|"Persona Prompt + Port Map"| LLM
-    FakeFS -.->|"Session Filesystem State"| LLM
-    HttpSensor -->|"LLM-Synthesized HTTP Response"| LLM
-
-    Docker -->|"Real Container Output"| SSH
-    LLM -->|"Synthesised Deceptive Output"| SSH
-
-    SSH -.->|"Async Keystroke Stream"| Observer
-    SSH -.->|"Async Keystroke Stream"| Profiler
+    Router -->|"Sandbox / grounded"| Docker
+    Router -->|"Grounded / full deception"| LLM
+    Persona -.-> LLM
+    FakeFS -.-> LLM
+    HttpSensor --> LLM
+    Docker --> SSH
+    LLM --> SSH
+    SSH -.-> Observer
+    SSH -.-> Profiler
     Observer --> DB
     Profiler --> DB
     HttpSensor --> DB
     Observer --> Report
-
     Controller <--> FastAPI
     DB --> FastAPI
-    SSH -.->|"Live Session Telemetry"| WS
-    FastAPI --> Browser
-    WS --> Browser
+    SSH -.-> WS
 ```
 
 ---
 
-## Hybrid Command Routing Sequence
+## Command Routing
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Attacker as Adversary (SSH Client)
-    participant SSH as Doppel SSH Daemon
-    participant GeoIP as GeoIP + Cred Analyzer
-    participant Router as Hybrid Router
-    participant Docker as Docker Sandbox (--network none)
-    participant LLM as LLM Deception Engine
-    participant Profiler as Behavior Profiler
-    participant DB as SQLite & Web SOC
+Every command is classified by `HybridRouter` into one of four routes:
 
-    Attacker->>SSH: Connect (e.g. ssh -p 2222 ubuntu@host)
-    SSH->>GeoIP: Enrich IP (country, ASN, is_datacenter)
-    SSH->>GeoIP: Classify credential (risk_level, label, notes)
-    SSH-->>Attacker: Authenticated + Ubuntu 22.04 LTS MOTD
+| Route | Used for | How the output is produced |
+|---|---|---|
+| `BUILTIN` | `cd`, `pwd`, `clear`, `exit`, `logout`, `sudo su`-style elevation | Answered from session state (working directory, effective user) |
+| `SANDBOX` | Ordinary commands (`ls`, `cat`, `python3`, …) | Run for real in the session's container |
+| `GROUNDED_DECEPTION` | Process, network-interface, mount and memory inspection; sensitive files; credential searches | Run in the container, then rewritten by the model to match the persona and hide container details |
+| `LLM_DECEPTION` | Tools the persona lacks (`nmap`, `hydra`, …), network clients and package downloads, login reports (`who`, `w`, `last`), payload downloads piped to a shell, destructive payloads | Generated by the model from the persona prompt |
 
-    rect rgb(240, 248, 255)
-    Note over Attacker,Docker: 1. Safe Command — Real Sandbox Execution
-    Attacker->>SSH: Command: `whoami`
-    SSH->>Router: classify_command — SANDBOX (benign_commands list)
-    Router->>Docker: Execute in container as user `ubuntu`
-    Docker-->>SSH: `ubuntu`
-    SSH-->>Attacker: `ubuntu`
-    end
+When Docker is unavailable, everything except built-ins is generated by the model. Connections from `access.safe_ips` bypass deception and always run in the sandbox.
 
-    rect rgb(255, 240, 245)
-    Note over Attacker,LLM: 2. Sensitive Reconnaissance / Credential Harvesting
-    Attacker->>SSH: Command: `cat .env`
-    SSH->>Router: Match sensitive file pattern → LLM_DECEPTION
-    Router->>LLM: Synthesise contextual honeytokens (persona + FakeFS context)
-    LLM-->>SSH: `APP_ENV=production\nDB_PASSWORD=...`
-    SSH-->>Attacker: Plausible fake production credentials
-    end
-
-    rect rgb(245, 255, 245)
-    Note over Attacker,LLM: 3. Missing Tool Simulation + Port Deception
-    Attacker->>SSH: Command: `nmap -sV 10.0.4.50`
-    SSH->>Router: Match missing tool regex → LLM_DECEPTION
-    Router->>LLM: Synthesise nmap output using AUTHORITATIVE port inventory
-    LLM-->>SSH: Port scan matching real exposed ports (22, 80, 443, 3306)
-    SSH-->>Attacker: Consistent, persona-coherent Nmap output
-    end
-
-    rect rgb(245, 245, 255)
-    Note over Attacker,DB: 4. Behavior Profiling & Phase Detection (async)
-    SSH-)Profiler: Record command + monotonic timestamp
-    Profiler->>Profiler: Classify bot/semi-automated/human (5-signal vote)
-    Profiler->>Profiler: Detect kill-chain phase transition
-    Profiler-)DB: update_session_profile + log_phase_transition
-    Profiler-)SSH: phase_transition event → WebSocket broadcast
-    end
-
-    par Async Threat Intelligence
-        SSH-)Observer: Stream command & session metadata
-        Observer->>Observer: Classify MITRE ATT&CK technique & compute threat score
-        Observer-)DB: Record command telemetry (SQLite)
-        SSH-)DB: Broadcast terminal line to Web SOC (/ws/stream)
-    end
-```
+Simple identity commands (`whoami`, `id`, `uname`, `hostname`) are answered locally from the active persona's host identity when they contain no shell syntax; anything chained, piped or redirected goes through the normal route instead.
 
 ---
 
-## What's New
+## Personas
 
-### Session 1 — Safe IP Allowlist & Benign Command Passthrough
+A persona is one complete machine identity. `active_preset` in `config.yaml` (or the dashboard's persona selector) chooses it, and everything an attacker can observe is taken from it: SSH banner, login banner, shell prompt style, hostname, kernel, account ids, HTTP `Server` header, and the LLM persona prompt.
 
-- **Safe IP allowlist** (`access.safe_ips` in `config.yaml`): any IP in the list gets a real Docker sandbox shell with all deception bypassed. The connection is still logged and alerted so you know it happened.
-- **Benign command list** (`benign_commands`): ~70 common Unix commands (`ls`, `cat`, `grep`, `git`, `python3`, …) are always routed to the real sandbox instead of the LLM deception engine, making normal activity look authentic to a careful attacker.
-- **Adaptive connection alerting**: `connection_made()` now logs `[SAFE IP]` or `[ALERT]` with role-appropriate context on every connection.
+| Key | Machine |
+|---|---|
+| `ubuntu_web_server` | Ubuntu 22.04 web/API server (nginx, PHP, MySQL, Node.js) |
+| `fintech_api` | Debian 12 payments staging server (FastAPI, PostgreSQL, Redis) |
+| `cloud_worker` | Amazon Linux 2023 Kubernetes worker node |
 
-### Session 2 — Credential Pattern Analysis, Fake Filesystem, HTTP Sensor, Port-Scan Deception
+Host identities are defined in `doppel/config/presets.yaml`; persona prompts in `doppel/ai/prompts/deception_prompts.py`. Keep the two in agreement when editing either. The earlier preset names `centos_database` and `debian_cloud_node` still work and map to `fintech_api` and `cloud_worker`.
 
-**10 — Credential Pattern Analysis** (`doppel/core/credential_analyzer.py`)
+---
 
-Every SSH `validate_password()` call runs through `CredentialAnalyzer` before the attacker is admitted. Nine detection dimensions:
+## Features
+
+### Access control and routing
+
+- **Safe IP allowlist** (`access.safe_ips`): trusted IPs get a real sandbox shell with deception bypassed. Their connections are still logged.
+- **Benign command list** (`benign_commands`): common commands that always run in the sandbox when it is available.
+
+### Credential pattern analysis (`doppel/core/credential_analyzer.py`)
+
+Every SSH password attempt is classified before the session starts:
 
 | Label | What it catches |
 |---|---|
@@ -175,48 +130,33 @@ Every SSH `validate_password()` call runs through `CredentialAnalyzer` before th
 | `empty_password` | Blank field |
 | `complex_password` | Long, mixed-case + special char (possible human pen-tester) |
 
-Each analysis emits `risk_level` (`low/medium/high/critical`), `primary_label`, and a human-readable `notes` string. High/critical attempts log a `[CRED ALERT]` warning. Results are stored on `SessionState`, persisted to the DB, and broadcast in the `session_created` event.
+Each analysis emits `risk_level` (`low/medium/high/critical`), `primary_label` and a readable `notes` string. High and critical attempts log a `[CRED ALERT]` warning.
 
-**13 — Fake Filesystem Persistence** (`doppel/core/fake_filesystem.py`)
+### Session filesystem state (`doppel/core/fake_filesystem.py`)
 
-A `FakeFilesystem` instance lives on every `SessionState`. After every LLM-routed command, `update_from_command()` parses the shell idiom and tracks:
+After each generated command, file operations (redirects, `touch`, `mkdir`, `cp`, `mv`, `rm`, `wget -O`, `curl -o`, `chmod +x`) are tracked per session and fed back into later prompts so files persist across commands.
 
-- Redirects (`echo "x" > /tmp/f`, `printf … > f`)
-- Appends (`>>`)
-- `touch`, `mkdir [-p]`, `cp`, `mv`, `rm`
-- `wget -O`, `curl -o` (downloaded files)
-- `chmod +x` (marks files executable)
+### HTTP decoy (`doppel/http_sensor/sensor.py`)
 
-Before every subsequent LLM call, `build_context_block()` injects the session's filesystem state into the system prompt so file operations feel persistent across turns.
+Runs on `http_sensor_port` (8080) next to the SSH server and classifies requests into 25 probe types (sensitive files, admin panels, API enumeration, path traversal, SQL and command injection).
 
-**15 — HTTP Honeypot Sensor** (`doppel/http_sensor/sensor.py`)
+- Bait paths get a generated body with a plausible status code. Every other path gets nginx's standard 404 page, without a model call.
+- Responses carry the persona's nginx `Server` header and nothing else that identifies the framework (no `/docs`, `/redoc` or `/openapi.json`).
+- Requests from one IP on one UTC day are grouped into a single session (`http_<ip>_<yyyymmdd>`), and each request is also written to `web_probes`.
 
-A standalone FastAPI app starts on port 8080 alongside the SSH server. It catches all HTTP methods on all paths and classifies probes into 25 categories:
+### Canary tokens (`doppel/deception/honeytokens.py`)
 
-- Sensitive files: `/.env`, `/.git/config`, `wp-config.php`, `.aws/credentials`, SSH keys, backup files
-- Admin panels: `/wp-admin`, `/phpmyadmin`, `/adminer`, `/jenkins`, `/grafana`
-- API enumeration: `/api/v1/users`, `/api/v1/keys`, Swagger endpoints
-- Path traversal, SQLi, command-injection query params
+Sessions that read sensitive files are issued per-session decoy credentials and verification URLs. The URLs point at `/auth/v1/verify` on the HTTP decoy; presenting an issued token there logs a `honeytoken_activated` probe linked to the original session and raises a dashboard alert. Tokens are stored in the database, so they are still recognised after a restart. Set `deception.canary_base_url` to the decoy's public address so leaked URLs are reachable.
 
-Each hit is LLM-synthesised (using the existing persona as a pseudo-shell command), logged to a `web_probes` table in SQLite, and broadcast over WebSocket/SSE with a MITRE `T1190` tag and a per-category threat score.
+### Port inventory (`doppel/ai/prompts/deception_prompts.py`)
 
-**16 — Port-Scan Deception** (`doppel/ai/prompts/deception_prompts.py`)
+`PERSONA_PORTS` gives each persona an authoritative port list used in every prompt, so `nmap`, `ss`, `netstat` and `lsof -i` agree with each other.
 
-`PERSONA_PORTS` maps each persona to an authoritative port inventory injected into every LLM system prompt. `nmap`, `ss -tlnp`, `netstat -an`, and `lsof -i` output all return the same ports — matching whatever is actually exposed externally — so an attacker doing both an external scan and an internal `nmap` sees a coherent picture.
+### GeoIP enrichment (`doppel/core/geoip.py`)
 
-### Session 3 — GeoIP Enrichment, Attacker Classification, Kill-Chain Phase Tracking
+Local MaxMind GeoLite2 lookups at connection time (country, city, ASN, datacenter heuristic). Runs without the `.mmdb` files, returning empty fields.
 
-**9 — GeoIP Enrichment** (`doppel/core/geoip.py`)
-
-Zero-latency enrichment using local MaxMind GeoLite2 `.mmdb` files — no HTTP, no DNS, no API key. Runs synchronously inside `connection_made()` in under 1 ms. Enriches every session with:
-
-- Country ISO code + name, city, latitude/longitude
-- ASN number + org name
-- `is_datacenter` — heuristic substring match against 200+ known cloud/VPS/CDN/VPN ASN org names (AWS, DigitalOcean, Vultr, Hetzner, Cloudflare, NordVPN, etc.)
-
-Persisted to six new columns on the `sessions` table. Included in the `session_created` WebSocket event. Gracefully degrades to null fields if the `.mmdb` files are missing.
-
-**7 — Automated vs. Human Classifier** (`doppel/analytics/profiler.py`)
+### Attacker classification (`doppel/analytics/profiler.py`)
 
 `AttackerProfiler` runs a five-signal weighted vote per command:
 
@@ -228,16 +168,11 @@ Persisted to six new columns on the `sessions` table. Included in the `session_c
 | Navigation backtracking | — | ls→cd→ls, repeated pwd |
 | Empty submits / Ctrl+C / backspace | — | Human hesitation signals |
 
-Emits `attacker_type`: `bot`, `semi-automated`, `human`, or `unknown`. Confidence score 0–1. Updates live on every command and broadcasts in `command_executed` and `profile_updated` events.
+It emits `attacker_type` (`bot`, `semi-automated`, `human`, `unknown`) with a confidence score. `tar_pit_delay_ms` is a base delay scaled by attacker type (3× for bots, 1.5× semi-automated, 0.3× humans, with jitter).
 
-**Adaptive tar-pit** — `tar_pit_delay_ms` is now a base value, not the actual delay:
-- `bot` → 3× base + ±20% random jitter (wastes scanner resources; jitter defeats fingerprinting)
-- `semi-automated` → 1.5×
-- `human` → 0.3× (deception still feels like real I/O)
+### Kill-chain phase tracking (`doppel/analytics/profiler.py`)
 
-**8 — Attack Phase Tracker** (`doppel/analytics/profiler.py`)
-
-Aggregates per-command MITRE tactics into a session-level 10-phase kill-chain:
+Per-command MITRE tactics roll up into a forward-only, 10-phase kill chain:
 
 ```
 Reconnaissance → Weaponization → Delivery → Exploitation →
@@ -245,7 +180,25 @@ Credential Access → Installation → C2 → Lateral Movement →
 Exfiltration → Impact
 ```
 
-Phase is determined first from MITRE tactic mappings (authoritative LLM output), then from command-pattern regex heuristics as fallback. Advancement is forward-only. Each forward transition fires a `phase_transition` WebSocket event with `from_phase`, `to_phase`, `phase_index`, and the triggering command, and is persisted to a new `phase_transitions` table for incident report timelines.
+Each forward transition is broadcast as a `phase_transition` event and stored in `phase_transitions`.
+
+### Session replay
+
+Every command is stored with the time it was received, the prompt it was typed at (working directory and user) and how long the reply took. The dashboard's Replay tab plays a closed session back with its original pacing (speed control, stepping, optional skipping of pauses over 5 s).
+
+### Campaign correlation
+
+`/api/campaigns` groups sessions that share a source IP, a non-generic username/password pair, or the same opening command sequence. Default and common passwords and short generic command sequences do not link sessions. Campaign IDs stay stable as sessions join, and each campaign lists why its sessions were linked. Web-probe sessions link by IP only.
+
+### Model output safeguards
+
+Model replies are cleaned of markdown fences, reasoning tags and hallucinated prompts, and replies that read like an assistant talking are suppressed. When no believable output can be produced, standard utilities print nothing; only unknown commands get `command not found`.
+
+### Robustness
+
+- Terminal input is processed in chunks with a 64 KB line limit, so oversized input cannot stall other sessions.
+- SQLite runs in WAL mode with a 30 s lock timeout, so concurrent sessions do not lose telemetry.
+- Incident reports (LLM calls) are limited to `analytics.max_concurrent_reports` at a time.
 
 ---
 
@@ -254,112 +207,117 @@ Phase is determined first from MITRE tactic mappings (authoritative LLM output),
 ```
 Doppel/
 ├── doppel/
-│   ├── ai/                          # LLM Client, Deception Engine & Prompts
-│   │   ├── deception_engine.py      # Prompt templating, FakeFS injection, output sanitiser
-│   │   ├── llm_client.py            # Async OpenAI-compatible client + Mock Mode
+│   ├── ai/
+│   │   ├── deception_engine.py      # Prompting, local identity answers, output cleaning
+│   │   ├── llm_client.py            # Async OpenAI-compatible client + mock mode
 │   │   └── prompts/
-│   │       ├── deception_prompts.py # Persona prompts + PERSONA_PORTS port inventory
-│   │       └── threat_prompts.py    # MITRE analysis & incident report prompts
-│   ├── analytics/                   # Threat intelligence & telemetry
-│   │   ├── db.py                    # Async SQLite (sessions, commands, phase_transitions, web_probes)
-│   │   ├── observer.py              # Background MITRE ATT&CK tagger & threat scorer
-│   │   ├── profiler.py              # Attacker type classifier + kill-chain phase tracker
-│   │   └── reporter.py             # Automated Markdown incident report generator
-│   ├── core/                        # Core honeypot runtime
-│   │   ├── credential_analyzer.py  # SSH auth pattern classifier (9 categories)
-│   │   ├── fake_filesystem.py      # Per-session in-memory filesystem for LLM context
-│   │   ├── geoip.py                # Zero-latency GeoIP enrichment (MaxMind mmdb)
-│   │   ├── session_manager.py      # Session lifecycle, routing, profiling, tar-pit
-│   │   └── ssh_server.py           # AsyncSSH PTY daemon + GeoIP/cred hooks
-│   ├── dashboard/                   # Web SOC & GUI Control Center
-│   │   ├── app.py                   # FastAPI backend & WebSocket/SSE endpoints
-│   │   ├── controller.py            # Honeypot daemon, HTTP sensor lifecycle, diagnostics
-│   │   └── static/                  # Minimalist dark-mode UI
-│   ├── http_sensor/                 # HTTP honeypot sensor
-│   │   └── sensor.py               # 25-category probe classifier + LLM response synthesis
+│   │       ├── deception_prompts.py # Persona prompts + PERSONA_PORTS
+│   │       └── threat_prompts.py    # MITRE analysis and incident report prompts
+│   ├── alerts/
+│   │   └── email.py                 # Threshold-based email alerts
+│   ├── analytics/
+│   │   ├── db.py                    # Async SQLite telemetry, replay, campaigns
+│   │   ├── observer.py              # MITRE ATT&CK tagging and threat scores
+│   │   ├── profiler.py              # Attacker classification + kill-chain tracking
+│   │   └── reporter.py              # Markdown incident reports
+│   ├── config/
+│   │   └── presets.yaml             # Host identity per persona
+│   ├── core/
+│   │   ├── credential_analyzer.py
+│   │   ├── fake_filesystem.py
+│   │   ├── geoip.py
+│   │   ├── session_manager.py       # Session lifecycle, routing, built-ins
+│   │   └── ssh_server.py            # AsyncSSH server, terminal input, banners
+│   ├── dashboard/
+│   │   ├── app.py                   # FastAPI endpoints, WebSocket/SSE
+│   │   ├── controller.py            # Honeypot lifecycle, HTTP decoy, diagnostics
+│   │   ├── ip_filter.py             # Dashboard IP allowlist
+│   │   └── static/                  # Dashboard UI
+│   ├── deception/
+│   │   └── honeytokens.py           # Canary token issue and verification
+│   ├── http_sensor/
+│   │   └── sensor.py                # HTTP decoy and canary endpoint
 │   ├── router/
-│   │   └── hybrid_router.py        # Command router: BUILTIN / SANDBOX / LLM_DECEPTION
+│   │   └── hybrid_router.py         # Route classification
 │   ├── sandbox/
-│   │   └── docker_manager.py       # Ephemeral container lifecycle & user isolation
-│   ├── cli.py                       # Unified CLI entrypoint (Typer & Rich)
-│   └── config.py                    # Pydantic config (GeoIPSettings, AccessSettings, …)
-├── tests/                           # Pytest test suite
-├── config.yaml                      # Full system configuration (see below)
+│   │   ├── Dockerfile               # Ubuntu 22.04 sandbox image
+│   │   └── docker_manager.py        # Container lifecycle
+│   ├── cli.py                       # CLI entry point
+│   └── config.py                    # Settings model and persona resolution
+├── tests/
+├── config.yaml
 ├── docker-compose.yml
 ├── Dockerfile
+├── TODO.md
 ├── pyproject.toml
 └── requirements.txt
 ```
 
 ---
 
-## Web SOC Dashboard & Pre-Flight Control Center
+## Web Dashboard
 
-Doppel features a built-in, zero-CLI Web Control Center (`http://localhost:8000`):
+`python -m doppel.cli dashboard` serves the control center on port 8000.
 
 ```mermaid
 flowchart LR
-    subgraph Phase1 ["Phase 1: Pre-Flight Launch Screen"]
-        A["Access Web SOC<br>http://localhost:8000"] --> B{"Proactive Diagnostics"}
-        B --> C["Docker Status"]
-        B --> D["Ollama Reachability"]
-        B --> E["Port 2222 Conflict"]
-        C --> F["1-Click Resolvers"]
+    subgraph Launch ["Launch screen"]
+        A["Open http://localhost:8000"] --> B{"Diagnostics"}
+        B --> C["Docker status"]
+        B --> D["LLM reachability"]
+        B --> E["Port conflicts"]
+        C --> F["One-click fixes"]
         D --> F
         E --> F
-        F -->|"Port occupied"| G["Quick Switch"]
-        F -->|"Endpoint unreachable"| H["Enable Mock Mode"]
-        F -->|"Model target"| I["Select Model"]
     end
 
-    subgraph Phase2 ["Phase 2: Live Attack Fleet Operations"]
-        J["▶ Launch Honeypot Listener"] --> K["Live Attack Fleet Monitor"]
-        K --> L["Multi-Session Selector"]
-        K --> M["Live Streaming ANSI Terminal<br>(WebSocket/SSE)"]
-        K --> N["MITRE ATT&CK · Threat Score · Attacker Type · Phase"]
-        K --> O["Executive Markdown Reports"]
+    subgraph Live ["Live monitoring"]
+        J["Start honeypot"] --> K["Session list and campaigns"]
+        K --> M["Live terminal feed"]
+        K --> N["MITRE telemetry, threat score, attacker type, phase"]
+        K --> R["Replay"]
+        K --> O["Incident reports"]
     end
 
     F --> J
-    B -->|"All Systems Healthy"| J
-    ### Dashboard Firewall (IP Allow-List)
+    B -->|"All healthy"| J
+```
 
-Restrict who can open the dashboard (HTTP, SSE, and WebSocket) by listing allowed IPs or CIDR ranges in `config.yaml`:
+### Dashboard IP allowlist
+
+List the IPs or CIDR ranges allowed to open the dashboard (HTTP, SSE and WebSocket):
 
 ```yaml
 access:
   dashboard_allowed_ips:
     - "127.0.0.1"
-    - "::1"
     - "192.168.1.10"
     - "10.0.0.0/24"
 ```
 
-- Any IP not listed receives `403 Forbidden`.
-- If the list is empty, only loopback (`127.0.0.1` / `::1`) is allowed.
-- This is separate from `access.safe_ips`, which controls honeypot deception bypass.
+- Any other address receives `403 Forbidden`.
+- An empty list allows loopback only.
+- This is separate from `access.safe_ips`, which controls deception bypass.
 - Behind a reverse proxy, configure uvicorn's `--forwarded-allow-ips` so the real client IP is seen.
-```
 
 ### Live event stream
-
-Every WebSocket/SSE event is typed. New event types added in this iteration:
 
 | Event | When fired | Key payload fields |
 |---|---|---|
 | `session_created` | Connection authenticated | `geoip`, `credential_analysis` |
-| `command_executed` | Each command processed | `attacker_type`, `current_phase`, `decision` |
-| `profile_updated` | After each command | Full `profile` dict incl. `median_gap_ms`, `bot_tool_hits` |
-| `phase_transition` | Kill-chain advances | `from_phase`, `to_phase`, `phase_index`, `triggered_by` |
+| `command_executed` | Each command processed | `prompt_cwd`, `prompt_user`, `decision`, `attacker_type`, `current_phase` |
+| `profile_updated` | After each command | Full `profile` dict |
+| `phase_transition` | Kill chain advances | `from_phase`, `to_phase`, `phase_index`, `triggered_by` |
 | `threat_analyzed` | MITRE tagging completes | `threat`, `threat_score` |
-| `web_probe` | HTTP sensor hit | `probe_label`, `method`, `path`, `status_code` |
+| `web_probe` | HTTP decoy hit | `probe_label`, `method`, `path`, `status_code` |
+| `honeytoken_activated` | Canary token presented | `token_type`, `session_id`, `remote_ip` |
 | `session_closed` | Session ends | `report_path` |
 
 ---
 
 ## Quick Start
 
-### 1. Web SOC Dashboard (recommended)
+### 1. Dashboard (recommended)
 
 ```bash
 git clone https://github.com/Cosmic-Infinity/Doppel.git
@@ -368,26 +326,41 @@ pip install -r requirements.txt
 python -m doppel.cli dashboard --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000`, run diagnostics, click **▶ Launch Honeypot Listener**.
+Open `http://localhost:8000`, review the diagnostics and select **Start Honeypot**.
 
-### 2. Local Interactive Simulator
+### 2. Headless
+
+```bash
+python -m doppel.cli run
+```
+
+Starts the SSH listener and HTTP decoy without the dashboard.
+
+### 3. Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
+Publishes SSH on 2222 and the HTTP decoy on 8080, and keeps the database and SSH host keys in `./data` so the server's fingerprint survives redeploys. See the comments in `docker-compose.yml` for running the dashboard inside the container.
+
+### 4. Sandbox image
+
+The sandbox uses a local Ubuntu 22.04 image built from `doppel/sandbox/Dockerfile`. It is built automatically on first use (sessions use simulated execution until it is ready), or ahead of time:
+
+```bash
+python -m doppel.cli build-sandbox
+```
+
+### 5. Local simulator
 
 ```bash
 python -m doppel.cli sim
 ```
 
-```bash
-ubuntu@prod-api-node-01:/home/ubuntu$ whoami
-ubuntu
-ubuntu@prod-api-node-01:/home/ubuntu$ cat .env
-APP_ENV=production
-DB_HOST=10.0.4.50
-DB_PASSWORD=P@ssw0rdProd2026!
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-ubuntu@prod-api-node-01:/home/ubuntu$ exit
-```
+Runs a session in the terminal without SSH, useful for checking persona output.
 
-### 3. Remote GPU over Tailscale
+### 6. Remote GPU over Tailscale
 
 ```bash
 # On the GPU machine
@@ -397,8 +370,8 @@ ollama pull qwen2.5-coder:7b
 
 ```bash
 # In .env
-DOPPEL_LLM_BASE_URL=http://<tailscale-ip>:11434/v1
-DOPPEL_LLM_MODEL=qwen2.5-coder:7b
+DOPPEL_LLM__BASE_URL=http://<tailscale-ip>:11434/v1
+DOPPEL_LLM__MODEL=qwen2.5-coder:7b
 ```
 
 ```bash
@@ -406,11 +379,11 @@ python -m doppel.cli test-model
 python -m doppel.cli dashboard --port 8000
 ```
 
-### 4. GeoIP setup (optional, zero-cost)
+### 7. GeoIP (optional)
 
 1. Register at [maxmind.com](https://www.maxmind.com/en/geolite2/signup) (free).
 2. Download `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb`.
-3. Set paths in `config.yaml`:
+3. Set the paths in `config.yaml`:
 
 ```yaml
 geoip:
@@ -418,145 +391,111 @@ geoip:
   asn_db_path:  "/opt/geoip/GeoLite2-ASN.mmdb"
 ```
 
-Doppel runs fine without the files — enrichment returns null fields with a one-time warning.
-
 ---
 
 ## Configuration (`config.yaml`)
 
+Main settings (see `config.yaml` for the full file and `doppel/config.py` for defaults):
+
 ```yaml
+active_preset: "ubuntu_web_server"   # ubuntu_web_server | fintech_api | cloud_worker
+
 honeypot:
   host: "0.0.0.0"
   port: 2222
-  server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
-  hostname: "prod-api-node-01"
-  default_user: "ubuntu"
+  server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"  # used if the persona defines none
   accept_any_password: true
-  motd: |
-    Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)
-    ...
+  host_key_dir: "."                   # keep on persistent storage
 
 llm:
   base_url: "http://127.0.0.1:11434/v1"
   model: "qwen2.5-coder:7b"
-  api_key: "ollama"
   timeout_seconds: 45.0
-  temperature: 0.2
   mock_mode: false
 
 deception:
-  persona: "ubuntu_web_server"   # ubuntu_web_server | cloud_worker | fintech_api
-  tar_pit_delay_ms: 0            # base delay in ms; actual delay scales with attacker_type
+  tar_pit_delay_ms: 0
   intercept_sensitive_files: true
   intercept_missing_tools: true
   dynamic_honeytokens: true
+  canary_base_url: ""                 # public address of the HTTP decoy
 
 sandbox:
   enabled: true
-  image: "alpine:latest"
+  image: "doppel-sandbox:ubuntu-22.04"
   network_disabled: true
   memory_limit: "256m"
-  cpu_quota: 50000
 
 analytics:
   db_path: "doppel_telemetry.db"
   enable_mitre_tagging: true
   reports_dir: "reports"
+  max_concurrent_reports: 2
 
-# Safe IPs bypass all deception — get a real sandbox shell.
-# Connections are still logged and alerted.
 access:
-  safe_ips:
-    - "127.0.0.1"
-    - "192.168.1.10"
+  safe_ips: []
+  dashboard_allowed_ips: ["127.0.0.1"]
 
-# Commands always routed to the real sandbox (never LLM deception).
-# Makes normal activity look authentic to a careful attacker.
-benign_commands:
-  - "ls"
-  - "cat"
-  - "grep"
-  - "git"
-  - "python3"
-  # ... (see config.yaml for full list of ~70 commands)
-
-# HTTP honeypot sensor — LLM-synthesised responses to web probes.
-# Set to 0 to disable.
-http_sensor_port: 8080
-
-# GeoIP — local MaxMind mmdb files. Leave empty to disable.
-geoip:
-  city_db_path: ""   # e.g. /opt/geoip/GeoLite2-City.mmdb
-  asn_db_path:  ""   # e.g. /opt/geoip/GeoLite2-ASN.mmdb
+http_sensor_port: 8080                # 0 disables the HTTP decoy
 ```
 
 ### Environment variable overrides
 
-| Variable | Description | Default |
-|---|---|---|
-| `DOPPEL_HONEYPOT_PORT` | SSH listener port | `2222` |
-| `DOPPEL_HONEYPOT_HOST` | SSH binding address | `0.0.0.0` |
-| `DOPPEL_LLM_BASE_URL` | OpenAI-compatible endpoint | `http://127.0.0.1:11434/v1` |
-| `DOPPEL_LLM_MODEL` | Target generative model | `qwen2.5-coder:7b` |
-| `DOPPEL_LLM_TIMEOUT` | Generation timeout (s) | `45.0` |
-| `DOPPEL_LLM_MOCK_MODE` | Offline mock deception | `false` |
-| `DOPPEL_DECEPTION_PERSONA` | Active deception persona | `ubuntu_web_server` |
-| `DOPPEL_HTTP_SENSOR_PORT` | HTTP sensor port | `8080` |
-| `DOPPEL_GEOIP__CITY_DB_PATH` | Path to GeoLite2-City.mmdb | `""` |
-| `DOPPEL_GEOIP__ASN_DB_PATH` | Path to GeoLite2-ASN.mmdb | `""` |
+Environment variables override `config.yaml`. Nested settings use a double underscore: `DOPPEL_<SECTION>__<KEY>`. Top-level settings use a single one. See `.env.example`.
+
+| Variable | Setting |
+|---|---|
+| `DOPPEL_ACTIVE_PRESET` | `active_preset` |
+| `DOPPEL_HONEYPOT__HOST` / `DOPPEL_HONEYPOT__PORT` | `honeypot.host` / `honeypot.port` |
+| `DOPPEL_HONEYPOT__HOST_KEY_DIR` | `honeypot.host_key_dir` |
+| `DOPPEL_LLM__BASE_URL` / `DOPPEL_LLM__MODEL` | `llm.base_url` / `llm.model` |
+| `DOPPEL_LLM__TIMEOUT_SECONDS` | `llm.timeout_seconds` |
+| `DOPPEL_LLM__MOCK_MODE` | `llm.mock_mode` |
+| `DOPPEL_DECEPTION__CANARY_BASE_URL` | `deception.canary_base_url` |
+| `DOPPEL_SANDBOX__ENABLED` / `DOPPEL_SANDBOX__IMAGE` | `sandbox.enabled` / `sandbox.image` |
+| `DOPPEL_ANALYTICS__DB_PATH` | `analytics.db_path` |
+| `DOPPEL_HTTP_SENSOR_PORT` | `http_sensor_port` |
+| `DOPPEL_GEOIP__CITY_DB_PATH` / `DOPPEL_GEOIP__ASN_DB_PATH` | GeoIP database paths |
 
 ---
 
 ## Database Schema
 
-SQLite (`doppel_telemetry.db`) — four tables:
+SQLite (`doppel_telemetry.db`, WAL mode). Columns added in newer versions are migrated automatically on startup.
 
-**`sessions`** — one row per SSH or HTTP-probe session.
+**`sessions`**: one row per SSH session, or per IP per day for web probes.
 
 | Column | Description |
 |---|---|
-| `session_id` | UUID |
+| `session_id` | UUID, or `http_<ip>_<yyyymmdd>` for web probes |
 | `remote_ip`, `remote_port` | Source address |
-| `username`, `password` | Credentials tried |
+| `username`, `password` | Credentials used |
 | `start_time`, `end_time` | ISO-8601 timestamps |
-| `max_threat_score` | Highest MITRE score (0–100) |
-| `country_code`, `country_name`, `city` | GeoIP |
-| `asn`, `asn_org`, `is_datacenter` | ASN enrichment |
-| `attacker_type` | `bot` / `semi-automated` / `human` / `unknown` |
-| `type_confidence` | Classifier confidence 0–1 |
-| `current_phase` | Latest kill-chain phase |
+| `max_threat_score` | Highest per-command score (0–100) |
+| `country_code`, `country_name`, `city`, `asn`, `asn_org`, `is_datacenter` | GeoIP |
+| `attacker_type`, `type_confidence`, `current_phase` | Profiler output |
 | `credential_risk` | `low` / `medium` / `high` / `critical` |
-| `summary` | LLM-generated incident summary |
+| `campaign_id`, `campaign_reasons` | Campaign correlation |
+| `summary` | LLM incident summary |
 
-**`commands`** — one row per command.
-
-| Column | Description |
-|---|---|
-| `session_id` | FK → sessions |
-| `timestamp`, `cwd`, `command`, `output` | Command detail |
-| `route_decision` | `BUILTIN` / `SANDBOX` / `LLM_DECEPTION` / `http_sensor` |
-| `technique_id`, `technique_name`, `tactics` | MITRE ATT&CK |
-| `threat_score` | Per-command score |
-| `reasoning` | Model chain-of-thought (sanitized from attacker, visible on dashboard) |
-
-**`phase_transitions`** — one row per forward kill-chain transition.
+**`commands`**: one row per command.
 
 | Column | Description |
 |---|---|
-| `session_id` | FK → sessions |
-| `timestamp` | When the transition occurred |
-| `from_phase`, `to_phase` | Phase names |
-| `phase_index` | Numeric position in kill-chain (0–9) |
-| `triggered_by` | Command that caused the transition |
+| `session_id` | Session reference |
+| `timestamp` | When the command was received |
+| `cwd`, `prompt_user` | Directory and user shown in the prompt it was typed at |
+| `command`, `output` | Command and reply |
+| `duration_ms` | Time until the reply appeared |
+| `route_decision` | `builtin` / `sandbox` / `grounded_deception` / `llm_deception` / `http_sensor` |
+| `technique_id`, `technique_name`, `tactics`, `threat_score` | MITRE ATT&CK |
+| `reasoning` | Model reasoning, shown on the dashboard only |
 
-**`web_probes`** — one row per HTTP sensor hit.
+**`phase_transitions`**: one row per forward kill-chain transition (`from_phase`, `to_phase`, `phase_index`, `triggered_by`).
 
-| Column | Description |
-|---|---|
-| `remote_ip`, `remote_port` | Source |
-| `method`, `path`, `query`, `user_agent` | Request detail |
-| `probe_label` | e.g. `sensitive_file_env`, `sqli_probe` |
-| `status_code`, `response_snippet` | What was returned |
+**`web_probes`**: one row per HTTP decoy request (`method`, `path`, `query`, `user_agent`, `probe_label`, `status_code`, `response_snippet`).
+
+**`honeytokens`**: issued canary tokens (`identifier`, `token_type`, `session_id`, `canary_url`, `created_at`).
 
 ---
 
@@ -566,61 +505,21 @@ SQLite (`doppel_telemetry.db`) — four tables:
 python -m pytest
 ```
 
-Coverage areas:
-- `tests/test_router.py` — safe vs. sensitive classification, benign-command passthrough, safe-IP mode.
-- `tests/test_llm_client.py` — async completions, deterministic mock responses.
-- `tests/test_session.py` — session lifecycle, PTY processing, background task sync, report emission.
-- `tests/test_dashboard.py` — pre-flight diagnostics, quick-fixes, config endpoints.
+- `tests/test_router.py`: route classification, benign passthrough, safe-IP mode.
+- `tests/test_llm_client.py`: client, streaming and mock responses.
+- `tests/test_session.py`: session lifecycle, built-ins, logging, schema migration.
+- `tests/test_dashboard.py`: diagnostics, quick fixes, config endpoints.
+- `tests/test_replay_campaigns.py`: replay timing and campaign correlation.
+- `tests/test_hardening.py`: terminal input handling, local identity answers, HTTP decoy, canary endpoint, concurrent telemetry writes.
 
 ---
 
-## Telemetry & Reports
+## Telemetry and Reports
 
-- **Web SOC Dashboard**: `http://localhost:8000` — live WebSocket/SSE fleet monitoring.
-- **SQLite DB**: `doppel_telemetry.db` — fully queryable with any SQLite client.
-- **Incident reports**: auto-generated at session close in `reports/incident_<id>_<ts>.md`.
-- **Manual report generation**:
+- **Dashboard**: `http://localhost:8000`, live over WebSocket with SSE fallback.
+- **Database**: `doppel_telemetry.db`, readable with any SQLite client.
+- **Incident reports**: generated when a session closes, in `reports/incident_<id>_<ts>.md`.
+- **Manual report**:
   ```bash
   python -m doppel.cli report <session_id>
   ```
-
----
-
-## Roadmap
-
-> Features are marked `[x]` when fully implemented.
-
-- [x] **Minimalist Web SOC Dashboard & Control Center**
-  - Pre-Flight diagnostics (Ollama, Docker, port), 1-click fixes, multi-session fleet monitor, live WebSocket terminal, incident report viewer.
-- [x] **Safe IP Allowlist & Benign Command Passthrough**
-  - Trusted IPs bypass deception and receive a real sandbox shell. Benign commands always route to Docker.
-- [x] **Credential Pattern Analysis**
-  - Nine-category classifier (`default_credential`, `hash_pattern`, `leaked_credential`, `credential_stuffing`, …) with risk scoring on every SSH auth attempt.
-- [x] **Fake Filesystem Persistence**
-  - Per-session in-memory filesystem injected into LLM context so file operations remain consistent across turns.
-- [x] **HTTP Honeypot Sensor (Port 8080)**
-  - 25-category web-probe classifier; LLM-synthesised responses; logged to `web_probes` table; broadcast over WebSocket.
-- [x] **Port-Scan Deception**
-  - `PERSONA_PORTS` inventory injected into every LLM prompt — `nmap`, `ss`, `netstat` output matches real exposed ports.
-- [x] **GeoIP Enrichment**
-  - Zero-latency MaxMind mmdb enrichment at connection time. Country, city, ASN, datacenter detection. Persisted to DB.
-- [x] **Automated vs. Human Operator Classifier**
-  - Five-signal weighted vote: timing cadence, regularity, bot-tool hits, navigation backtracking, hesitation signals.
-- [x] **Adaptive Tar-Pit**
-  - `tar_pit_delay_ms` is now a base value; actual delay is 3× for bots, 0.3× for humans, with ±20% jitter.
-- [x] **Attack Phase Tracker (Kill-Chain)**
-  - 10-phase kill-chain; forward-only; fires `phase_transition` events; persisted to `phase_transitions` table.
-- [ ] **Canarytoken Integration**
-  - Inject real Canarytokens (AWS keys, DNS tokens) into honeytoken files for out-of-band attribution when exfiltrated credentials are used on the public internet.
-- [ ] **Honeytoken Coherence Store**
-  - Per-session cache of previously synthesised credentials (DB passwords, IPs, filenames) re-injected into every subsequent LLM prompt for cross-turn consistency.
-- [ ] **LLM Output Sanitiser**
-  - Post-process LLM output for AI self-disclosure phrases ("As an AI…"); replace with `command not found` fallback.
-- [ ] **Streaming LLM Output**
-  - Stream LLM responses token-by-token so long commands (`find /`, `linpeas`) appear to print progressively.
-- [ ] **Webhook Alerts**
-  - POST to Slack/Discord/PagerDuty when session threat score crosses a configurable threshold.
-- [ ] **Session Replay**
-  - Dashboard endpoint to replay a closed session with correct inter-command timing.
-- [ ] **Cross-Session Attacker Correlation**
-  - Link sessions by IP, credential pattern, or command playbook fingerprint into `campaign_id` groups.

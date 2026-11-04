@@ -538,7 +538,7 @@ class HoneypotController:
         return {
             # Shell prompt as the SSH server renders it (the active preset overrides hostname)
             "prompt": {
-                "hostname": preset.get("hostname", self.config.honeypot.hostname),
+                "hostname": preset.get("hostname", self.config.honeypot.hostname).split(".")[0],
                 "format": preset.get("prompt_format", "{user}@{hostname}:{cwd}$ "),
                 "root_format": preset.get("root_prompt_format", "{user}@{hostname}:{cwd}# "),
             },

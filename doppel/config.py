@@ -12,6 +12,9 @@ class HoneypotSettings(BaseModel):
     hostname: str = "prod-api-node-01"
     default_user: str = "ubuntu"
     accept_any_password: bool = True
+    # Where SSH host keys are kept; keep it on persistent storage so the
+    # server's fingerprint does not change between deployments.
+    host_key_dir: str = "."
     motd: str = (
         "Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)\n"
         " * Documentation:  https://help.ubuntu.com\n"
@@ -52,7 +55,7 @@ class DeceptionSettings(BaseModel):
 
 class SandboxSettings(BaseModel):
     enabled: bool = True
-    image: str = "alpine:latest"
+    image: str = "doppel-sandbox:ubuntu-22.04"
     network_disabled: bool = True
     memory_limit: str = "256m"
     cpu_quota: int = 50000
@@ -143,37 +146,75 @@ class DoppelConfig(BaseSettings):
 
 _CONFIG_INSTANCE: Optional[DoppelConfig] = None
 _PRESETS_CACHE: Optional[Dict[str, Any]] = None
+_PRESETS_MTIME: Optional[float] = None
+
+DEFAULT_PERSONA = "ubuntu_web_server"
+
+
+def _presets_file() -> Optional[Path]:
+    for p in (
+        Path(__file__).parent / "config" / "presets.yaml",
+        Path("doppel/config/presets.yaml"),
+        Path("presets.yaml"),
+    ):
+        if p.exists():
+            return p
+    return None
+
+
+def _load_presets_file() -> Dict[str, Any]:
+    """presets.yaml contents, re-read only when the file changes."""
+    global _PRESETS_CACHE, _PRESETS_MTIME
+    path = _presets_file()
+    if path is None:
+        return {}
+    try:
+        mtime = path.stat().st_mtime
+        if _PRESETS_CACHE is None or mtime != _PRESETS_MTIME:
+            with open(path, "r", encoding="utf-8") as f:
+                _PRESETS_CACHE = yaml.safe_load(f) or {}
+            _PRESETS_MTIME = mtime
+    except Exception:
+        return _PRESETS_CACHE or {}
+    return _PRESETS_CACHE
 
 
 def get_presets_dict() -> Dict[str, Any]:
-    """Load distribution presets from presets.yaml."""
-    global _PRESETS_CACHE
-    presets_paths = [
-        Path("doppel/config/presets.yaml"),
-        Path(__file__).parent / "config" / "presets.yaml",
-        Path("presets.yaml"),
-    ]
-    for p in presets_paths:
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                    _PRESETS_CACHE = data.get("presets", {})
-                    return _PRESETS_CACHE
-            except Exception as e:
-                pass
-    return {}
+    """Host identities keyed by persona name."""
+    return _load_presets_file().get("presets", {}) or {}
+
+
+def get_preset_aliases() -> Dict[str, str]:
+    return _load_presets_file().get("aliases", {}) or {}
+
+
+def resolve_persona_key(config: Optional[DoppelConfig] = None) -> str:
+    """
+    The persona in effect. `active_preset` is authoritative; `deception.persona`
+    is honoured when no preset is selected. Legacy preset names map through
+    the aliases table.
+    """
+    cfg = config or get_config()
+    presets = get_presets_dict()
+    aliases = get_preset_aliases()
+    for candidate in (getattr(cfg, "active_preset", None), getattr(cfg.deception, "persona", None)):
+        if not candidate:
+            continue
+        key = aliases.get(candidate, candidate)
+        if key in presets:
+            return key
+    return DEFAULT_PERSONA
 
 
 def get_active_preset(config: Optional[DoppelConfig] = None) -> Dict[str, Any]:
-    """Retrieve active distribution preset based on active_preset key in configuration."""
+    """Host identity of the persona in effect (see resolve_persona_key)."""
     cfg = config or get_config()
     presets = get_presets_dict()
-    preset_key = getattr(cfg, "active_preset", "ubuntu_web_server")
-    if preset_key in presets:
-        return presets[preset_key]
-    # Fallback to first available preset or standard Ubuntu profile
-    return presets.get("ubuntu_web_server", {
+    key = resolve_persona_key(cfg)
+    if key in presets:
+        return {"key": key, "persona_context": key, **presets[key]}
+    return {
+        "key": DEFAULT_PERSONA,
         "name": "Ubuntu 22.04 LTS Web Server",
         "server_banner": cfg.honeypot.server_banner,
         "hostname": cfg.honeypot.hostname,
@@ -181,8 +222,8 @@ def get_active_preset(config: Optional[DoppelConfig] = None) -> Dict[str, Any]:
         "motd": cfg.honeypot.motd,
         "prompt_format": "{user}@{hostname}:{cwd}$ ",
         "root_prompt_format": "{user}@{hostname}:{cwd}# ",
-        "persona_context": cfg.deception.persona,
-    })
+        "persona_context": DEFAULT_PERSONA,
+    }
 
 
 def get_config(config_path: Optional[str] = None) -> DoppelConfig:

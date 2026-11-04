@@ -1,74 +1,75 @@
-# Doppel Distribution Presets
-# Defines target operating system personas, banners, MOTDs, and shell prompt formats
-# Supports zero-downtime hot-reloading via active_preset in config.yaml or runtime config updates.
+# Doppel Host Identities
+#
+# One entry per deception persona. Everything an attacker can observe about the
+# machine (SSH banner, login banner, shell prompt, hostname, kernel, account ids)
+# must agree with the matching persona prompt in doppel/ai/prompts/deception_prompts.py,
+# so each key here is also the persona name.
+#
+# Prompt placeholders: {user}, {hostname} (short name, like bash's \h),
+#   {cwd} (full path with ~, like \w), {cwd_base} (last component, like \W).
+# MOTD placeholders: {date} (current time), {last_login} ("Last login: ... from ...").
+#
+# Selected with active_preset in config.yaml (hot-reloadable from the dashboard).
+
+aliases:
+  # Earlier preset names, kept so existing config files keep working
+  centos_database: fintech_api
+  debian_cloud_node: cloud_worker
 
 presets:
   ubuntu_web_server:
-    name: "Ubuntu 22.04.4 LTS Web Server"
+    name: "Ubuntu 22.04 LTS Web Server"
     server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
     hostname: "prod-api-node-01"
     default_user: "ubuntu"
+    user_uid: 1000
     home_dir: "/home/ubuntu"
     shell: "/bin/bash"
     prompt_format: "{user}@{hostname}:{cwd}$ "
     root_prompt_format: "{user}@{hostname}:{cwd}# "
     motd: |
       Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)
+
        * Documentation:  https://help.ubuntu.com
        * Management:     https://landscape.canonical.com
        * Support:        https://ubuntu.com/pro
 
-      System information as of current session:
+       System information as of {date}
+
         System load:  0.18               Processes:             112
-        Usage of /:   34.2% of 48.29GB   Users logged in:       1
-        Memory usage: 28%                IPv4 address for eth0: 10.0.4.15
+        Usage of /:   37.6% of 48.29GB   Users logged in:       1
+        Memory usage: 41%                IPv4 address for eth0: 10.0.4.15
+        Swap usage:   0%
+
+      Expanded Security Maintenance for Applications is not enabled.
 
       0 updates can be applied immediately.
+
+      Enable ESM Apps to receive additional future security updates.
+      See https://ubuntu.com/esm or run: sudo pro status
+
+
+      {last_login}
     persona_context: "ubuntu_web_server"
     kernel_release: "5.15.0-105-generic"
     kernel_version: "#115-Ubuntu SMP Mon Apr 15 17:33:04 UTC 2024"
     uname_processor: "x86_64"
     user_groups: "4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),110(lxd)"
     http_server_header: "nginx/1.18.0 (Ubuntu)"
+    admin_ip: "10.0.4.1"
 
-  centos_database:
-    name: "CentOS Linux 7 Database Host"
-    server_banner: "SSH-2.0-OpenSSH_7.4p1"
-    hostname: "db-cluster-node-03"
-    default_user: "centos"
-    home_dir: "/home/centos"
-    shell: "/bin/bash"
-    prompt_format: "[{user}@{hostname} {cwd}]$ "
-    root_prompt_format: "[{user}@{hostname} {cwd}]# "
-    motd: |
-      CentOS Linux 7 (Core)
-      Kernel 3.10.0-1160.99.1.el7.x86_64 on an x86_64
-
-      Database Cluster Status:
-        Node:           db-cluster-node-03.internal
-        Cluster Health: [OK] Primary Replication Sync
-        Active DBs:     PostgreSQL 14.9, MySQL 8.0.34
-        Storage Pool:   /var/lib/data (RAID-10, 4.2TB Free)
-
-      Authorized administrative access only. All activities are logged.
-    persona_context: "fintech_api"
-    kernel_release: "3.10.0-1160.99.1.el7.x86_64"
-    kernel_version: "#1 SMP Wed Sep 13 14:19:20 UTC 2023"
-    uname_processor: "x86_64"
-    user_groups: "4(adm),10(wheel),190(systemd-journal)"
-    http_server_header: "nginx/1.20.1"
-
-  debian_cloud_node:
-    name: "Debian 12 Cloud Node"
+  fintech_api:
+    name: "Debian 12 Payments Staging Server"
     server_banner: "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
-    hostname: "cloud-worker-fra1"
-    default_user: "debian"
-    home_dir: "/home/debian"
+    hostname: "staging-payments-gw01"
+    default_user: "api-runner"
+    user_uid: 1001
+    home_dir: "/home/api-runner"
     shell: "/bin/bash"
     prompt_format: "{user}@{hostname}:{cwd}$ "
     root_prompt_format: "{user}@{hostname}:{cwd}# "
     motd: |
-      Linux cloud-worker-fra1 6.1.0-21-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 x86_64
+      Linux staging-payments-gw01 6.1.0-25-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2024-08-26) x86_64
 
       The programs included with the Debian GNU/Linux system are free software;
       the exact distribution terms for each program are described in the
@@ -76,10 +77,41 @@ presets:
 
       Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
       permitted by applicable law.
-      Last login: Sun Oct 11 19:42:10 2026 from 10.0.8.2
-    persona_context: "cloud_worker"
-    kernel_release: "6.1.0-21-amd64"
-    kernel_version: "#1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 (2024-05-03)"
+      {last_login}
+    persona_context: "fintech_api"
+    kernel_release: "6.1.0-25-amd64"
+    kernel_version: "#1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2024-08-26)"
     uname_processor: "unknown"
-    user_groups: "4(adm),20(dialout),24(cdrom),25(floppy),27(sudo),29(audio),30(dip),44(video),46(plugdev),106(netdev)"
+    user_groups: "999(docker)"
     http_server_header: "nginx/1.22.1"
+    admin_ip: "10.0.10.5"
+
+  cloud_worker:
+    name: "Amazon Linux 2023 Kubernetes Node"
+    server_banner: "SSH-2.0-OpenSSH_8.7"
+    hostname: "ip-10-0-2-44.ec2.internal"
+    default_user: "ec2-user"
+    user_uid: 1000
+    home_dir: "/home/ec2-user"
+    shell: "/bin/bash"
+    prompt_format: "[{user}@{hostname} {cwd_base}]$ "
+    root_prompt_format: "[{user}@{hostname} {cwd_base}]# "
+    motd: |
+      {last_login}
+         ,     #_
+         ~\_  ####_        Amazon Linux 2023
+        ~~  \_#####\
+        ~~     \###|
+        ~~       \#/ ___   https://aws.amazon.com/linux/amazon-linux-2023
+         ~~       V~' '->
+          ~~~         /
+            ~~._.   _/
+               _/ _/
+             _/m/'
+    persona_context: "cloud_worker"
+    kernel_release: "6.1.112-122.189.amzn2023.x86_64"
+    kernel_version: "#1 SMP PREEMPT_DYNAMIC Tue Oct  8 17:04:18 UTC 2024"
+    uname_processor: "x86_64"
+    user_groups: "4(adm),10(wheel),992(docker)"
+    http_server_header: "nginx/1.24.0"
+    admin_ip: "10.0.0.5"

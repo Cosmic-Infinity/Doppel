@@ -23,7 +23,12 @@ SENSITIVE_TARGETS: Set[str] = {
     "/proc/version",
     "/proc/cpuinfo",
     "/proc/meminfo",
-    "/proc/1/cgroup",
+    "/proc/1/",
+    "/proc/self/",
+    "/proc/mounts",
+    "/proc/cgroups",
+    "/sys/fs/cgroup",
+    "mountinfo",
     "/.dockerenv",
     ".env",
     "wp-config.php",
@@ -96,7 +101,37 @@ GROUNDED_COMMANDS: Set[str] = {
     "env",
     "printenv",
     "export",
+    "set",
+    # The sandbox's mounts, memory and CPU are the container's, not the persona's
+    "mount",
+    "findmnt",
+    "df",
+    "lsblk",
+    "free",
+    "uptime",
+    "nproc",
+    "lscpu",
+    "vmstat",
 }
+
+# Tools that need the network. The sandbox has none, so running them there
+# would fail in ways a production server never does; they are simulated.
+NETWORK_TOOLS: Set[str] = {
+    "ping", "ping6", "curl", "wget", "nc", "ncat", "netcat", "telnet", "dig", "nslookup",
+    "host", "traceroute", "tracepath", "mtr", "ftp", "tftp", "ssh", "scp", "sftp", "rsync",
+    "apt", "apt-get", "yum", "dnf", "snap",
+}
+# Package/source tools that only need the network for some subcommands
+NETWORK_SUBCOMMANDS = {
+    "pip": {"install", "download"},
+    "pip3": {"install", "download"},
+    "npm": {"install", "i", "update", "publish"},
+    "git": {"clone", "pull", "fetch", "push", "ls-remote"},
+}
+
+# Commands that report on logins; they must show the attacker's own session
+# (source IP, login time), which only the deception layer knows
+SESSION_INFO_COMMANDS: Set[str] = {"who", "w", "last", "lastlog", "users"}
 
 # Patterns indicating denial of service or container escape attempts that must stay in Tier 3 containment
 DOS_CONTAINMENT_PATTERNS = [
@@ -133,8 +168,8 @@ class HybridRouter:
         tokens = cmd_clean.split()
         binary = tokens[0].lower()
 
-        # 1. Shell built-ins that modify state directly
-        if binary in {"cd", "exit", "logout", "clear"}:
+        # 1. Shell built-ins answered from session state
+        if binary in {"cd", "exit", "logout", "clear", "pwd"}:
             return RouteDecision.BUILTIN, binary
 
         # 2. Safe-IP mode: bypass all deception for trusted admin connections
@@ -154,6 +189,16 @@ class HybridRouter:
         # 5. Check for missing/specialized penetration testing tools (Tier 3 Simulation)
         if self.intercept_missing_tools and any(tool in binary for tool in DECEPTION_TOOLS):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
+
+        # 5b. Network clients and package downloads are simulated (sandbox has no network)
+        if binary in NETWORK_TOOLS or (
+            len(tokens) > 1 and tokens[1].lower() in NETWORK_SUBCOMMANDS.get(binary, ())
+        ):
+            return RouteDecision.LLM_DECEPTION, "network_simulated"
+
+        # 5c. Login/session reports reflect the attacker's own connection
+        if binary in SESSION_INFO_COMMANDS:
+            return RouteDecision.LLM_DECEPTION, "session_info"
 
         # 6. Check if command touches sensitive files or honeytokens (Tier 2 Grounded if container available)
         if self.intercept_sensitive_files:

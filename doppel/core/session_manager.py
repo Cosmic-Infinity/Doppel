@@ -1,6 +1,7 @@
 import uuid
 import asyncio
 import logging
+import posixpath
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
@@ -40,6 +41,7 @@ class SessionState:
     effective_user: str = "ubuntu"
     is_elevated: bool = False
     pre_elevation_cwd: Optional[str] = None
+    previous_cwd: Optional[str] = None  # bash's OLDPWD, for `cd -`
 
 
 class SessionManager:
@@ -470,26 +472,46 @@ class SessionManager:
         cmd = tokens[0].lower()
 
         if cmd == "cd":
-            is_root = getattr(session, "effective_user", session.username) == "root"
-            home_dir = "/root" if is_root else f"/home/{session.username}"
-            target = tokens[1] if len(tokens) > 1 else home_dir
-            if target == "~":
-                session.cwd = home_dir
-            elif target.startswith("/"):
-                session.cwd = target
-            elif target == "..":
-                parts = [p for p in session.cwd.split("/") if p]
-                session.cwd = "/" + "/".join(parts[:-1]) if parts[:-1] else "/"
-            elif target == ".":
-                pass
-            else:
-                session.cwd = (session.cwd.rstrip("/") + "/" + target).replace("//", "/")
-            return ""
+            return self._change_directory(session, tokens[1:])
+
+        if cmd == "pwd":
+            return session.cwd
 
         if cmd == "clear":
             return "\033[H\033[2J"
 
         return ""
+
+    @staticmethod
+    def _change_directory(session: SessionState, args: List[str]) -> str:
+        """bash's `cd`: path resolution, `cd -`, `~`, and home-directory permissions."""
+        user = getattr(session, "effective_user", session.username)
+        is_root = user == "root"
+        home_dir = "/root" if is_root else f"/home/{user}"
+
+        if len(args) > 1:
+            return "bash: cd: too many arguments"
+        target = args[0] if args else home_dir
+        announce = False
+        if target == "-":
+            if not session.previous_cwd:
+                return "bash: cd: OLDPWD not set"
+            target, announce = session.previous_cwd, True
+        elif target == "~" or target.startswith("~/"):
+            target = home_dir + target[1:]
+
+        resolved = posixpath.normpath(posixpath.join(session.cwd, target))
+        if resolved.startswith("//"):
+            resolved = "/" + resolved.lstrip("/")
+
+        # /root is 700 and Ubuntu 22.04 creates home directories as 750
+        if not is_root:
+            parts = resolved.strip("/").split("/")
+            if parts[0] == "root" or (parts[0] == "home" and len(parts) > 1 and parts[1] != user):
+                return f"bash: cd: {args[0]}: Permission denied"
+
+        session.previous_cwd, session.cwd = session.cwd, resolved
+        return resolved if announce else ""
 
     async def _analyze_and_record(
         self,

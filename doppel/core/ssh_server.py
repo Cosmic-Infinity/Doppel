@@ -151,7 +151,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
 
             if not self._is_exec:
                 # Send active preset MOTD
-                motd = preset.get("motd") or self.config.honeypot.motd
+                motd = _render_motd(preset.get("motd") or self.config.honeypot.motd, preset)
                 if motd:
                     motd_formatted = motd.replace("\n", "\r\n") + "\r\n"
                     self._write(motd_formatted)
@@ -170,7 +170,8 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             if self.session else self.username
         )
         is_root = (effective_user == "root") or (self.session and getattr(self.session, "is_elevated", False))
-        hostname = preset.get("hostname", self.config.honeypot.hostname)
+        # bash's \h is the hostname up to the first dot
+        hostname = preset.get("hostname", self.config.honeypot.hostname).split(".")[0]
 
         home_prefix = "/root" if is_root else f"/home/{effective_user}"
         if cwd == home_prefix:
@@ -179,6 +180,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             display_cwd = "~" + cwd[len(home_prefix):]
         else:
             display_cwd = cwd
+        cwd_base = display_cwd if display_cwd in ("~", "/") else display_cwd.rstrip("/").rsplit("/", 1)[-1]
 
         if is_root:
             fmt = preset.get("root_prompt_format", "{user}@{hostname}:{cwd}# ")
@@ -188,7 +190,7 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
             user_label = effective_user
 
         try:
-            return fmt.format(user=user_label, hostname=hostname, cwd=display_cwd)
+            return fmt.format(user=user_label, hostname=hostname, cwd=display_cwd, cwd_base=cwd_base)
         except Exception:
             symbol = "#" if is_root else "$"
             return f"{user_label}@{hostname}:{display_cwd}{symbol} "
@@ -503,6 +505,28 @@ class DoppelSSHServer(asyncssh.SSHServer):
         self._sessions.clear()
 
 
+def _render_motd(motd: str, preset: dict) -> str:
+    """Fill the {date} and {last_login} placeholders of a login banner."""
+    if not motd:
+        return ""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    # The persona's admin was last on earlier the same day (or the evening before)
+    previous = now.replace(hour=8, minute=42, second=17, microsecond=0)
+    if previous >= now:
+        previous = (now - timedelta(days=1)).replace(hour=23, minute=42, second=17, microsecond=0)
+
+    def stamp(dt):  # "Wed Nov  4 10:15:02 UTC 2026", ctime-style with padded day
+        return f"{dt:%a %b} {dt.day:>2} {dt:%H:%M:%S}"
+
+    last_login = f"Last login: {stamp(previous)} {previous.year} from {preset.get('admin_ip', '10.0.4.1')}"
+    return (
+        motd.rstrip("\n")
+        .replace("{date}", f"{stamp(now)} UTC {now.year}")
+        .replace("{last_login}", last_login)
+    )
+
+
 def _software_version(banner: str) -> str:
     """asyncssh sends "SSH-2.0-" itself; strip it from a full banner string."""
     banner = (banner or "").strip()
@@ -519,6 +543,7 @@ _HOST_KEYS = (
 
 
 def _ensure_host_keys(directory: Path = Path(".")) -> List[str]:
+    directory.mkdir(parents=True, exist_ok=True)
     paths = []
     for name, algorithm, kwargs in _HOST_KEYS:
         path = directory / name
@@ -532,7 +557,7 @@ def _ensure_host_keys(directory: Path = Path(".")) -> List[str]:
 
 async def start_ssh_server(session_manager: SessionManager, config: DoppelConfig) -> asyncssh.SSHServer:
     """Initialize and start the honeypot SSH listener."""
-    host_keys = _ensure_host_keys()
+    host_keys = _ensure_host_keys(Path(getattr(config.honeypot, "host_key_dir", ".") or "."))
     preset = get_active_preset(config) or {}
     banner = preset.get("server_banner") or config.honeypot.server_banner
 
