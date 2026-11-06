@@ -33,6 +33,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.analytics.db import TelemetryDB
+from doppel.core.geoip import enrich as geoip_enrich, format_summary as geoip_summary
 from doppel.deception.honeytokens import VERIFY_PATH, get_honeytoken_manager
 
 logger = logging.getLogger("doppel.http_sensor")
@@ -155,6 +156,8 @@ def create_http_sensor(
     persona: str = "ubuntu_web_server",
     event_callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     server_header: str = "nginx/1.18.0 (Ubuntu)",
+    city_db_path: str = "",
+    asn_db_path: str = "",
 ) -> FastAPI:
     """
     Returns a standalone FastAPI app that acts as the HTTP honeypot sensor.
@@ -183,11 +186,14 @@ def create_http_sensor(
         ua          = request.headers.get("user-agent", "")
         ts          = datetime.now(timezone.utc).isoformat()
 
+        # Offline local GeoIP lookup — no outbound network call
+        geo = geoip_enrich(remote_ip, city_db_path=city_db_path, asn_db_path=asn_db_path)
+
         probe_label = classify_probe(request)
 
         logger.warning(
             f"[HTTP PROBE] {method} {path}{'?' + query if query else ''} "
-            f"from {remote_ip} | probe={probe_label} | ua={ua[:80]}"
+            f"from {geoip_summary(geo)} | probe={probe_label} | ua={ua[:80]}"
         )
 
         body = ""
@@ -226,6 +232,7 @@ def create_http_sensor(
             response_body=body,
             status_code=status_code,
             timestamp=ts,
+            geoip=geo,
         )
 
         if event_callback:
@@ -298,6 +305,8 @@ async def _handle_canary(
     ua          = request.headers.get("user-agent", "")
     ts          = datetime.now(timezone.utc).isoformat()
     token       = await _extract_token(request)
+    # city_db_path / asn_db_path are not in scope here; use module singleton
+    geo         = geoip_enrich(remote_ip)
 
     manager = get_honeytoken_manager()
     stored = None
@@ -331,6 +340,7 @@ async def _handle_canary(
         response_body="invalid_credentials",
         status_code=401,
         timestamp=ts,
+        geoip=geo,
     )
 
     if event_callback:
@@ -416,16 +426,18 @@ async def _log_web_probe(
     response_body: str,
     status_code: int,
     timestamp: str,
+    geoip: Optional[dict] = None,
 ) -> None:
     """
     Record a probe in three places: the per-IP-per-day web session (so it
     appears in the dashboard and reports), its command list, and web_probes.
+    GeoIP metadata is persisted alongside each record.
     """
     session_id = _http_session_id(remote_ip, timestamp)
     full_request = f"{method} {path}{'?' + query if query else ''}"
 
     try:
-        await db.ensure_http_session(session_id, remote_ip, remote_port, timestamp)
+        await db.ensure_http_session(session_id, remote_ip, remote_port, timestamp, geoip=geoip)
         await db.log_command(
             session_id=session_id,
             cwd="/var/www/html",
@@ -459,6 +471,7 @@ async def _log_web_probe(
             probe_label=probe_label,
             status_code=status_code,
             response_snippet=response_body,
+            geoip=geoip,
         )
     except Exception as exc:
         logger.error(f"Failed to log web probe: {exc}")

@@ -253,6 +253,13 @@ class HoneypotController:
                 await self.session_manager.background.shutdown()
                 self.session_manager = None
 
+            # Release memory-mapped GeoIP .mmdb file handles
+            try:
+                from doppel.core.geoip import get_geoip_service
+                get_geoip_service().close()
+            except Exception as geo_err:
+                logger.debug(f"GeoIP reader close notice: {geo_err}")
+
             self.status = "STOPPED"
             self.start_time = None
             logger.info("Honeypot daemon stopped")
@@ -504,12 +511,18 @@ class HoneypotController:
             self._on_session_event(event_type, data)
 
         preset = get_active_preset(self.config) or {}
+        geo_cfg = getattr(self.config, "geoip", None)
+        city_db = getattr(geo_cfg, "city_db_path", "") if geo_cfg else ""
+        asn_db  = getattr(geo_cfg, "asn_db_path",  "") if geo_cfg else ""
+
         sensor_app = create_http_sensor(
             deception_engine=deception_engine,
             db=self.db,
             persona=self.config.deception.persona,
             event_callback=_event_cb,
             server_header=preset.get("http_server_header", "nginx/1.18.0 (Ubuntu)"),
+            city_db_path=city_db,
+            asn_db_path=asn_db,
         )
         cfg = uvicorn.Config(
             app=sensor_app,
@@ -891,4 +904,3 @@ class HoneypotController:
                 self.session_manager.sandbox_manager.check_availability()
             return {"message": "Environment rechecked"}
         return {"error": f"Unknown quick-fix action: {action}"}
-

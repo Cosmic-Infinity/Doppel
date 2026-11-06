@@ -172,6 +172,22 @@ class TelemetryDB:
                     if col_name not in cmd_cols:
                         await db.execute(f"ALTER TABLE commands ADD COLUMN {col_name} {col_type}")
 
+                # Schema migration: geolocation columns for web_probes
+                async with db.execute("PRAGMA table_info(web_probes)") as cur:
+                    probe_cols = {row[1] for row in await cur.fetchall()}
+
+                needed_probe_cols = {
+                    "country_code": "TEXT",
+                    "city": "TEXT",
+                    "asn": "INTEGER",
+                    "asn_org": "TEXT",
+                }
+                for col_name, col_type in needed_probe_cols.items():
+                    if col_name not in probe_cols:
+                        await db.execute(
+                            f"ALTER TABLE web_probes ADD COLUMN {col_name} {col_type}"
+                        )
+
                 # Clean up any orphaned sessions from previous runs
                 await db.execute(
                     "UPDATE sessions SET end_time = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now') "
@@ -377,20 +393,37 @@ class TelemetryDB:
 
     # ── HTTP decoy & honeytokens ───────────────────────────────────────────────
 
-    async def ensure_http_session(self, session_id: str, remote_ip: str, remote_port: int, timestamp: str):
+    async def ensure_http_session(
+        self,
+        session_id: str,
+        remote_ip: str,
+        remote_port: int,
+        timestamp: str,
+        geoip: Optional[Dict[str, Any]] = None,
+    ):
         """
         Create the session row that groups an IP's web probes (one per IP per
         UTC day) if it does not exist yet, and move its last-seen time forward.
+
+        ``geoip`` is persisted on INSERT; it is intentionally not updated on
+        subsequent calls so the first-seen geolocation is preserved.
         """
         await self._ensure_initialized()
+        geo = geoip or {}
         async with self._connect() as db:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO sessions
-                (session_id, remote_ip, remote_port, username, password, start_time, end_time)
-                VALUES (?, ?, ?, 'http_probe', '', ?, ?)
+                (session_id, remote_ip, remote_port, username, password, start_time, end_time,
+                 country_code, country_name, city, asn, asn_org, is_datacenter)
+                VALUES (?, ?, ?, 'http_probe', '', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, remote_ip, remote_port, timestamp, timestamp),
+                (
+                    session_id, remote_ip, remote_port, timestamp, timestamp,
+                    geo.get("country_code"), geo.get("country_name"), geo.get("city"),
+                    geo.get("asn"), geo.get("asn_org"),
+                    1 if geo.get("is_datacenter") else 0,
+                ),
             )
             await db.execute(
                 "UPDATE sessions SET end_time = ? WHERE session_id = ?",
@@ -410,18 +443,26 @@ class TelemetryDB:
         probe_label: str,
         status_code: int,
         response_snippet: str,
+        geoip: Optional[Dict[str, Any]] = None,
     ):
         await self._ensure_initialized()
+        geo = geoip or {}
         async with self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO web_probes
                 (timestamp, remote_ip, remote_port, method, path, query, user_agent,
-                 probe_label, status_code, response_snippet)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 probe_label, status_code, response_snippet,
+                 country_code, city, asn, asn_org)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (timestamp, remote_ip, remote_port, method, path[:2048], query[:2048],
-                 user_agent[:512], probe_label, status_code, response_snippet[:512]),
+                (
+                    timestamp, remote_ip, remote_port, method,
+                    path[:2048], query[:2048], user_agent[:512],
+                    probe_label, status_code, response_snippet[:512],
+                    geo.get("country_code"), geo.get("city"),
+                    geo.get("asn"), geo.get("asn_org"),
+                ),
             )
             await db.commit()
 
@@ -741,4 +782,3 @@ class TelemetryDB:
             cur = await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             await db.commit()
             return cur.rowcount > 0
-
