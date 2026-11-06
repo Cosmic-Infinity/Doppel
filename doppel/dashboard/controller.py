@@ -8,7 +8,7 @@ from fastapi import WebSocket
 
 from doppel.config import DoppelConfig, get_config, get_active_preset
 from doppel.deception.honeytokens import derive_canary_base_url, get_honeytoken_manager
-from doppel.ai.llm_client import LLMClient
+from doppel.ai.llm_client import LLMClient, clients_from_config
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
 from doppel.router.hybrid_router import HybridRouter
@@ -130,20 +130,14 @@ class HoneypotController:
 
         try:
             # Re-read config to capture any edits
-            llm_client = LLMClient(
-                base_url=self.config.llm.base_url,
-                model=self.config.llm.model,
-                api_key=self.config.llm.api_key,
-                timeout=self.config.llm.timeout_seconds,
-                temperature=self.config.llm.temperature,
-                mock_mode=self.config.llm.mock_mode,
-            )
+            llm_client, analysis_client = clients_from_config(self.config.llm)
             preset = get_active_preset(self.config) or {}
             deception_engine = DeceptionEngine(
                 llm_client=llm_client,
                 persona=preset.get("persona_context", self.config.deception.persona),
                 host_profile=preset,
                 dynamic_honeytokens=self.config.deception.dynamic_honeytokens,
+                no_think=self.config.llm.terminal_no_think,
             )
             sandbox_manager = DockerSandboxManager(
                 image=self.config.sandbox.image,
@@ -163,11 +157,10 @@ class HoneypotController:
                 intercept_missing_tools=self.config.deception.intercept_missing_tools,
                 sandbox_available=sandbox_manager.is_available,
                 benign_commands=set(self.config.benign_commands),
-                enforce_for_safe_ips=self.config.deception.enforce_for_safe_ips,
             )
-            observer = ThreatObserver(llm_client=llm_client, db=self.db)
+            observer = ThreatObserver(llm_client=analysis_client, db=self.db)
             reporter = IncidentReporter(
-                llm_client=llm_client,
+                llm_client=analysis_client,
                 db=self.db,
                 reports_dir=self.config.analytics.reports_dir,
             )
@@ -571,22 +564,22 @@ class HoneypotController:
             if preset:
                 self.session_manager.deception_engine.set_host_profile(preset)
             self.session_manager.deception_engine.dynamic_honeytokens = self.config.deception.dynamic_honeytokens
+            self.session_manager.deception_engine.no_think = self.config.llm.terminal_no_think
             if hasattr(self.session_manager.deception_engine, "llm_client") and self.session_manager.deception_engine.llm_client:
                 self.session_manager.deception_engine.llm_client.base_url = self.config.llm.base_url.rstrip("/")
                 self.session_manager.deception_engine.llm_client.model = self.config.llm.model
                 self.session_manager.deception_engine.llm_client.mock_mode = self.config.llm.mock_mode
         if hasattr(self.session_manager, "observer") and self.session_manager.observer and hasattr(self.session_manager.observer, "llm_client"):
             self.session_manager.observer.llm_client.base_url = self.config.llm.base_url.rstrip("/")
-            self.session_manager.observer.llm_client.model = self.config.llm.model
+            self.session_manager.observer.llm_client.model = self.config.llm.analysis_model or self.config.llm.model
             self.session_manager.observer.llm_client.mock_mode = self.config.llm.mock_mode
         if hasattr(self.session_manager, "reporter") and self.session_manager.reporter and hasattr(self.session_manager.reporter, "llm_client"):
             self.session_manager.reporter.llm_client.base_url = self.config.llm.base_url.rstrip("/")
-            self.session_manager.reporter.llm_client.model = self.config.llm.model
+            self.session_manager.reporter.llm_client.model = self.config.llm.analysis_model or self.config.llm.model
             self.session_manager.reporter.llm_client.mock_mode = self.config.llm.mock_mode
         if hasattr(self.session_manager, "router") and self.session_manager.router:
             self.session_manager.router.intercept_sensitive_files = self.config.deception.intercept_sensitive_files
             self.session_manager.router.intercept_missing_tools = self.config.deception.intercept_missing_tools
-            self.session_manager.router.enforce_for_safe_ips = self.config.deception.enforce_for_safe_ips
         if hasattr(self.session_manager, "sandbox_manager") and self.session_manager.sandbox_manager:
             self.session_manager.sandbox_manager.enabled = self.config.sandbox.enabled
             if not self.config.sandbox.enabled:

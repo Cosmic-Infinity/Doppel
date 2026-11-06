@@ -107,12 +107,11 @@
             <div class="card-controls">
               <div class="control-row">
                 <label for="select-llm-model">Active Model</label>
-                <select id="select-llm-model" class="select-input">
-                  <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
-                  <option value="qwen3:14b">qwen3:14b</option>
-                  <option value="qwen3.6:27b">qwen3.6:27b</option>
-                  <option value="qwen3.6:35b-a3b">qwen3.6:35b-a3b</option>
-                </select>
+                <div class="control-inline">
+                  <select id="select-llm-model" class="select-input"></select>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-test-model-speed">Test speed</button>
+                </div>
+                <span class="control-hint">Changes apply to new commands immediately.</span>
               </div>
               <div class="card-action-bar" id="action-bar-llm">
                 <!-- 1-Click Fixes dynamically inserted -->
@@ -149,14 +148,17 @@
             </div>
             <p class="card-desc" id="desc-port">Testing port availability...</p>
 
-            <div class="card-controls">
+            <div class="card-controls card-controls-top">
+              <div class="control-row">
+                <label for="input-custom-port">Port</label>
+                <div class="control-inline">
+                  <input type="number" id="input-custom-port" class="text-input-sm" value="2222" min="1" max="65535">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-custom-port">Apply</button>
+                </div>
+                <span class="control-hint" id="hint-port"></span>
+              </div>
               <div class="card-action-bar" id="action-bar-port">
                 <!-- Quick port alternatives if conflict -->
-              </div>
-              <div class="control-row inline-row">
-                <label for="input-custom-port">Custom Port:</label>
-                <input type="number" id="input-custom-port" class="text-input-sm" value="2222">
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-custom-port">Set</button>
               </div>
             </div>
           </div>
@@ -205,7 +207,7 @@
             <span class="summary-text" id="launch-summary-text">Ready to launch honeypot.</span>
           </div>
           <button id="btn-launch-primary" class="btn btn-primary btn-large">
-            <span>Start Honeypot</span>
+            <span id="btn-launch-primary-label">Start Honeypot</span>
           </button>
         </div>
       </div>
@@ -223,6 +225,14 @@
         <div class="sidebar-tabs">
           <button class="sidebar-tab active" data-sidebar="sessions">Sessions</button>
           <button class="sidebar-tab" data-sidebar="campaigns">Campaigns</button>
+        </div>
+
+        <div class="session-filter" id="session-filter">
+          <input type="search" id="session-search" class="session-search" placeholder="Filter by IP, user or session" autocomplete="off" aria-label="Filter sessions">
+          <label class="session-live-toggle" title="Show only connected sessions">
+            <input type="checkbox" id="session-live-only">
+            <span>Live</span>
+          </label>
         </div>
 
         <div class="sessions-list" id="sessions-container">
@@ -252,38 +262,58 @@
         <div class="session-detail hidden" id="session-detail">
           <!-- Session Header Strip -->
           <div class="detail-header">
-            <div class="detail-title-group">
-              <div class="detail-badge-group">
+            <div class="detail-identity">
+              <div class="detail-identity-main">
                 <span class="live-pill" id="detail-live-pill">LIVE</span>
-                <span class="phase-pill" id="detail-phase-pill">Reconnaissance</span>
-                <span class="profile-tag" id="detail-profile-tag">Profiling...</span>
-                <button type="button" class="campaign-pill hidden" id="detail-campaign-pill" title="Show campaign"></button>
+                <span class="detail-user" id="detail-user">ubuntu</span>
+                <span class="detail-at">@</span>
                 <span class="detail-ip" id="detail-ip">127.0.0.1:0</span>
-                <span class="detail-user" id="detail-user">user: ubuntu</span>
               </div>
-              <div class="detail-session-id" id="detail-session-id">ID: —</div>
+              <div class="detail-identity-meta">
+                <span class="detail-session-id" id="detail-session-id">—</span>
+                <button type="button" class="icon-btn" id="btn-copy-session-id" title="Copy session ID" aria-label="Copy session ID">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>
+                <span class="detail-started" id="detail-started"></span>
+              </div>
             </div>
 
-            <div class="detail-stats-group">
-              <div class="stat-box">
-                <span class="stat-label">Threat Score</span>
-                <span class="stat-value" id="detail-threat-score">0 / 100</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-label">Commands</span>
-                <span class="stat-value" id="detail-cmd-count">0</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-label">Directory</span>
-                <span class="stat-value" id="detail-cwd">/home/ubuntu</span>
-              </div>
-              <button type="button" class="btn btn-secondary btn-delete-session" id="btn-delete-session" title="Delete this session and all associated data">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
-                <span>Delete</span>
+            <div class="detail-menu">
+              <button type="button" class="icon-btn" id="btn-session-menu" title="Session actions" aria-label="Session actions" aria-haspopup="true" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
               </button>
+              <div class="detail-menu-pop hidden" id="session-menu" role="menu">
+                <button type="button" class="menu-item danger" id="btn-delete-session" role="menuitem">Delete session</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-stats">
+            <div class="stat-tile">
+              <span class="stat-label">Threat</span>
+              <span class="stat-value" id="detail-threat-score">0</span>
+              <span class="threat-bar"><span class="threat-bar-fill" id="detail-threat-bar"></span></span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Commands</span>
+              <span class="stat-value" id="detail-cmd-count">0</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Phase</span>
+              <span class="phase-pill" id="detail-phase-pill">Reconnaissance</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Attacker</span>
+              <span class="profile-tag" id="detail-profile-tag">Profiling</span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label">Campaign</span>
+              <button type="button" class="campaign-pill hidden" id="detail-campaign-pill" title="Show campaign"></button>
+              <span class="stat-value muted" id="detail-campaign-none">None</span>
+            </div>
+            <div class="stat-tile stat-tile-wide">
+              <span class="stat-label">Directory</span>
+              <span class="stat-value stat-path" id="detail-cwd">/home/ubuntu</span>
             </div>
           </div>
 
@@ -460,8 +490,7 @@
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
             <div class="assistant-titles">
-              <span class="assistant-title">AI Assistant & Benchmark</span>
-              <span class="assistant-subtitle">Live Model Inference Speed & Security State Intelligence</span>
+              <span class="assistant-title">Assistant</span>
             </div>
           </div>
           <div class="assistant-header-controls">
@@ -487,27 +516,34 @@
           </div>
         </div>
 
-        <!-- Quick Prompts / Benchmark triggers -->
-        <div class="assistant-chips-bar">
-          <span class="assistant-chips-label">Quick Prompts:</span>
-          <button type="button" class="assistant-chip" data-prompt="Run a model speed and throughput benchmark test.">Speed Benchmark</button>
-          <button type="button" class="assistant-chip" data-prompt="What was the last attacker attack like? Summarize the IP, commands run, and threat level.">Last Attack Summary</button>
-          <button type="button" class="assistant-chip" data-prompt="What are actionable defensive suggestions based on the last 5 attacks?">Defensive Suggestions</button>
-          <button type="button" class="assistant-chip" data-prompt="What is the current software state and active honeypot configuration?">System Status</button>
-        </div>
-
         <!-- Chat messages container -->
         <div class="assistant-chat-body" id="assistant-chat-body">
-          <div class="assistant-msg assistant-msg-system">
-            <div class="assistant-bubble">
-              Welcome to the Doppel AI Security Intelligence & Benchmark console. Test inference speed across models or query honeypot telemetry, attacker behaviors, and defensive recommendations.
+          <div class="assistant-empty" id="assistant-empty">
+            <p class="assistant-empty-title">Ask about recent activity</p>
+            <div class="assistant-suggestions">
+              <button type="button" class="assistant-chip" data-prompt="What was the last attacker attack like? Summarize the IP, commands run, and threat level.">
+                <span class="chip-title">Last attack</span>
+                <span class="chip-desc">Summary of the most recent session</span>
+              </button>
+              <button type="button" class="assistant-chip" data-prompt="What are actionable defensive suggestions based on the last 5 attacks?">
+                <span class="chip-title">Defensive suggestions</span>
+                <span class="chip-desc">Based on the last five sessions</span>
+              </button>
+              <button type="button" class="assistant-chip" data-prompt="What is the current software state and active honeypot configuration?">
+                <span class="chip-title">System status</span>
+                <span class="chip-desc">Current configuration and health</span>
+              </button>
+              <button type="button" class="assistant-chip" data-prompt="Run a model speed and throughput benchmark test.">
+                <span class="chip-title">Model speed</span>
+                <span class="chip-desc">Measure response time and throughput</span>
+              </button>
             </div>
           </div>
         </div>
 
         <!-- Input Area -->
         <form class="assistant-input-form" id="assistant-input-form">
-          <input type="text" id="assistant-input" class="assistant-input-field" placeholder="Ask about attacks, security recommendations, or prompt the model..." autocomplete="off">
+          <input type="text" id="assistant-input" class="assistant-input-field" placeholder="Ask about sessions, attackers or defences" autocomplete="off">
           <button type="submit" class="btn btn-primary assistant-send-btn" id="btn-send-assistant">
             <span>Send</span>
           </button>

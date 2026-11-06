@@ -137,6 +137,83 @@ def is_deception_tool(cmd_clean: str) -> bool:
                 return True
     return False
 
+# Text filters that may run for real over generated output. They read stdin
+# and write stdout only; options that write files or run commands are refused
+# by is_pipeline_filter().
+PIPELINE_FILTERS: Set[str] = {
+    "grep", "egrep", "fgrep", "cut", "awk", "gawk", "mawk", "sed", "sort", "uniq", "wc",
+    "head", "tail", "tr", "base64", "md5sum", "sha1sum", "sha256sum", "sha512sum", "xxd",
+    "od", "nl", "rev", "tac", "column", "fold", "fmt", "paste", "cat", "less", "more",
+    "strings", "expand", "unexpand", "comm", "jq",
+}
+
+# Redirections that do not change what a pipeline prints and are safe to keep
+_HARMLESS_REDIRECTS = re.compile(r"(?<=\s)2>\s*/dev/null\b|(?<=\s)2>&1\b")
+
+
+def split_pipeline(cmd: str) -> Optional[List[str]]:
+    """
+    Split a plain pipeline ("a | b | c") into its stages.
+
+    Returns None for anything that is not a plain pipeline: command chaining
+    (; && ||), background jobs, substitutions, here-documents and redirections
+    other than discarding or merging stderr. Pipes inside quotes are ignored.
+    """
+    masked = _HARMLESS_REDIRECTS.sub(lambda m: " " * len(m.group(0)), cmd)
+    stages, start, quote, i = [], 0, None, 0
+    while i < len(masked):
+        ch = masked[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch == "|":
+            if masked[i + 1:i + 2] == "|" or masked[i - 1:i] == "|":
+                return None
+            stages.append(cmd[start:i].strip())
+            start = i + 1
+        elif ch in ";&<>`" or masked.startswith("$(", i):
+            return None
+        i += 1
+    if quote:
+        return None
+    stages.append(cmd[start:].strip())
+    return stages if all(stages) else None
+
+
+def is_pipeline_filter(stage: str) -> bool:
+    """True when a pipeline stage only transforms text (no files written, no commands run)."""
+    try:
+        tokens = shlex.split(stage)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    binary = tokens[0].rsplit("/", 1)[-1].lower()
+    if binary not in PIPELINE_FILTERS:
+        return False
+    args = tokens[1:]
+    if binary == "sed" and any(a.startswith(("-i", "--in-place")) or a in ("-s",) for a in args):
+        return False
+    if binary == "sed" and re.search(r"(^|[;\s}])[wWe]\s|\be\b|/w\s", " ".join(args)):
+        return False
+    if binary == "sort" and any(a == "-o" or a.startswith(("-o", "--output")) for a in args):
+        return False
+    if binary in ("awk", "gawk", "mawk") and re.search(r"system\s*\(|\|\s*getline|getline\s*<|print[^;]*[>|]|printf[^;]*[>|]", " ".join(args)):
+        return False
+    # Stages that name files read from disk instead of stdin would leave the pipeline
+    if binary in ("cat", "less", "more", "tac", "strings") and any(not a.startswith("-") for a in args):
+        return False
+    return True
+
+
 # Utilities any server of the personas has installed. When no believable output
 # can be produced for these, printing nothing is safer than "command not found".
 COMMON_BINARIES: Set[str] = {
@@ -186,6 +263,8 @@ GROUNDED_COMMANDS: Set[str] = {
     "nproc",
     "lscpu",
     "vmstat",
+    # The sandbox shares the host kernel, so uname would reveal it
+    "uname",
 }
 
 # Tools that need the network. The sandbox has none, so running them there
@@ -223,20 +302,14 @@ class HybridRouter:
         intercept_missing_tools: bool = True,
         sandbox_available: bool = False,
         benign_commands: Optional[Set[str]] = None,
-        safe_ip_mode: bool = False,
-        enforce_for_safe_ips: bool = False,
     ):
         self.intercept_sensitive_files = intercept_sensitive_files
         self.intercept_missing_tools = intercept_missing_tools
         self.sandbox_available = sandbox_available
         # Commands always routed directly to the real sandbox (never deception)
         self.benign_commands: Set[str] = benign_commands or set()
-        # When True, ALL commands go to sandbox — no deception at all
-        self.safe_ip_mode = safe_ip_mode
-        # When True, enforce AI deception for sensitive commands & missing tools even from safe IPs (useful for testing)
-        self.enforce_for_safe_ips = enforce_for_safe_ips
 
-    def classify_command(self, raw_cmd: str, is_safe_ip: Optional[bool] = None) -> Tuple[RouteDecision, str]:
+    def classify_command(self, raw_cmd: str) -> Tuple[RouteDecision, str]:
         """Determine whether to handle internally, execute in sandbox, or intercept with LLM."""
         cmd_clean = raw_cmd.strip()
         if not cmd_clean:
@@ -250,44 +323,39 @@ class HybridRouter:
         if binary in {"cd", "exit", "logout", "clear", "pwd"}:
             return RouteDecision.BUILTIN, binary
 
-        # 2. Safe-IP mode: bypass all deception for trusted admin connections unless test enforcement is enabled
-        safe_ip_active = self.safe_ip_mode if is_safe_ip is None else is_safe_ip
-        if safe_ip_active and not self.enforce_for_safe_ips and self.sandbox_available:
-            return RouteDecision.SANDBOX, "safe_ip_passthrough"
-
-        # 3. Check for DoS / fork bomb payloads (Tier 3 Containment)
+        # 2. Check for DoS / fork bomb payloads (Tier 3 Containment)
         for pattern in DOS_CONTAINMENT_PATTERNS:
             if pattern.search(cmd_clean):
                 return RouteDecision.LLM_DECEPTION, "dos_containment"
 
-        # 4. Check for payload downloaders (curl ... | sh, wget) (Tier 3 Containment)
+        # 3. Check for payload downloaders (curl ... | sh, wget) (Tier 3 Containment)
         if ("curl" in binary or "wget" in binary) and ("|" in cmd_clean or ">" in cmd_clean):
             return RouteDecision.LLM_DECEPTION, "payload_download"
 
-        # 5. Check for missing/specialized penetration testing tools (Tier 3 Simulation)
+        # 4. Check for missing/specialized penetration testing tools (Tier 3 Simulation)
         if self.intercept_missing_tools and is_deception_tool(cmd_clean):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
 
-        # 5b. Network clients and package downloads are simulated (sandbox has no network)
+        # 4b. Network clients and package downloads are simulated (sandbox has no network)
         if effective_binary in NETWORK_TOOLS or (
             len(effective_tokens) > 1 and effective_tokens[1].lower() in NETWORK_SUBCOMMANDS.get(effective_binary, ())
         ):
             return RouteDecision.LLM_DECEPTION, "network_simulated"
 
-        # 5c. Login/session reports reflect the attacker's own connection
+        # 4c. Login/session reports reflect the attacker's own connection
         if effective_binary in SESSION_INFO_COMMANDS:
             return RouteDecision.LLM_DECEPTION, "session_info"
 
-        # 6. Check if command touches sensitive files or honeytokens
+        # 5. Check if command touches sensitive files or honeytokens
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
 
-            # Priority 6a: Credential and honeytoken target files ALWAYS invoke pure LLM_DECEPTION directly
+            # Priority 5a: Credential and honeytoken target files ALWAYS invoke pure LLM_DECEPTION directly
             for pattern in CREDENTIAL_TARGETS:
                 if pattern in cmd_lower:
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
-            # Priority 6b: Regex search for active credential harvesting attempts
+            # Priority 5b: Regex search for active credential harvesting attempts
             if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or (
                 "find" in effective_binary and ("perm" in cmd_lower or "pass" in cmd_lower)
             ):
@@ -295,26 +363,26 @@ class HybridRouter:
                     return RouteDecision.GROUNDED_DECEPTION, "credential_harvesting_grounded"
                 return RouteDecision.LLM_DECEPTION, "credential_harvesting"
 
-            # Priority 6c: Container camouflage targets (e.g. /etc/os-release, /proc/version)
+            # Priority 5c: Container camouflage targets (e.g. /etc/os-release, /proc/version)
             for pattern in CONTAINER_CAMOUFLAGE_TARGETS:
                 if pattern in cmd_lower:
                     if self.sandbox_available:
                         return RouteDecision.GROUNDED_DECEPTION, f"sensitive_file_grounded:{pattern}"
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
-        # 7. Check for system discovery & process/network inspection (Tier 2 Grounded if container available)
+        # 6. Check for system discovery & process/network inspection (Tier 2 Grounded if container available)
         if effective_binary in GROUNDED_COMMANDS:
             if self.sandbox_available:
                 return RouteDecision.GROUNDED_DECEPTION, f"grounded_discovery:{effective_binary}"
             return RouteDecision.LLM_DECEPTION, f"system_discovery:{effective_binary}"
 
-        # 8. Explicitly benign commands: route to real sandbox when available
+        # 7. Explicitly benign commands: route to real sandbox when available
         if effective_binary in self.benign_commands and self.sandbox_available:
             return RouteDecision.SANDBOX, "benign_command"
 
-        # 9. Standard commands: Tier 1 Direct Sandbox Execution
+        # 8. Standard commands: Tier 1 Direct Sandbox Execution
         if self.sandbox_available:
             return RouteDecision.SANDBOX, "standard_execution"
 
-        # 10. Fallback to full LLM terminal simulation when Docker is disabled or offline
+        # 9. Fallback to full LLM terminal simulation when Docker is disabled or offline
         return RouteDecision.LLM_DECEPTION, "simulated_terminal"

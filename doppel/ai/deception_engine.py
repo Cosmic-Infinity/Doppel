@@ -31,6 +31,17 @@ _UNAME_LONG = {
     "--hardware-platform": "i", "--operating-system": "o",
 }
 
+# Section markers of the grounded transformation prompt, if echoed by the model
+_GROUNDED_SCAFFOLD_RE = re.compile(
+    r"^[ \t]*-{2,}[ \t]*(?:REAL STDOUT|REAL STDERR|EXIT CODE:?[ \t]*-?\d*)[ \t]*-{2,}[ \t]*\r?\n?",
+    re.I | re.M,
+)
+# Signs of a container runtime in command output
+_CONTAINER_HINT_RE = re.compile(r"overlay|containerd|docker|kubepods|lowerdir=|/var/lib/desktop-", re.I)
+# Storage paths that exist only on a container host
+_CONTAINER_PATH_RE = re.compile(r"lowerdir=|upperdir=|/var/lib/(?:docker|containerd|desktop-containerd)|io\.containerd\.|kubepods", re.I)
+
+
 def _trim_blank_edges(text: str) -> str:
     """Drop leading blank lines and trailing whitespace, keeping first-line indentation."""
     return re.sub(r"\A(?:[ \t]*\r?\n)+", "", text).rstrip()
@@ -53,6 +64,7 @@ class DeceptionEngine:
         persona: str = "ubuntu_web_server",
         host_profile: Optional[Dict[str, Any]] = None,
         dynamic_honeytokens: bool = True,
+        no_think: bool = False,
     ):
         self.llm_client = llm_client
         self.persona = persona
@@ -60,8 +72,14 @@ class DeceptionEngine:
         self.system_prompt = build_deception_system_prompt(persona)
         self.host_profile: Dict[str, str] = dict(DEFAULT_HOST_PROFILE)
         self.dynamic_honeytokens = dynamic_honeytokens
+        # Qwen3 soft switch: skip the reasoning step for terminal output
+        self.no_think = no_think
         if host_profile:
             self.set_host_profile(host_profile)
+
+    def _with_think_switch(self, prompt: str) -> str:
+        """Append Qwen3's /no_think switch when reasoning is disabled for terminal output."""
+        return prompt + "\n/no_think" if self.no_think else prompt
 
     def set_persona(self, persona: str):
         """Switch persona; the system prompt is derived from it, so rebuild it too."""
@@ -406,7 +424,7 @@ class DeceptionEngine:
                 return cached_sim
 
         # Build system prompt with the current clock, then the fake filesystem state when it exists
-        system_prompt = self.system_prompt + "\n\n" + build_clock_context(self.persona, login_time)
+        system_prompt = self._with_think_switch(self.system_prompt + "\n\n" + build_clock_context(self.persona, login_time))
         if fake_fs:
             fs_block = fake_fs.build_context_block()
             if fs_block:
@@ -506,6 +524,12 @@ class DeceptionEngine:
         """Tier 2: Transform real Linux sandbox output with persona camouflage and canary honeytokens."""
         from doppel.ai.prompts.deception_prompts import build_grounded_transformation_prompt
 
+        # A plain error (nothing printed to stdout, nothing container-specific in
+        # stderr) is already what a real server would print: no model call needed.
+        if exit_code != 0 and not real_stdout.strip() and real_stderr.strip() and not _CONTAINER_HINT_RE.search(real_stderr):
+            plain = real_stderr.strip()
+            return (plain, None) if return_reasoning else plain
+
         transformation_prompt = build_grounded_transformation_prompt(
             persona_name=self.persona,
             command=command,
@@ -513,6 +537,7 @@ class DeceptionEngine:
             real_stderr=real_stderr,
             exit_code=exit_code,
         ) + "\n\n" + build_clock_context(self.persona, login_time)
+        transformation_prompt = self._with_think_switch(transformation_prompt)
 
         # Inject dynamic canary honeytokens if applicable
         cmd_lower = command.lower()
@@ -528,27 +553,68 @@ class DeceptionEngine:
 
         messages = [
             {"role": "system", "content": transformation_prompt},
-            {"role": "user", "content": f"Transform command output for: {command}"},
+            {"role": "user", "content": f"Operator command to transform the output of: {command}"},
         ]
 
         try:
-            raw_response = await self.llm_client.chat_completion(
+            metrics = await self.llm_client.chat_completion_with_metrics(
                 messages=messages,
                 temperature=0.1,
                 frequency_penalty=0.2,
                 stop=[f"\n{user}@", f"\n{user}:", "\nroot@", "\nroot:", "\nubuntu@", "\nubuntu:"],
             )
+            if metrics.get("fallback") and (real_stdout or real_stderr):
+                # The model failed (e.g. timed out): the real output, scrubbed of
+                # container details, is truer than generic mock text
+                logger.warning(f"Grounded rewrite unavailable for '{command[:60]}'; returning scrubbed real output")
+                real = self.scrub_container_artifacts((real_stdout + real_stderr).strip())
+                return (real, "Model unavailable: real output returned") if return_reasoning else real
+            raw_response = metrics["content"]
             stripped_text, reasoning = self.extract_reasoning(raw_response)
+            # Models sometimes copy the prompt's section markers into the reply
+            stripped_text = _GROUNDED_SCAFFOLD_RE.sub("", stripped_text)
             cleaned = self._clean_output(stripped_text, command=command, user=user)
             # If model produced nothing or broke, fall back to real stdout/stderr
             if not cleaned.strip() and (real_stdout or real_stderr):
                 cleaned = (real_stdout + real_stderr).strip()
+            cleaned = self.scrub_container_artifacts(cleaned)
             if return_reasoning:
                 return cleaned, reasoning
             return cleaned
         except Exception as e:
             logger.error(f"Error in grounded transformation: {e}")
-            fallback = (real_stdout + real_stderr).strip() or self.failure_output(command)
+            fallback = self.scrub_container_artifacts((real_stdout + real_stderr).strip()) or self.failure_output(command)
             if return_reasoning:
                 return fallback, None
             return fallback
+
+    def scrub_container_artifacts(self, text: str) -> str:
+        """
+        Last-line defence for grounded output: remove what only a container
+        would show (overlay root filesystem, containerd and Docker storage
+        paths). Applied after the model rewrite and to the raw fallback.
+        """
+        if not text or not _CONTAINER_HINT_RE.search(text):
+            return text
+        k8s_persona = self.persona == "cloud_worker"  # containerd is genuine on a Kubernetes node
+        root_dev = "/dev/sda1"
+        kept = []
+        for line in text.split("\n"):
+            # The container's overlay root becomes an ordinary ext4 root, in each tool's format
+            if re.match(r"^overlay on / type overlay\b", line):
+                kept.append(f"{root_dev} on / type ext4 (rw,relatime,discard,errors=remount-ro)")
+                continue
+            m = re.match(r"^(\d+ \d+) \d+:\d+ / / (\S+).* - overlay overlay ", line)
+            if m:
+                kept.append(f"{m.group(1)} 8:1 / / {m.group(2)} shared:1 - ext4 {root_dev} rw,discard,errors=remount-ro")
+                continue
+            m = re.match(r"^overlay(\s+)", line)
+            if m:  # df: keep the column alignment of the device field
+                pad = m.group(1)[len(root_dev) - len("overlay"):] or " "
+                line = root_dev + pad + line[m.end():]
+            if _CONTAINER_PATH_RE.search(line):
+                continue  # storage paths of the host's container runtime
+            if not k8s_persona and re.search(r"\b(docker|containerd)\b", line, re.I):
+                continue
+            kept.append(line)
+        return "\n".join(kept).strip("\n")

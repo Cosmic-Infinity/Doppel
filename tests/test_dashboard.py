@@ -209,7 +209,8 @@ def test_index_html_has_assistant_elements(client):
     assert "assistant-modal" in html
     assert "assistant-model-select" in html
     assert "btn-reset-assistant" in html
-    assert "assistant-chips-bar" in html
+    assert "assistant-empty" in html
+    assert html.count('class="assistant-chip"') >= 4
 
 
 @pytest.mark.asyncio

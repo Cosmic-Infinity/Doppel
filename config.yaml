@@ -30,6 +30,14 @@ llm:
   temperature: 0.2
   # When true, runs deterministic simulated responses without needing an active LLM
   mock_mode: false
+  # Model for ATT&CK tagging and incident reports. Empty: same as `model`.
+  # These run in the background, so a slower reasoning model is acceptable here.
+  analysis_model: ""
+  # Nothing waits on analysis, so it may take longer than terminal replies
+  analysis_timeout_seconds: 120.0
+  # Qwen3 models only: skip the reasoning step for terminal output, which
+  # attackers see and wait for. Has no meaning for other model families.
+  terminal_no_think: false
 
 deception:
   persona: "ubuntu_web_server"
@@ -37,8 +45,6 @@ deception:
   intercept_sensitive_files: true
   intercept_missing_tools: true
   dynamic_honeytokens: true
-  # When true, sensitive commands and missing tools route to AI deception even from safe IPs (useful for testing)
-  enforce_for_safe_ips: true
   # Public address of the HTTP decoy, used in leaked canary URLs so that stolen
   # tokens reach /auth/v1/verify. Empty: derived from honeypot host + http_sensor_port.
   canary_base_url: ""
@@ -60,16 +66,7 @@ analytics:
   # Incident reports generated at the same time (each is an LLM call)
   max_concurrent_reports: 2
 
-# IPs that bypass honeypot entirely and get a real sandbox shell.
-# Alert/logging still fires so you know they connected, but no deception.
 access:
-  safe_ips:
-    # - "127.0.0.1"   # localhost (uncomment only to bypass deception for local admin SSH)
-    - "100.81.22.95" #silverstar
-    - "100.119.167.91" # youknow
-    - "100.118.57.70" #blackbird
-    - "100.117.47.14" #vibhatsu
-
   # Firewall for the web dashboard (port 8000). Only these IPs / CIDR ranges can
   # open it (HTTP, SSE and WebSocket). Everyone else gets 403.
   # Leave empty to allow loopback (127.0.0.1 / ::1) only.

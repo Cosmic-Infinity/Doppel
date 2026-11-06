@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 from doppel.config import get_config, get_active_preset, resolve_persona_key, DoppelConfig
-from doppel.ai.llm_client import LLMClient
+from doppel.ai.llm_client import LLMClient, clients_from_config
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
 from doppel.router.hybrid_router import HybridRouter
@@ -33,20 +33,14 @@ def setup_logging(verbose: bool = False):
 
 
 def build_system_stack(config: DoppelConfig) -> SessionManager:
-    llm_client = LLMClient(
-        base_url=config.llm.base_url,
-        model=config.llm.model,
-        api_key=config.llm.api_key,
-        timeout=config.llm.timeout_seconds,
-        temperature=config.llm.temperature,
-        mock_mode=config.llm.mock_mode,
-    )
+    llm_client, analysis_client = clients_from_config(config.llm)
     preset = get_active_preset(config) or {}
     deception_engine = DeceptionEngine(
         llm_client=llm_client,
         persona=preset.get("persona_context", config.deception.persona),
         host_profile=preset,
         dynamic_honeytokens=config.deception.dynamic_honeytokens,
+        no_think=config.llm.terminal_no_think,
     )
     sandbox_manager = DockerSandboxManager(
         image=config.sandbox.image,
@@ -60,11 +54,10 @@ def build_system_stack(config: DoppelConfig) -> SessionManager:
         intercept_missing_tools=config.deception.intercept_missing_tools,
         sandbox_available=sandbox_manager.is_available,
         benign_commands=set(config.benign_commands),
-        enforce_for_safe_ips=config.deception.enforce_for_safe_ips,
     )
     db = TelemetryDB(db_path=config.analytics.db_path)
-    observer = ThreatObserver(llm_client=llm_client, db=db)
-    reporter = IncidentReporter(llm_client=llm_client, db=db, reports_dir=config.analytics.reports_dir)
+    observer = ThreatObserver(llm_client=analysis_client, db=db)
+    reporter = IncidentReporter(llm_client=analysis_client, db=db, reports_dir=config.analytics.reports_dir)
 
     return SessionManager(
         config=config,

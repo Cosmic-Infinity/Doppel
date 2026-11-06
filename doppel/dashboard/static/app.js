@@ -157,6 +157,17 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const detailThreatScore = document.getElementById('detail-threat-score');
   const detailCmdCount = document.getElementById('detail-cmd-count');
   const detailCwd = document.getElementById('detail-cwd');
+  const detailThreatBar = document.getElementById('detail-threat-bar');
+  const detailStarted = document.getElementById('detail-started');
+  const detailCampaignNone = document.getElementById('detail-campaign-none');
+  const btnCopySessionId = document.getElementById('btn-copy-session-id');
+  const btnSessionMenu = document.getElementById('btn-session-menu');
+  const sessionMenu = document.getElementById('session-menu');
+  const sessionSearch = document.getElementById('session-search');
+  const sessionLiveOnly = document.getElementById('session-live-only');
+  const hintPort = document.getElementById('hint-port');
+  const btnTestModelSpeed = document.getElementById('btn-test-model-speed');
+  const btnLaunchPrimaryLabel = document.getElementById('btn-launch-primary-label');
   const terminalOutput = document.getElementById('terminal-output');
   const terminalWindow = document.getElementById('terminal-window');
   const telemetryTableBody = document.getElementById('telemetry-table-body');
@@ -190,7 +201,6 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const btnCloseAssistant = document.getElementById('btn-close-assistant');
   const assistantModelSelect = document.getElementById('assistant-model-select');
   const btnResetAssistant = document.getElementById('btn-reset-assistant');
-  const assistantChips = document.querySelectorAll('.assistant-chip');
   const assistantChatBody = document.getElementById('assistant-chat-body');
   const assistantInputForm = document.getElementById('assistant-input-form');
   const assistantInput = document.getElementById('assistant-input');
@@ -222,24 +232,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  // Below this confidence the label is shown as tentative
+  const PROFILE_CONFIDENT = 0.75;
+
   function updateProfileTag(profile) {
     if (!detailProfileTag || !profile) return;
     const type = profile.attacker_type || 'unknown';
     const conf = Math.round((profile.type_confidence || 0) * 100);
+    const labels = { bot: 'Automated', human: 'Human', 'semi-automated': 'Semi-automated' };
     detailProfileTag.className = 'profile-tag';
 
-    if (type === 'bot') {
-      detailProfileTag.textContent = `Bot / Script (${conf}%)`;
-      detailProfileTag.classList.add('bot');
-    } else if (type === 'human') {
-      detailProfileTag.textContent = `Human Operator (${conf}%)`;
-      detailProfileTag.classList.add('human');
-    } else if (type === 'semi-automated') {
-      detailProfileTag.textContent = `Automated Mass Scanner (${conf}%)`;
-      detailProfileTag.classList.add('scanner');
-    } else {
-      detailProfileTag.textContent = 'Profiling...';
+    if (!labels[type]) {
+      detailProfileTag.textContent = 'Profiling';
+      detailProfileTag.title = 'Not enough commands to classify yet';
+      return;
     }
+    const tentative = (profile.type_confidence || 0) < PROFILE_CONFIDENT;
+    detailProfileTag.textContent = tentative ? `Likely ${labels[type].toLowerCase()}` : labels[type];
+    detailProfileTag.classList.add(type === 'bot' ? 'bot' : (type === 'human' ? 'human' : 'scanner'));
+    detailProfileTag.title = `Confidence ${conf}%`;
   }
 
   function showWebProbeAlert(data) {
@@ -549,7 +560,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       });
     }
 
-    if (!port.available) {
+    // While the honeypot runs, the port is held by Doppel itself
+    const listening = honeypotStatus === 'RUNNING';
+    if (!port.available && !listening) {
       warningItems.push({
         type: 'warning',
         tag: 'Port Busy',
@@ -643,6 +656,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     // Populate model select with installed models if available
+    if ((!llm.models_available || llm.models_available.length === 0) && llm.configured_model && !selectLlmModel.options.length) {
+      const opt = document.createElement('option');
+      opt.value = llm.configured_model;
+      opt.textContent = llm.configured_model;
+      selectLlmModel.appendChild(opt);
+    }
     if (llm.models_available && llm.models_available.length > 0) {
       selectLlmModel.innerHTML = '';
       llm.models_available.forEach(m => {
@@ -689,25 +708,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     // 4. Card 2: Docker Diagnostics
-    if (docker.status === 'ready') {
-      pillDocker.className = 'diag-pill ready';
-      pillDocker.textContent = 'Container Sandbox Active';
+    if (docker.status === 'ready' || docker.status === 'disabled') {
+      const enabled = docker.status === 'ready';
+      pillDocker.className = enabled ? 'diag-pill ready' : 'diag-pill neutral';
+      pillDocker.textContent = enabled ? 'Sandbox On' : 'Sandbox Off';
       descDocker.textContent = docker.detail;
       actionBarDocker.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-disable-sandbox">Switch to AI Simulation</button>
+        <label class="switch-row">
+          <input type="checkbox" class="switch-input" id="toggle-sandbox" ${enabled ? 'checked' : ''}>
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-text">
+            <span class="switch-label">Run commands in the sandbox</span>
+            <span class="control-hint">${enabled
+              ? 'Ordinary commands run in a disposable container with no network.'
+              : 'Every command is answered by the model.'}</span>
+          </span>
+        </label>
       `;
-      document.getElementById('btn-fix-disable-sandbox')?.addEventListener('click', () => {
-        applyQuickFix('toggle_sandbox', false);
-      });
-    } else if (docker.status === 'disabled') {
-      pillDocker.className = 'diag-pill neutral';
-      pillDocker.textContent = 'AI Simulation';
-      descDocker.textContent = docker.detail;
-      actionBarDocker.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-enable-sandbox">Enable Docker Sandbox</button>
-      `;
-      document.getElementById('btn-fix-enable-sandbox')?.addEventListener('click', () => {
-        applyQuickFix('toggle_sandbox', true);
+      document.getElementById('toggle-sandbox')?.addEventListener('change', (e) => {
+        applyQuickFix('toggle_sandbox', e.target.checked);
       });
     } else {
       pillDocker.className = 'diag-pill warning';
@@ -727,7 +746,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     // 5. Card 3: Port Diagnostics
     inputCustomPort.value = port.port;
-    if (port.available) {
+    if (hintPort) {
+      hintPort.textContent = listening ? 'Applying a new port restarts the listener.' : '';
+    }
+    if (listening) {
+      pillPort.className = 'diag-pill ready';
+      pillPort.textContent = `Listening on ${port.port}`;
+      descPort.textContent = `The SSH listener is accepting connections on port ${port.port}.`;
+      actionBarPort.innerHTML = '';
+    } else if (port.available) {
       pillPort.className = 'diag-pill ready';
       pillPort.textContent = `Port ${port.port} Free`;
       descPort.textContent = port.detail;
@@ -765,7 +792,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     // 7. Launch Summary Strip
-    if (!port.available) {
+    if (listening) {
+      launchSummaryDot.className = 'summary-dot ready';
+      launchSummaryText.textContent = `Running on port ${port.port} with persona: ${pillPersona.textContent}. Changes above apply immediately.`;
+    } else if (!port.available) {
       launchSummaryDot.className = 'summary-dot error';
       launchSummaryText.textContent = `Port conflict: port ${port.port} is busy. Use a quick-switch alternative above or change ports.`;
     } else if (llm.status === 'unreachable') {
@@ -863,7 +893,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
-  btnLaunchPrimary.addEventListener('click', launchHoneypot);
+  btnLaunchPrimary.addEventListener('click', () => {
+    // While running, the footer button leads to the live view instead of starting again
+    if (honeypotStatus === 'RUNNING') {
+      switchView('dashboard', true);
+    } else {
+      launchHoneypot();
+    }
+  });
 
   btnToggle.addEventListener('click', () => {
     if (honeypotStatus === 'RUNNING') {
@@ -917,6 +954,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (config.prompt) {
         promptConfig = Object.assign({}, promptConfig, config.prompt);
       }
+    }
+
+    if (btnLaunchPrimaryLabel) {
+      btnLaunchPrimaryLabel.textContent = status === 'RUNNING' ? 'Open Live Dashboard' : 'Start Honeypot';
     }
 
     if (status === 'RUNNING') {
@@ -1050,9 +1091,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
       // Update card in DOM if present without wiping the list
       const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
+      if (sessionsCache[data.session_id]) {
+        const cached = sessionsCache[data.session_id];
+        cached.command_count = (cached.command_count || 0) + 1;
+        cached.last_command = data.command;
+      }
       if (card) {
-        const lastCmdEl = card.querySelector('.card-last-cmd');
-        if (lastCmdEl) lastCmdEl.textContent = data.command;
+        const countEl = card.querySelector('.card-cmds');
+        if (countEl) countEl.textContent = plural(sessionsCache[data.session_id]?.command_count || 0, 'cmd', 'cmds');
       } else {
         renderSessionsList(Object.values(sessionsCache));
       }
@@ -1070,7 +1116,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           data.output,
           data.decision,
           data.reasoning,
-          data.prompt_user || sessionsCache[data.session_id].username
+          data.prompt_user || sessionsCache[data.session_id].username,
+          data.duration_ms
         );
         appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
         detailCwd.textContent = data.cwd;
@@ -1084,18 +1131,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           sessionsCache[data.session_id].max_threat_score || 0,
           score
         );
+        const best = sessionsCache[data.session_id].max_threat_score;
         const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
         if (card) {
           const scoreEl = card.querySelector('.card-score');
           if (scoreEl) {
-            scoreEl.textContent = score;
-            scoreEl.className = `card-score ${score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low')}`;
+            scoreEl.textContent = best;
+            scoreEl.className = `card-score ${threatClass(best)}`;
+          }
+          const fill = card.querySelector('.card-threat-fill');
+          if (fill) {
+            fill.style.width = `${Math.min(100, best)}%`;
+            fill.className = `card-threat-fill ${threatClass(best)}`;
           }
         }
       }
 
       if (activeSessionId === data.session_id) {
-        detailThreatScore.textContent = `${score} / 100`;
+        // The session score is the highest score of any of its commands
+        setThreatDisplay(Math.max(score, Number(detailThreatScore.textContent) || 0));
         updateLastTelemetryRow(data.threat);
       }
     } else if (msg.type === 'session_closing') {
@@ -1109,6 +1163,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
             dot.classList.remove('live');
             dot.classList.add('ended');
           }
+          card.dataset.live = '0';
+          applySessionFilter();
         }
       }
       if (activeSessionId === data.session_id) {
@@ -1127,6 +1183,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
             dot.classList.remove('live');
             dot.classList.add('ended');
           }
+          card.dataset.live = '0';
+          applySessionFilter();
         }
       }
       if (activeSessionId === data.session_id) {
@@ -1227,10 +1285,30 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     sessions.forEach(sess => {
       sessionsContainer.appendChild(buildSessionCard(sess));
     });
+    applySessionFilter();
   }
 
   function threatClass(score) {
     return score >= 60 ? 'high' : (score >= 30 ? 'medium' : 'low');
+  }
+
+  function formatDuration(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+    return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+  }
+
+  function sessionTiming(sess) {
+    const start = parseServerTime(sess.start_time);
+    if (!start) return { started: '', duration: '' };
+    const end = sess.is_active ? new Date() : parseServerTime(sess.end_time);
+    const sameDay = start.toDateString() === new Date().toDateString();
+    const started = sameDay
+      ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : start.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return { started, duration: end ? formatDuration(end - start) : '' };
   }
 
   function buildSessionCard(sess) {
@@ -1240,19 +1318,26 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     const isLive = Boolean(sess.is_active);
     const score = sess.max_threat_score || sess.threat_score || 0;
+    const timing = sessionTiming(sess);
+    const isWeb = String(sess.session_id || '').startsWith('http_');
+    const user = isWeb ? 'web' : (sess.username || 'user');
+    const count = sess.command_count || 0;
+    card.dataset.live = isLive ? '1' : '0';
+    card.dataset.search = [sess.remote_ip, user, sess.session_id, sess.campaign_id].filter(Boolean).join(' ').toLowerCase();
 
     card.innerHTML = `
       <div class="card-top">
         <div class="card-status">
           <span class="card-status-dot ${isLive ? 'live' : 'ended'}"></span>
-          <span class="card-ip">${escapeHtml(sess.remote_ip || 'unknown')}</span>
+          <span class="card-user">${escapeHtml(user)}</span><span class="card-ip">@${escapeHtml(sess.remote_ip || 'unknown')}</span>
         </div>
-        <span class="card-score ${threatClass(score)}">${score}</span>
+        <span class="card-time" title="${escapeHtml(sess.start_time || '')}">${escapeHtml(timing.started)}</span>
       </div>
       <div class="card-bottom">
-        <span>${escapeHtml(sess.username || 'user')}</span>
-        <span class="card-last-cmd">${escapeHtml(sess.last_command || 'connected')}</span>
+        <span class="card-meta"><span class="card-cmds">${plural(count, 'cmd', 'cmds')}</span>${timing.duration ? ` · ${escapeHtml(timing.duration)}` : ''}</span>
+        <span class="card-score ${threatClass(score)}" title="Threat score">${score}</span>
       </div>
+      <div class="card-threat"><span class="card-threat-fill ${threatClass(score)}" style="width:${Math.min(100, score)}%"></span></div>
     `;
 
     card.addEventListener('click', (e) => {
@@ -1261,6 +1346,21 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
     return card;
   }
+
+  function applySessionFilter() {
+    const query = (sessionSearch ? sessionSearch.value : '').trim().toLowerCase();
+    const liveOnly = Boolean(sessionLiveOnly && sessionLiveOnly.checked);
+    let shown = 0;
+    sessionsContainer.querySelectorAll('.session-card').forEach(card => {
+      const visible = (!query || (card.dataset.search || '').includes(query)) && (!liveOnly || card.dataset.live === '1');
+      card.classList.toggle('hidden', !visible);
+      if (visible) shown += 1;
+    });
+    return shown;
+  }
+
+  if (sessionSearch) sessionSearch.addEventListener('input', applySessionFilter);
+  if (sessionLiveOnly) sessionLiveOnly.addEventListener('change', applySessionFilter);
 
   function selectSession(sessionId) {
     const changed = activeSessionId !== sessionId;
@@ -1272,6 +1372,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
 
     if (changed) {
+      // Never let the previous session's lines remain in the new session's view
+      terminalOutput.innerHTML = '';
+      telemetryTableBody.innerHTML = '';
+      detailCmdCount.textContent = '0';
       stopReplay();
       if (isTabActive('replay')) loadReplay(sessionId);
     }
@@ -1451,11 +1555,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (!campaign) {
       detailCampaignPill.classList.add('hidden');
       detailCampaignPill.dataset.campaignId = '';
+      if (detailCampaignNone) detailCampaignNone.classList.remove('hidden');
       return;
     }
-    detailCampaignPill.textContent = `Campaign · ${plural(campaign.session_count || 0, 'session', 'sessions')}`;
+    detailCampaignPill.textContent = plural(campaign.session_count || 0, 'session', 'sessions');
     detailCampaignPill.dataset.campaignId = campaign.campaign_id;
     detailCampaignPill.classList.remove('hidden');
+    if (detailCampaignNone) detailCampaignNone.classList.add('hidden');
   }
 
   if (detailCampaignPill) {
@@ -1713,6 +1819,16 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  function setThreatDisplay(score) {
+    const value = Math.max(0, Math.min(100, Number(score) || 0));
+    detailThreatScore.textContent = String(value);
+    detailThreatScore.className = `stat-value threat-${threatClass(value)}`;
+    if (detailThreatBar) {
+      detailThreatBar.style.width = `${value}%`;
+      detailThreatBar.className = `threat-bar-fill ${threatClass(value)}`;
+    }
+  }
+
   function renderSessionDetail(session) {
     if (activeSessionId && session.session_id !== activeSessionId) return;
     emptyInspector.classList.add('hidden');
@@ -1723,9 +1839,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     detailLivePill.className = `live-pill ${isLive ? '' : 'ended'}`;
 
     detailIp.textContent = `${session.remote_ip}:${session.remote_port || 0}`;
-    detailUser.textContent = `user: ${session.username}`;
-    detailSessionId.textContent = `ID: ${session.session_id}`;
-    detailThreatScore.textContent = `${session.max_threat_score || 0} / 100`;
+    detailUser.textContent = String(session.session_id || '').startsWith('http_') ? 'web' : (session.username || 'user');
+    detailSessionId.textContent = session.session_id;
+    setThreatDisplay(session.max_threat_score || 0);
+    const timing = sessionTiming(session);
+    if (detailStarted) {
+      detailStarted.textContent = timing.started
+        ? `Started ${timing.started}${timing.duration ? ` · ${isLive ? 'connected' : 'lasted'} ${timing.duration}` : ''}`
+        : '';
+    }
     detailCmdCount.textContent = Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0);
     detailCwd.textContent = session.cwd || '/home/ubuntu';
 
@@ -1746,7 +1868,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           cmd.output,
           cmd.route_decision,
           cmd.reasoning,
-          cmd.prompt_user || session.username
+          cmd.prompt_user || session.username,
+          cmd.duration_ms
         );
       });
 
@@ -1787,7 +1910,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     builtin: { cls: 'builtin', label: 'Builtin' },
   };
 
-  function buildTerminalLine({ cwd, user, command, output = null, decision, reasoning = null }) {
+  function formatResponseTime(ms) {
+    if (ms === null || ms === undefined || ms === '' || isNaN(ms)) return '';
+    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+  }
+
+  function buildTerminalLine({ cwd, user, command, output = null, decision, reasoning = null, durationMs = null }) {
     const line = document.createElement('div');
     line.className = 'terminal-line';
     const route = ROUTE_TAGS[decision] || { cls: 'deception', label: 'Deception' };
@@ -1806,6 +1934,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       + `<span class="terminal-prompt">${escapeHtml(formatPrompt(user, cwd))}</span>`
       + `<span class="terminal-cmd">${escapeHtml(command)}</span>`
       + '</span>'
+      + (formatResponseTime(durationMs)
+        ? `<span class="terminal-duration" title="Time until the reply was shown">${formatResponseTime(durationMs)}</span>`
+        : '')
       + `<span class="terminal-route-tag ${route.cls}">${route.label}</span>`
       + '</div>'
       + reasoningHtml;
@@ -1821,8 +1952,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     line.appendChild(block);
   }
 
-  function appendTerminalCommand(cwd, command, output, decision, reasoning = null, user = null) {
-    terminalOutput.appendChild(buildTerminalLine({ cwd, user, command, output, decision, reasoning }));
+  function appendTerminalCommand(cwd, command, output, decision, reasoning = null, user = null, durationMs = null) {
+    terminalOutput.appendChild(buildTerminalLine({ cwd, user, command, output, decision, reasoning, durationMs }));
     terminalWindow.scrollTop = terminalWindow.scrollHeight;
   }
 
@@ -1979,6 +2110,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         user: ev.prompt_user || replay.data.username,
         command: ev.command,
         decision: ev.route_decision,
+        durationMs: ev.duration_ms,
       });
       line.classList.add('awaiting-output');
       replayTerminalOutput.appendChild(line);
@@ -2127,8 +2259,48 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   });
 
   // --- Attack Session Management & Report Toolbar Controls ---
+  // Session actions menu and session ID copy
+  function closeSessionMenu() {
+    if (!sessionMenu) return;
+    sessionMenu.classList.add('hidden');
+    if (btnSessionMenu) btnSessionMenu.setAttribute('aria-expanded', 'false');
+  }
+
+  if (btnSessionMenu && sessionMenu) {
+    btnSessionMenu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = sessionMenu.classList.contains('hidden');
+      sessionMenu.classList.toggle('hidden', !open);
+      btnSessionMenu.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', (e) => {
+      if (!sessionMenu.contains(e.target)) closeSessionMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeSessionMenu();
+    });
+  }
+
+  if (btnCopySessionId) {
+    btnCopySessionId.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      try {
+        await navigator.clipboard.writeText(activeSessionId);
+        btnCopySessionId.classList.add('copied');
+        btnCopySessionId.title = 'Copied';
+        setTimeout(() => {
+          btnCopySessionId.classList.remove('copied');
+          btnCopySessionId.title = 'Copy session ID';
+        }, 1500);
+      } catch (err) {
+        console.error('Copy failed:', err);
+      }
+    });
+  }
+
   if (btnDeleteSession) {
     btnDeleteSession.addEventListener('click', async () => {
+      closeSessionMenu();
       if (!activeSessionId) return;
       const targetId = activeSessionId;
       const confirmed = confirm(
@@ -2303,6 +2475,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   async function sendAssistantMessage(messageText) {
     const text = (messageText || '').trim();
     if (!text) return;
+    document.getElementById('assistant-empty')?.remove();
 
     // 1. Append User Message Bubble
     const userMsg = document.createElement('div');
@@ -2511,16 +2684,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
   }
 
+  // The empty state (with suggested prompts) is restored on reset
+  const assistantEmptyHtml = document.getElementById('assistant-empty')?.outerHTML || '';
+
   if (btnResetAssistant) {
     btnResetAssistant.addEventListener('click', () => {
       if (assistantChatBody) {
-        assistantChatBody.innerHTML = `
-          <div class="assistant-msg assistant-msg-system">
-            <div class="assistant-bubble">
-              Chat history cleared. Test inference speed across models or query honeypot telemetry, attacker behaviors, and defensive recommendations.
-            </div>
-          </div>
-        `;
+        assistantChatBody.innerHTML = assistantEmptyHtml;
       }
       if (assistantInput) {
         assistantInput.value = '';
@@ -2529,14 +2699,34 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
   }
 
-  assistantChips.forEach(chip => {
-    chip.addEventListener('click', () => {
+  // Suggested prompts are re-created on reset, so listen on the chat body
+  if (assistantChatBody) {
+    assistantChatBody.addEventListener('click', (e) => {
+      const chip = e.target.closest('.assistant-chip');
+      if (!chip) return;
       const prompt = chip.getAttribute('data-prompt');
-      if (prompt) {
-        sendAssistantMessage(prompt);
-      }
+      if (prompt) sendAssistantMessage(prompt);
     });
-  });
+  }
+
+  if (btnTestModelSpeed) {
+    btnTestModelSpeed.addEventListener('click', () => {
+      // Run the speed test against the model selected on this card
+      const model = selectLlmModel.value || '';
+      if (assistantModelSelect && model) {
+        const exists = Array.from(assistantModelSelect.options).some(o => o.value === model);
+        if (!exists) {
+          const opt = document.createElement('option');
+          opt.value = model;
+          opt.textContent = model;
+          assistantModelSelect.appendChild(opt);
+        }
+        assistantModelSelect.value = model;
+      }
+      assistantModal.classList.remove('hidden');
+      sendAssistantMessage('Run a model speed and throughput benchmark test.');
+    });
+  }
 
 
   function showHoneytokenNotice(data) {

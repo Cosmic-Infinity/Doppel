@@ -145,6 +145,9 @@ class LLMClient:
                 "latency_seconds": round(elapsed, 3),
                 "tokens_per_second": round(tokens / elapsed, 1),
                 "model": self.model,
+                # Callers that hold better data than the generic mock (for
+                # example real sandbox output) use this to prefer their own
+                "fallback": True,
             }
 
     async def chat_completion_stream(
@@ -1268,3 +1271,26 @@ class LLMClient:
             return ""
         return f"bash: {binary}: command not found"
 
+
+
+def clients_from_config(llm_settings) -> "tuple[LLMClient, LLMClient]":
+    """
+    (terminal client, analysis client) from the `llm` config section.
+
+    The terminal client answers attacker commands and must be fast; the
+    analysis client tags commands and writes reports in the background and
+    may use a different, slower model (`analysis_model`).
+    """
+    def make(model: str, timeout: float) -> LLMClient:
+        return LLMClient(
+            base_url=llm_settings.base_url,
+            model=model,
+            api_key=llm_settings.api_key,
+            timeout=timeout,
+            temperature=llm_settings.temperature,
+            mock_mode=llm_settings.mock_mode,
+        )
+
+    analysis_model = getattr(llm_settings, "analysis_model", "") or llm_settings.model
+    analysis_timeout = getattr(llm_settings, "analysis_timeout_seconds", None) or llm_settings.timeout_seconds
+    return make(llm_settings.model, llm_settings.timeout_seconds), make(analysis_model, analysis_timeout)

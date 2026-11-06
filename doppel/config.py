@@ -31,6 +31,15 @@ class LLMSettings(BaseModel):
     timeout_seconds: float = 45.0
     temperature: float = 0.2
     mock_mode: bool = False
+    # Model for background analysis (ATT&CK tagging, incident reports).
+    # Empty: same as `model`. A slower reasoning model is fine here because
+    # nothing waits on it, while the terminal needs fast replies.
+    analysis_model: str = ""
+    # Analysis runs in the background, so it can wait longer than the terminal
+    analysis_timeout_seconds: float = 120.0
+    # Ask Qwen3-family models to skip their reasoning step for terminal output
+    # (adds Qwen3's /no_think switch). Leave off for other model families.
+    terminal_no_think: bool = False
 
 
 class DeceptionSettings(BaseModel):
@@ -39,7 +48,6 @@ class DeceptionSettings(BaseModel):
     intercept_sensitive_files: bool = True
     intercept_missing_tools: bool = True
     dynamic_honeytokens: bool = True
-    enforce_for_safe_ips: bool = False
     # Base URL of the HTTP decoy as attackers can reach it, used in leaked canary
     # URLs (e.g. "http://203.0.113.10:8080"). Empty: derived from the honeypot
     # host and HTTP sensor port.
@@ -73,8 +81,7 @@ class AnalyticsSettings(BaseModel):
 
 
 class AccessSettings(BaseModel):
-    """IPs that bypass all deception and get a real sandbox shell."""
-    safe_ips: list[str] = Field(default_factory=list)
+    """Operator access control."""
     # IPs / CIDR ranges allowed to reach the web dashboard. Empty = loopback only.
     dashboard_allowed_ips: list[str] = Field(default_factory=list)
 

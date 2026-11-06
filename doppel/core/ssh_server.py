@@ -430,16 +430,9 @@ class DoppelSSHServer(asyncssh.SSHServer):
         geo_str = geoip_summary(geo)
         dc_flag = " [DATACENTER/CLOUD]" if geo.get("is_datacenter") else ""
 
-        safe_ips = self.config.access.safe_ips
-        if self.remote_ip in safe_ips:
-            logger.info(
-                f"[SAFE IP] Trusted connection from {self.remote_ip}:{self.remote_port} | {geo_str}"
-            )
-        else:
-            logger.warning(
-                f"[ALERT] SSH probe from {self.remote_ip}:{self.remote_port}{dc_flag} | {geo_str} — "
-                "honeypot deception active."
-            )
+        logger.warning(
+            f"[ALERT] SSH probe from {self.remote_ip}:{self.remote_port}{dc_flag} | {geo_str}"
+        )
 
     # Advertise "publickey,password" like a stock Ubuntu sshd. asyncssh would
     # otherwise also offer keyboard-interactive, which Ubuntu disables.
