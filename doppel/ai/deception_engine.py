@@ -8,6 +8,7 @@ from doppel.core import clock
 from doppel.router.hybrid_router import COMMON_BINARIES
 if TYPE_CHECKING:
     from doppel.core.fake_filesystem import FakeFilesystem
+from doppel.ai.prompt_shield import detect_prompt_injection, get_posix_syntax_error
 
 logger = logging.getLogger("doppel.ai.deception")
 
@@ -438,6 +439,12 @@ class DeceptionEngine:
         login_time: Optional[str] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Generate authentic simulated output for a command in the current session context."""
+        # Inbound prompt defense shield
+        if detect_prompt_injection(command):
+            error_output = get_posix_syntax_error(command).rstrip("\n")
+            if return_reasoning:
+                return error_output, "Adversarial prompt injection detected and neutralized"
+            return error_output
         # Fast path: Check deterministic POSIX response first (no LLM call needed)
         deterministic = self.deterministic_posix_response(command, user=user, login_time=login_time)
         if deterministic is not None:

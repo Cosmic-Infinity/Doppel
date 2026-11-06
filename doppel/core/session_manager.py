@@ -18,6 +18,11 @@ from doppel.analytics.reporter import IncidentReporter
 from doppel.core.fake_filesystem import FakeFilesystem
 from doppel.analytics.profiler import AttackerProfiler, ProfilerState
 from doppel.alerts.email import EmailAlerter
+from doppel.ai.prompt_shield import (
+    detect_prompt_injection,
+    PROMPT_INJECTION_THREAT_META,
+    get_posix_syntax_error,
+)
 
 logger = logging.getLogger("doppel.core.session")
 
@@ -319,6 +324,7 @@ class SessionManager:
             "sudo bash", "sudo /bin/bash", "sudo sh", "sudo /bin/sh",
             "su", "su -", "su root",
         )
+        route_reason = None  # set by the router; built-in paths below skip it
         if cmd_clean in elevation_cmds:
             if not self.can_drop_privileges(session):
                 session.pre_elevation_cwd = session.cwd
@@ -432,6 +438,9 @@ class SessionManager:
                 if route_reason == "dos_containment":
                     output = "Killed\n"
                     reasoning = "DoS containment: simulated process termination"
+                elif route_reason == "prompt_injection_defense":
+                    output = get_posix_syntax_error(cmd_clean)
+                    reasoning = "Adversarial prompt injection detected and neutralized by prompt shield"
                 else:
                     output, reasoning = await self.deception_engine.generate_command_output(
                         command=cmd_clean,
@@ -545,6 +554,8 @@ class SessionManager:
             logger.error(f"Failed to log command to DB: {db_err}")
 
         # 6. Background MITRE analysis & profiling
+        threat_override = dict(PROMPT_INJECTION_THREAT_META) if route_reason == "prompt_injection_defense" else None
+
         task = asyncio.create_task(
             self._analyze_and_record(
                 session=session,
@@ -562,8 +573,10 @@ class SessionManager:
                     "prompt_user": prompt_user,
                     "reasoning": cmd_reasoning,
                 },
+                threat_override=threat_override,
             )
         )
+
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
@@ -644,14 +657,15 @@ class SessionManager:
         cmd_ts: Optional[float] = None,
         history_snapshot: Optional[List[str]] = None,
         log_fields: Optional[Dict[str, Any]] = None,
+        threat_override: Optional[Dict[str, Any]] = None,
     ):
         # This runs in the background, so later commands may already have been
         # appended to session.history. Use the values captured for this command.
         fields = log_fields or {}
         try:
             threat_meta = None
-            if self.config.analytics.enable_mitre_tagging:
-                threat_meta = self.observer.match_fast_path(command)
+            if threat_override or self.config.analytics.enable_mitre_tagging:
+                threat_meta = threat_override or self.observer.match_fast_path(command)
                 if threat_meta is None:
                     analysis_args = dict(
                         session_id=session.session_id,
