@@ -65,6 +65,9 @@ analytics:
   reports_dir: "reports"
   # Incident reports generated at the same time (each is an LLM call)
   max_concurrent_reports: 2
+  # ATT&CK tagging and reports give way to terminal replies (one model serves one
+  # request at a time) and run once the terminal has been quiet this long
+  background_idle_seconds: 15
 
 access:
   # Firewall for the web dashboard (port 8000). Only these IPs / CIDR ranges can

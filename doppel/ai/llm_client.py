@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -34,6 +35,9 @@ class LLMClient:
         # Ask the server to skip the reasoning step (OpenAI-style reasoning_effort).
         # Models without reasoning ignore it.
         self.reasoning_off = False
+        # Async context manager factory wrapped around every request (see
+        # BackgroundQueue.terminal): background analysis gives way to this client
+        self.priority_gate = None
 
     async def chat_completion(
         self,
@@ -44,6 +48,7 @@ class LLMClient:
         stop: Optional[List[str]] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        reasoning_off: Optional[bool] = None,
     ) -> str:
         """Send chat messages and return the assistant reply string."""
         metrics = await self.chat_completion_with_metrics(
@@ -54,6 +59,7 @@ class LLMClient:
             stop=stop,
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
+            reasoning_off=reasoning_off,
         )
         return metrics["content"]
 
@@ -66,8 +72,12 @@ class LLMClient:
         stop: Optional[List[str]] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        reasoning_off: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Send chat messages and return the reply along with latency and token throughput metrics."""
+        """Send chat messages and return the reply along with latency and token throughput metrics.
+
+        `reasoning_off` overrides the client default for this request only.
+        """
         start_t = time.perf_counter()
         if self.mock_mode:
             content = self._mock_response(messages)
@@ -102,12 +112,13 @@ class LLMClient:
             payload["frequency_penalty"] = frequency_penalty
         if presence_penalty is not None:
             payload["presence_penalty"] = presence_penalty
-        if self.reasoning_off:
+        if self.reasoning_off if reasoning_off is None else reasoning_off:
             payload["reasoning_effort"] = "none"
 
         url = f"{self.base_url}/chat/completions"
+        gate = self.priority_gate() if self.priority_gate else contextlib.nullcontext()
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with gate, httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()

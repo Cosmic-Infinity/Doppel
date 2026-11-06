@@ -186,6 +186,27 @@ body {
   background-color: var(--accent-blue);
 }
 
+.queue-badge {
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.queue-run-now {
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.queue-run-now:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
 @keyframes pulse-dot-error {
   0%, 100% {
     opacity: 1;

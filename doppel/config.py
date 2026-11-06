@@ -78,6 +78,9 @@ class AnalyticsSettings(BaseModel):
     # Incident reports are LLM-generated when sessions close; cap how many run at
     # once so a burst of short bot sessions cannot starve live deception replies.
     max_concurrent_reports: int = 2
+    # Background analysis (ATT&CK tagging, reports) gives way to terminal replies
+    # and waits until no terminal request has been made for this many seconds
+    background_idle_seconds: float = 20.0
 
 
 class AccessSettings(BaseModel):

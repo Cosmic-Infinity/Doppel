@@ -187,6 +187,16 @@ class ThreatObserver:
             "iocs": []
         }
 
+    def match_fast_path(self, command: str) -> Optional[Dict[str, Any]]:
+        """Rulebook answer for standard simple recon commands (no model call), or None."""
+        cmd_clean = command.strip()
+        is_compound = any(sep in cmd_clean for sep in ("|", ">", "<", ";", "&&", "||", "`", "$("))
+        if is_compound or cmd_clean.lower() not in FAST_PATH_RULES:
+            return None
+        match = dict(FAST_PATH_RULES[cmd_clean.lower()])
+        logger.debug(f"Fast-path rulebook hit for '{cmd_clean}' -> {match['technique_id']} ({match['technique_name']})")
+        return match
+
     async def analyze_command(
         self,
         session_id: str,
@@ -197,15 +207,8 @@ class ThreatObserver:
     ) -> Dict[str, Any]:
         """Analyze attacker command and return structured MITRE threat intelligence."""
         cmd_clean = command.strip()
-        cmd_lower = cmd_clean.lower()
-
-        # Fast-Path Rulebook Check: Bypass LLM for standard simple recon commands (< 1 ms)
-        is_compound = any(sep in cmd_clean for sep in ("|", ">", "<", ";", "&&", "||", "`", "$("))
-        if not is_compound and cmd_lower in FAST_PATH_RULES:
-            match = dict(FAST_PATH_RULES[cmd_lower])
-            logger.debug(
-                f"Fast-path rulebook hit for '{cmd_clean}' -> {match['technique_id']} ({match['technique_name']})"
-            )
+        match = self.match_fast_path(cmd_clean)
+        if match:
             return match
 
         # Complex, piped, encoded, or unknown commands proceed to full LLM analysis
@@ -224,6 +227,9 @@ class ThreatObserver:
                 messages=messages,
                 temperature=0.1,
                 response_format={"type": "json_object"} if not self.llm_client.mock_mode else None,
+                # Tagging runs after nearly every command and must catch up within
+                # seconds of a pause, so it skips reasoning; reports keep it
+                reasoning_off=True,
             )
             analysis = self._extract_json(resp_str)
             logger.info(

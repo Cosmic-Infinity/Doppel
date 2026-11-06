@@ -202,6 +202,7 @@ Model replies are cleaned of markdown fences, reasoning tags and hallucinated pr
 - Terminal input is processed in chunks with a 64 KB line limit, so oversized input cannot stall other sessions.
 - SQLite runs in WAL mode with a 30 s lock timeout, so concurrent sessions do not lose telemetry.
 - Incident reports (LLM calls) are limited to `analytics.max_concurrent_reports` at a time.
+- Background ATT&CK tagging and session-end reports do not hold up terminal replies. A terminal request interrupts any running analysis call, which goes back to the front of a queue; queued work runs once no terminal request has been made for `analytics.background_idle_seconds` (default 20), or at once from **Run now** in the dashboard's top bar. Tagging runs without the model's reasoning step so it catches up within seconds; reports keep it. A report started with **Regenerate** runs straight away, outside the queue.
 
 ---
 
@@ -436,6 +437,7 @@ analytics:
   enable_mitre_tagging: true
   reports_dir: "reports"
   max_concurrent_reports: 2
+  background_idle_seconds: 20         # analysis waits this long after the last terminal request
 
 access:
   dashboard_allowed_ips: ["127.0.0.1"]

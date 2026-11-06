@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 
 from doppel.config import DoppelConfig
+from doppel.ai.background_queue import BackgroundQueue
 from doppel.ai.deception_engine import DeceptionEngine
 from doppel.sandbox.docker_manager import DockerSandboxManager
 from doppel.router.hybrid_router import HybridRouter, RouteDecision, is_pipeline_filter, split_pipeline
@@ -91,6 +92,22 @@ class SessionManager:
         # Reports are LLM calls; a burst of short sessions must not swamp the model
         max_reports = getattr(getattr(config, "analytics", None), "max_concurrent_reports", 2) or 1
         self._report_slots = asyncio.Semaphore(max(1, int(max_reports)))
+        # Tagging and reports wait for the terminal; see BackgroundQueue
+        analytics = getattr(config, "analytics", None)
+        self.background = BackgroundQueue(
+            idle_seconds=getattr(analytics, "background_idle_seconds", 20.0),
+            on_change=lambda status: self._notify("background_queue", status),
+        )
+        self.background.enabled = not config.llm.mock_mode
+        terminal_client = getattr(deception_engine, "llm_client", None)
+        analysis_clients = {id(getattr(observer, "llm_client", None)), id(getattr(reporter, "llm_client", None))}
+        # A client shared with analysis must not gate itself
+        if terminal_client is not None and id(terminal_client) not in analysis_clients:
+            terminal_client.priority_gate = self.background.terminal
+
+    async def _generate_report(self, session_id: str):
+        async with self._report_slots:
+            return await self.reporter.generate_session_report(session_id)
 
     @staticmethod
     def can_drop_privileges(session: "SessionState") -> bool:
@@ -634,16 +651,21 @@ class SessionManager:
         try:
             threat_meta = None
             if self.config.analytics.enable_mitre_tagging:
-                threat_meta = await self.observer.analyze_command(
-                    session_id=session.session_id,
-                    command=command,
-                    cwd=fields.get("cwd", session.cwd),
-                    user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
-                    session_history=(
-                        history_snapshot if history_snapshot is not None
-                        else [h["command"] for h in session.history]
-                    ),
-                )
+                threat_meta = self.observer.match_fast_path(command)
+                if threat_meta is None:
+                    analysis_args = dict(
+                        session_id=session.session_id,
+                        command=command,
+                        cwd=fields.get("cwd", session.cwd),
+                        user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
+                        session_history=(
+                            history_snapshot if history_snapshot is not None
+                            else [h["command"] for h in session.history]
+                        ),
+                    )
+                    threat_meta = await self.background.submit(
+                        "tagging", session.session_id, lambda: self.observer.analyze_command(**analysis_args)
+                    )
                 if threat_meta:
                     session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
                     self._notify("threat_analyzed", {
@@ -729,7 +751,7 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error in background threat analysis for session {session.session_id[:8]}: {e}", exc_info=True)
 
-    async def close_session(self, session_id: str) -> Optional[str]:
+    async def close_session(self, session_id: str, generate_report: bool = True) -> Optional[str]:
         session = self.sessions.pop(session_id, None)
         if not session:
             return None
@@ -748,8 +770,9 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Error destroying sandbox container for {session_id[:8]}: {e}")
 
-        # Wait up to 10 seconds for any running background MITRE analysis tasks
-        if self._background_tasks:
+        # Without the queue, give running ATT&CK tagging up to 10 s to finish first.
+        # With it, the report is queued behind this session's tagging anyway.
+        if self._background_tasks and not self.background.enabled:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*list(self._background_tasks), return_exceptions=True),
@@ -765,14 +788,23 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error logging session end for {session_id[:8]}: {e}")
 
-        logger.info(f"Session {session_id[:8]} closed. Generating incident report...")
-
         report_path = None
-        try:
-            async with self._report_slots:
-                report_path = await self.reporter.generate_session_report(session_id)
-        except Exception as e:
-            logger.error(f"Error generating incident report for session {session_id[:8]}: {e}")
+        if generate_report:
+            if self.background.enabled:
+                logger.info(f"Session {session_id[:8]} closed. Incident report queued.")
+                self._notify("session_closing", {
+                    "session_id": session_id,
+                    "stage": "queued",
+                    "message": "Report queued. It runs when the model is idle.",
+                })
+            else:
+                logger.info(f"Session {session_id[:8]} closed. Generating incident report...")
+            try:
+                report_path = await self.background.submit("report", session_id, lambda: self._generate_report(session_id))
+            except asyncio.CancelledError:
+                logger.info(f"Incident report for session {session_id[:8]} was not generated (shutting down)")
+            except Exception as e:
+                logger.error(f"Error generating incident report for session {session_id[:8]}: {e}")
 
         self._notify("session_closed", {
             "session_id": session_id,

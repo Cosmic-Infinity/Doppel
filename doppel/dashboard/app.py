@@ -122,6 +122,7 @@ async def get_status():
         "status": controller.status,
         "start_time": controller.start_time,
         "active_sessions": active_count,
+        "background": controller.session_manager.background.status() if controller.session_manager else None,
         "config": controller.get_config_dict(),
         "error": controller.error_message,
     }
@@ -137,6 +138,15 @@ async def start_honeypot():
 async def stop_honeypot():
     res = await controller.stop()
     return res
+
+
+@app.post("/api/background/run-now")
+async def run_background_now():
+    """Process queued ATT&CK tagging and reports without waiting for idle time."""
+    if not controller.session_manager:
+        return {"background": None}
+    controller.session_manager.background.run_now()
+    return {"background": controller.session_manager.background.status()}
 
 
 @app.get("/api/config")

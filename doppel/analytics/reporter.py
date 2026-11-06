@@ -28,11 +28,15 @@ class IncidentReporter:
     async def generate_session_report(
         self, session_id: str, custom_instructions: Optional[str] = None
     ) -> Optional[Path]:
-        """Generate a complete Markdown incident report for an attacker session (blocking helper)."""
+        """Generate a complete Markdown incident report for an attacker session (blocking helper).
+
+        Cancellation propagates (no partial file) so a queued report that gives
+        way to the terminal can be run again from the start.
+        """
         report_path = None
         try:
             async for event in self.generate_session_report_stream(
-                session_id=session_id, custom_instructions=custom_instructions
+                session_id=session_id, custom_instructions=custom_instructions, save_partial_on_cancel=False
             ):
                 if event.get("done") and event.get("report_path"):
                     report_path = Path(event["report_path"])
@@ -45,6 +49,7 @@ class IncidentReporter:
         session_id: str,
         custom_instructions: Optional[str] = None,
         model_override: Optional[str] = None,
+        save_partial_on_cancel: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream the incident report generation in real time.
@@ -213,6 +218,8 @@ class IncidentReporter:
             }
 
         except asyncio.CancelledError:
+            if not save_partial_on_cancel:
+                raise
             logger.info(f"Report generation stream cancelled by user for session {session_id[:8]}")
             # If cancelled, write partial content or fallback so file is available
             partial_text = "".join(accumulated_content).strip()

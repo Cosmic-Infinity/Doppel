@@ -442,6 +442,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const res = await fetch('/api/status');
       const data = await res.json();
       updateStatusUI(data.status, data.config);
+      renderBackgroundQueue(data.background);
     } catch (e) {
       console.error('Error fetching status:', e);
     }
@@ -1057,7 +1058,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   }
 
   function handleStreamMessage(msg) {
-    if (msg.type === 'status_update') {
+    if (msg.type === 'background_queue') {
+      renderBackgroundQueue(msg.data);
+    } else if (msg.type === 'status_update') {
       updateStatusUI(msg.status, msg.config);
       if (msg.active_sessions && msg.active_sessions.length > 0) {
         renderSessionsList(msg.active_sessions);
@@ -1170,7 +1173,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (activeSessionId === data.session_id) {
         detailLivePill.textContent = 'ENDED';
         detailLivePill.classList.add('ended');
-        setReportStatus('compiling', data.message || 'Session closed. Compiling incident report...');
+        setReportStatus(data.stage === 'queued' ? 'queued' : 'compiling', data.message || 'Session closed. Compiling incident report...');
       }
     } else if (msg.type === 'session_closed') {
       const data = msg.data;
@@ -1587,11 +1590,72 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  // ATT&CK tagging and reports queued behind terminal replies
+  const navBadgeQueue = document.getElementById('nav-badge-queue');
+  const dotNavQueue = document.getElementById('dot-nav-queue');
+  const textNavQueue = document.getElementById('text-nav-queue');
+  const btnQueueRunNow = document.getElementById('btn-queue-run-now');
+
+  let lastBackground = null;
+
+  function queuedReportState(sessionId) {
+    const bg = lastBackground;
+    if (!bg || !sessionId) return null;
+    if (bg.running === 'report' && bg.running_session === sessionId) return 'running';
+    return (bg.report_sessions || []).includes(sessionId) ? 'queued' : null;
+  }
+
+  // Report panel of the selected session, while its report waits in the queue
+  function renderQueuedReportStatus() {
+    if (!activeSessionId || activeReportAbortController) return;
+    if (reportContent && !reportContent.classList.contains('hidden')) return;
+    const state = queuedReportState(activeSessionId);
+    if (state === 'running') {
+      setReportStatus('compiling', 'Compiling incident report...');
+    } else if (state === 'queued') {
+      setReportStatus('queued', lastBackground.forced
+        ? 'Report queued. Starting shortly.'
+        : 'Report queued. It runs when the model is idle, or select Run now in the top bar.');
+    }
+  }
+
+  function renderBackgroundQueue(bg) {
+    lastBackground = bg || null;
+    renderQueuedReportStatus();
+    if (!navBadgeQueue) return;
+    const count = bg ? bg.queued || 0 : 0;
+    navBadgeQueue.classList.toggle('hidden', count === 0);
+    if (count === 0) return;
+    const active = Boolean(bg.running) || Boolean(bg.forced);
+    const parts = [];
+    if (bg.reports) parts.push(plural(bg.reports, 'report', 'reports'));
+    if (bg.tagging) parts.push(plural(bg.tagging, 'tag', 'tags'));
+    textNavQueue.textContent = `${active ? 'Analyzing' : 'Queued'}: ${parts.join(', ')}`;
+    dotNavQueue.className = `subsystem-dot ${active ? 'neutral' : 'warning'}`;
+    btnQueueRunNow.classList.toggle('hidden', active);
+  }
+
+  if (btnQueueRunNow) {
+    btnQueueRunNow.addEventListener('click', async () => {
+      btnQueueRunNow.disabled = true;
+      try {
+        const res = await fetch('/api/background/run-now', { method: 'POST' });
+        const data = await res.json();
+        renderBackgroundQueue(data.background);
+      } catch (e) {
+        console.error('Error starting queued analysis:', e);
+      } finally {
+        btnQueueRunNow.disabled = false;
+      }
+    });
+  }
+
   function setReportStatus(status, text) {
     if (!reportStatusBadge) return;
     reportStatusBadge.className = 'report-status-badge';
     const statusMap = {
       reasoning: { label: 'Reasoning', cls: 'reasoning', defText: 'Model is reasoning...' },
+      queued: { label: 'Queued', cls: 'neutral', defText: 'Report queued. It runs when the model is idle.' },
       compiling: { label: 'Compiling', cls: 'compiling', defText: 'Compiling report...' },
       ready: { label: 'Ready', cls: 'ready', defText: 'Report ready' },
       stopped: { label: 'Stopped', cls: 'stopped', defText: 'Generation stopped' },
@@ -1612,11 +1676,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
     setReportStatus('neutral', '');
     const isLive = sessionsCache[sessionId] && Boolean(sessionsCache[sessionId].is_active);
+    const queued = queuedReportState(sessionId);
     if (reportEmpty) {
-      reportEmpty.textContent = isLive
-        ? 'Report will be compiled automatically when the session terminates. You can also generate now using the Regenerate button.'
-        : 'No report has been compiled for this session yet. Click Regenerate to compile an incident report.';
+      reportEmpty.textContent = queued
+        ? 'The incident report is queued and will appear here when it is ready.'
+        : isLive
+          ? 'Report will be compiled automatically when the session terminates. You can also generate now using the Regenerate button.'
+          : 'No report has been compiled for this session yet. Click Regenerate to compile an incident report.';
     }
+    renderQueuedReportStatus();
   }
 
   async function streamSessionReport(sessionId, customInstructions = '') {

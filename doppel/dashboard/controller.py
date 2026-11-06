@@ -242,9 +242,12 @@ class HoneypotController:
             self.http_server = None
 
             if self.session_manager:
+                # Reports for the sessions being closed run now rather than after idle time
+                self.session_manager.background.run_now()
                 active_ids = list(self.session_manager.sessions.keys())
                 for sess_id in active_ids:
                     await self.session_manager.close_session(sess_id)
+                await self.session_manager.background.shutdown()
                 self.session_manager = None
 
             self.status = "STOPPED"
@@ -430,7 +433,7 @@ class HoneypotController:
         # 1. Close session if currently active in memory
         if self.session_manager and session_id in self.session_manager.sessions:
             try:
-                await self.session_manager.close_session(session_id)
+                await self.session_manager.close_session(session_id, generate_report=False)
             except Exception as e:
                 logger.warning(f"Error closing active session during deletion: {e}")
 
@@ -586,6 +589,8 @@ class HoneypotController:
                 self.session_manager.sandbox_manager.is_available = False
             else:
                 self.session_manager.sandbox_manager.check_availability()
+        if hasattr(self.session_manager, "background"):
+            self.session_manager.background.enabled = not self.config.llm.mock_mode
 
     async def _attach_session_container(self, session) -> None:
         """Asynchronously attach a new isolated sandbox container to an active session."""

@@ -208,6 +208,7 @@ def sim(
             if output:
                 console.print(output)
 
+        session_mgr.background.run_now()  # nothing else will use the model now
         report_file = await session_mgr.close_session(session.session_id)
         if report_file:
             console.print(f"\n[green]Generated session report at:[/green] {report_file}")
