@@ -8,7 +8,7 @@ from doppel.ai.prompts.threat_prompts import (
     build_command_analysis_prompt,
 )
 from doppel.analytics.db import TelemetryDB
-from doppel.ai.prompt_shield import detect_prompt_injection, PROMPT_INJECTION_THREAT_META
+from doppel.ai.prompt_shield import detect_prompt_injection, prompt_injection_threat_meta
 
 logger = logging.getLogger("doppel.analytics.observer")
 
@@ -192,9 +192,10 @@ class ThreatObserver:
         """Rulebook answer for standard simple recon commands (no model call), or None."""
         cmd_clean = command.strip()
         # Prompt injection aimed at the deception model: fixed attribution, no LLM call
-        if detect_prompt_injection(cmd_clean):
-            logger.warning(f"[PROMPT SHIELD] Neutralized prompt injection: {cmd_clean[:80]!r}")
-            return dict(PROMPT_INJECTION_THREAT_META)
+        category = detect_prompt_injection(cmd_clean)
+        if category:
+            logger.warning(f"[PROMPT SHIELD] Neutralized prompt injection ({category}): {cmd_clean[:80]!r}")
+            return prompt_injection_threat_meta(category)
         is_compound = any(sep in cmd_clean for sep in ("|", ">", "<", ";", "&&", "||", "`", "$("))
         if is_compound or cmd_clean.lower() not in FAST_PATH_RULES:
             return None

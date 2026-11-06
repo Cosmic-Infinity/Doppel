@@ -10,17 +10,33 @@ import shlex
 import base64
 from typing import Optional, Dict, Any, List
 
-# MITRE ATT&CK attribution for adversarial AI attacks
-PROMPT_INJECTION_THREAT_META: Dict[str, Any] = {
-    "tactics": ["Execution", "Discovery"],
-    "technique_id": "T1059",
-    "technique_name": "Command and Scripting Interpreter: Adversarial AI Reconnaissance",
-    "threat_score": 100,
-    "attacker_intent": "Adversarial prompt injection attempting LLM jailbreak or system prompt extraction",
-    "is_automated": False,
-    "confidence": 1.0,
-    "iocs": [],
+# Attacks on the deception model are catalogued in MITRE ATLAS, not ATT&CK
+# (technique IDs, names and tactics as in atlas-data's ATLAS.yaml)
+_ATLAS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
+    "instruction_override": {"technique_id": "AML.T0051", "technique_name": "LLM Prompt Injection", "tactics": ["Execution"]},
+    "control_token_injection": {"technique_id": "AML.T0051", "technique_name": "LLM Prompt Injection", "tactics": ["Execution"]},
+    "encoded_prompt_injection": {"technique_id": "AML.T0051", "technique_name": "LLM Prompt Injection", "tactics": ["Execution"]},
+    "jailbreak_attempt": {"technique_id": "AML.T0054", "technique_name": "LLM Jailbreak", "tactics": ["Privilege Escalation", "Defense Evasion"]},
+    "system_prompt_exfiltration": {"technique_id": "AML.T0056", "technique_name": "Extract LLM System Prompt", "tactics": ["Exfiltration"]},
 }
+# High (the attacker suspects an AI-backed system) but below credential theft or persistence
+PROMPT_INJECTION_THREAT_SCORE = 70
+
+
+def prompt_injection_threat_meta(category: Optional[str] = None) -> Dict[str, Any]:
+    """Threat record for a detected injection, attributed by detection category."""
+    atlas = _ATLAS_BY_CATEGORY.get(category or "", _ATLAS_BY_CATEGORY["instruction_override"])
+    return {
+        **atlas,
+        "threat_score": PROMPT_INJECTION_THREAT_SCORE,
+        "attacker_intent": "Probing for an AI-backed system: prompt injection, jailbreak or system prompt extraction",
+        "is_automated": False,
+        "confidence": 1.0,
+        "iocs": [],
+    }
+
+
+PROMPT_INJECTION_THREAT_META: Dict[str, Any] = prompt_injection_threat_meta()
 
 # 1. Direct instruction override and memory reset patterns
 _OVERRIDE_PATTERNS = [
@@ -109,20 +125,14 @@ def detect_prompt_injection(text: str, check_nested_b64: bool = True) -> Optiona
 
 def get_posix_syntax_error(command: str) -> str:
     """
-    Generate an authentic Linux POSIX error message based on the command structure
-    so the honeypot does not break character.
+    What bash prints for free text typed at the prompt ("ignore previous
+    instructions"): the first word, as typed, is not a command. Only used for
+    input whose first word is not a real command; real commands run normally.
     """
     cmd = command.strip()
     try:
         tokens = shlex.split(cmd)
     except Exception:
         tokens = cmd.split()
-
-    first_word = tokens[0].lower() if tokens else "bash"
-
-    # If injection uses quotes, redirection, or complex subshells
-    if any(ch in cmd for ch in ("'", '"', "`", "$(", ";", "|")):
-        return "bash: syntax error near unexpected token `newline'\n"
-
-    # If plain words were entered (e.g. "ignore previous instructions")
+    first_word = tokens[0] if tokens else "bash"
     return f"bash: {first_word}: command not found\n"

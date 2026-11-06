@@ -1,4 +1,5 @@
 import re
+import shlex
 import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple, Union
@@ -385,6 +386,23 @@ class DeceptionEngine:
 
         return None
 
+    def _shielded_output(self, command: str) -> str:
+        """Believable output for injection text that would otherwise go to the model."""
+        tokens = command.strip().split()
+        binary = tokens[0].rsplit("/", 1)[-1] if tokens else ""
+        if binary not in COMMON_BINARIES:
+            return get_posix_syntax_error(command).rstrip("\n")
+        # A plain echo prints its arguments; nothing for the model to do
+        if binary == "echo" and not _SHELL_META_RE.search(command.replace('"', "").replace("'", "")):
+            try:
+                args = shlex.split(command)[1:]
+            except ValueError:
+                return self.failure_output(command)
+            while args and args[0] in ("-n", "-e", "-E", "-ne", "-en"):
+                args.pop(0)
+            return " ".join(args)
+        return self.failure_output(command)
+
     def _sanitize_conversational_leak(self, text: str, command: str = "", user: str = "ubuntu") -> str:
         """Detect and eliminate conversational AI speech or persona prompt leakage.
 
@@ -439,9 +457,9 @@ class DeceptionEngine:
         login_time: Optional[str] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Generate authentic simulated output for a command in the current session context."""
-        # Inbound prompt defense shield
+        # Inbound prompt defense shield: injection text never reaches the model
         if detect_prompt_injection(command):
-            error_output = get_posix_syntax_error(command).rstrip("\n")
+            error_output = self._shielded_output(command)
             if return_reasoning:
                 return error_output, "Adversarial prompt injection detected and neutralized"
             return error_output

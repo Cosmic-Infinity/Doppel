@@ -20,7 +20,7 @@ from doppel.analytics.profiler import AttackerProfiler, ProfilerState
 from doppel.alerts.email import EmailAlerter
 from doppel.ai.prompt_shield import (
     detect_prompt_injection,
-    PROMPT_INJECTION_THREAT_META,
+    prompt_injection_threat_meta,
     get_posix_syntax_error,
 )
 
@@ -554,7 +554,10 @@ class SessionManager:
             logger.error(f"Failed to log command to DB: {db_err}")
 
         # 6. Background MITRE analysis & profiling
-        threat_override = dict(PROMPT_INJECTION_THREAT_META) if route_reason == "prompt_injection_defense" else None
+        threat_override = (
+            prompt_injection_threat_meta(detect_prompt_injection(cmd_clean))
+            if route_reason == "prompt_injection_defense" else None
+        )
 
         task = asyncio.create_task(
             self._analyze_and_record(

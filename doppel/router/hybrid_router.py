@@ -324,7 +324,15 @@ class HybridRouter:
         if binary in {"cd", "exit", "logout", "clear", "pwd"}:
             return RouteDecision.BUILTIN, binary
 
-        if detect_prompt_injection(cmd_clean):
+        # Free text aimed at the deception model ("ignore previous instructions")
+        # never reaches it. A real command that merely contains such words is
+        # routed as usual, as a shell would run it; the engine guards the model.
+        is_real_command = (
+            binary.rsplit("/", 1)[-1] in COMMON_BINARIES
+            or effective_binary in COMMON_BINARIES
+            or effective_binary in self.benign_commands
+        )
+        if not is_real_command and detect_prompt_injection(cmd_clean):
             return RouteDecision.LLM_DECEPTION, "prompt_injection_defense"
 
         # 2. Check for DoS / fork bomb payloads (Tier 3 Containment)
