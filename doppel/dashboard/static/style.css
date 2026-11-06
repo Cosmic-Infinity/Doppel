@@ -1067,13 +1067,29 @@ body {
   overflow-y: auto;
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.45;
 }
 
 .terminal-line {
-  margin-bottom: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.terminal-line:last-child {
+  border-bottom: none;
+}
+
+.terminal-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.terminal-entry {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .terminal-prompt {
@@ -1086,10 +1102,15 @@ body {
 }
 
 .terminal-route-tag {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
   font-size: 10px;
-  padding: 1px 4px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
   border-radius: 3px;
-  margin-left: 8px;
+  border: 1px solid var(--border-subtle);
   background: var(--bg-surface-elevated);
   color: var(--text-muted);
 }
@@ -1107,8 +1128,13 @@ body {
 }
 
 .terminal-output-block {
+  margin: 4px 0 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--border-subtle);
   color: var(--text-secondary);
-  padding-left: 4px;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 8;
 }
 
 .terminal-reasoning-details {

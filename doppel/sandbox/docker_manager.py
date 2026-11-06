@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 
+from doppel.core import clock
+
 logger = logging.getLogger("doppel.sandbox")
 
 # Image built from the Dockerfile next to this module (Ubuntu 22.04 userland)
@@ -175,15 +177,19 @@ class DockerSandboxManager:
                     f"chown -R '{username}' /home/{username} 2>/dev/null || true; "
                 ) if username and username != "root" else ""
 
+                # who reports the session's login time (container creation) and
+                # the persona's boot time, both from the simulated clock
+                login_stamp = f"{clock.now():%Y-%m-%d %H:%M}"
+                boot_stamp = f"{clock.boot_time():%Y-%m-%d %H:%M}"
                 who_wrapper = (
                     "printf '#!/bin/sh\\n' > /usr/local/bin/who && "
                     "printf 'if [ $# -eq 0 ] || [ \"$1\" = \"-m\" ] || { [ $# -eq 2 ] && { [ \"$1 $2\" = \"am i\" ] || [ \"$1 $2\" = \"am I\" ] || [ \"$1 $2\" = \"mom likes\" ]; }; }; then\\n' >> /usr/local/bin/who && "
-                    "printf '    printf \"ubuntu   pts/0        %s (10.0.4.1)\\n\" \"$(date \"+%%Y-%%m-%%d %%H:%%M\")\"\\n' >> /usr/local/bin/who && "
+                    "printf '    printf \"ubuntu   pts/0        " + login_stamp + " (10.0.4.1)\\n\"\\n' >> /usr/local/bin/who && "
                     "printf '    exit 0\\n' >> /usr/local/bin/who && "
                     "printf 'fi\\n' >> /usr/local/bin/who && "
                     "printf 'if [ \"$1\" = \"-q\" ]; then\\n    printf \"ubuntu\\n# users=1\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
-                    "printf 'if [ \"$1\" = \"-b\" ]; then\\n    printf \"         system boot  2026-08-30 18:20\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
-                    "printf 'if [ \"$1\" = \"-r\" ]; then\\n    printf \"         run-level 5  2026-08-30 18:20\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ \"$1\" = \"-b\" ]; then\\n    printf \"         system boot  " + boot_stamp + "\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    "printf 'if [ \"$1\" = \"-r\" ]; then\\n    printf \"         run-level 5  " + boot_stamp + "\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
                     "printf 'if [ $# -gt 0 ]; then\\n    printf \"who: extra operand '\''%%s'\''\\nTry '\''who --help'\'' for more information.\\n\" \"$1\"\\n    exit 1\\nfi\\n' >> /usr/local/bin/who && "
                     "chmod +x /usr/local/bin/who 2>/dev/null || true; "
                 )

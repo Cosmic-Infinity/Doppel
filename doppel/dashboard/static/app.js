@@ -1792,24 +1792,23 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     line.className = 'terminal-line';
     const route = ROUTE_TAGS[decision] || { cls: 'deception', label: 'Deception' };
 
-    let reasoningHtml = '';
-    if (reasoning) {
-      reasoningHtml = `
-        <details class="terminal-reasoning-details">
-          <summary class="terminal-reasoning-summary">Model Reasoning</summary>
-          <div class="terminal-reasoning-content">${escapeHtml(reasoning)}</div>
-        </details>
-      `;
-    }
+    // Markup is built without inter-tag whitespace so layout never depends on
+    // template indentation.
+    const reasoningHtml = reasoning
+      ? '<details class="terminal-reasoning-details">'
+        + '<summary class="terminal-reasoning-summary">Model Reasoning</summary>'
+        + `<div class="terminal-reasoning-content">${escapeHtml(reasoning)}</div>`
+        + '</details>'
+      : '';
 
-    line.innerHTML = `
-      <div>
-        <span class="terminal-prompt">${escapeHtml(formatPrompt(user, cwd))}</span>
-        <span class="terminal-cmd">${escapeHtml(command)}</span>
-        <span class="terminal-route-tag ${route.cls}">${route.label}</span>
-      </div>
-      ${reasoningHtml}
-    `;
+    line.innerHTML = '<div class="terminal-head">'
+      + '<span class="terminal-entry">'
+      + `<span class="terminal-prompt">${escapeHtml(formatPrompt(user, cwd))}</span>`
+      + `<span class="terminal-cmd">${escapeHtml(command)}</span>`
+      + '</span>'
+      + `<span class="terminal-route-tag ${route.cls}">${route.label}</span>`
+      + '</div>'
+      + reasoningHtml;
     setTerminalLineOutput(line, output);
     return line;
   }
@@ -1818,7 +1817,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (!output) return;
     const block = document.createElement('div');
     block.className = 'terminal-output-block';
-    block.innerHTML = escapeHtml(output).replace(/\r\n/g, '\n');
+    block.innerHTML = escapeHtml(String(output).replace(/\r\n/g, '\n').replace(/\n+$/, ''));
     line.appendChild(block);
   }
 

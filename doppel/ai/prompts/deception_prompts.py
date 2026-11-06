@@ -21,8 +21,8 @@ IDENTITY
   Kernel        : 5.15.0-105-generic #115-Ubuntu SMP Mon Apr 15 17:33:04 UTC 2024 x86_64
   Current User  : ubuntu (uid=1000, gid=1000)
   Groups        : ubuntu adm cdrom sudo dip plugdev lxd
-  Uptime        : 43 days, 7:22 (since Aug 30 2026)
-  Load Average  : 0.12, 0.18, 0.14
+  Uptime        : see SYSTEM CLOCK
+  Load Average  : varies between 0.1-0.3; never repeat the same three values
   Memory        : 7822 MB total, 3214 MB used, 4608 MB available (no swap)
   Disk          : /dev/sda1 ext4  49G  18G  29G  38%  /
 
@@ -32,8 +32,9 @@ USERS & GROUPS
   www-data : x:33:33:www-data:/var/www:/usr/sbin/nologin
   deploy   : x:1001:1001:Deploy Bot:/home/deploy:/bin/bash  (used by CI/CD)
   mysql    : x:114:120:MySQL Server:/nonexistent:/bin/false
-  Last logins: ubuntu pts/0  10.0.4.1  Oct 11 23:42 (still logged in)
-               deploy pts/1  10.0.4.5  Oct 11 18:30 - Oct 11 19:12 (00:42)
+  Last logins: the attacker's own session is the current login (see SYSTEM CLOCK)
+               deploy pts/1  10.0.4.5  yesterday 18:30 - 19:12 (00:42)
+               ubuntu pts/0  10.0.4.1  yesterday 14:15 - 23:58 (09:43)
 
 INSTALLED SERVICES
   OpenSSH 8.9p1     : port 22   (password + pubkey auth)
@@ -125,15 +126,15 @@ IDENTITY
   Instance ID   : i-0a1b2c3d4e5f67890
   Region        : us-east-1
   AZ            : us-east-1b
-  Uptime        : 12 days, 4:51
-  Load Average  : 1.82, 1.67, 1.53
+  Uptime        : see SYSTEM CLOCK
+  Load Average  : varies between 1.4-2.0; never repeat the same three values
   Memory        : 15841 MB total, 11234 MB used, 4607 MB available
   Disk          : /dev/nvme0n1p1 xfs  50G  31G  20G  61%  /
 
 USERS & GROUPS
   root     : x:0:0:root:/root:/bin/bash
   ec2-user : x:1000:1000:EC2 Default User:/home/ec2-user:/bin/bash
-  Last logins: ec2-user pts/0  10.0.0.5  Oct 11 22:10 (still logged in)
+  Last logins: the attacker's own session is the current login (see SYSTEM CLOCK)
 
 INSTALLED SERVICES
   containerd 1.7.22   : runtime for kubelet
@@ -154,7 +155,7 @@ AWS METADATA (IMDSv2 responses at http://169.254.169.254)
     AccessKeyId     : ASIA2OGYBQ6EXAMPLE01
     SecretAccessKey  : Hn4Tq9Wz2Lr7Xc5Vb8Mk1Pd6Fs3Gj0Ya8Ue2RiQ
     Token           : FwoGZXIvY...truncated...==
-    Expiration      : 2026-10-12T06:45:00Z
+    Expiration      : about 5 hours after the current time in SYSTEM CLOCK (ISO 8601, UTC)
 
 FILESYSTEM LAYOUT
   /home/ec2-user/       : .bashrc, .aws/credentials, .aws/config, .kube/config
@@ -205,8 +206,8 @@ IDENTITY
   Kernel        : 6.1.0-25-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2024-08-26) x86_64
   Current User  : api-runner (uid=1001, gid=1001)
   Groups        : api-runner docker
-  Uptime        : 8 days, 15:03
-  Load Average  : 0.42, 0.38, 0.31
+  Uptime        : see SYSTEM CLOCK
+  Load Average  : varies between 0.3-0.5; never repeat the same three values
   Memory        : 8011 MB total, 4102 MB used, 3909 MB available
   Disk          : /dev/vda1 ext4  80G  24G  53G  32%  /
 
@@ -215,8 +216,8 @@ USERS & GROUPS
   api-runner : x:1001:1001:API Service Account:/home/api-runner:/bin/bash
   postgres   : x:113:120:PostgreSQL administrator:/var/lib/postgresql:/bin/bash
   redis      : x:114:121::/var/lib/redis:/usr/sbin/nologin
-  Last logins: api-runner pts/0  10.0.10.5  Oct 11 20:15 (still logged in)
-               root      tty1                Oct  3 09:00 - Oct  3 09:12 (00:12)
+  Last logins: the attacker's own session is the current login (see SYSTEM CLOCK)
+               root      tty1                3 days ago 09:00 - 09:12 (00:12)
 
 INSTALLED SERVICES
   OpenSSH 9.2p1       : port 22
@@ -474,3 +475,30 @@ def _build_port_context(persona_name: str) -> str:
         "All other ports are CLOSED or FILTERED. Never invent ports not listed above."
     )
     return "\n".join(lines)
+
+
+def build_clock_context(persona_name: str = "ubuntu_web_server", login_time=None) -> str:
+    """
+    Current time, boot time and uptime for this request. Appended to every
+    prompt so generated timestamps follow the real clock instead of a fixed
+    date baked into the persona.
+    """
+    from datetime import timedelta
+    from doppel.core import clock
+
+    now = clock.now()
+    boot = clock.boot_time(persona_name)
+    login = clock.parse_iso(login_time) if isinstance(login_time, str) else login_time
+    login = login or (now - timedelta(minutes=4))
+    return "\n".join([
+        "SYSTEM CLOCK (authoritative; derive every date, time and duration from it):",
+        f"  Current time  : {clock.ctime(now)} UTC ({now:%Y-%m-%d %H:%M:%S})",
+        f"  Booted        : {clock.ctime(boot)} UTC",
+        f"  Uptime        : {clock.uptime_text(persona_name)}",
+        f"  Current login : {clock.ctime(login)} UTC from the attacker's address",
+        "  Use the current time for date, timestamps printed by tools, and the end of logs; use the boot time",
+        "  for long-running process START columns and service 'since' lines. Tool run times (scans, brute force,",
+        "  enumeration) must be plausible for the work done and must differ between runs; never reuse a round",
+        "  or previously printed duration.",
+    ])
+

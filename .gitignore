@@ -44,3 +44,6 @@ host_key*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Others
+*.docx

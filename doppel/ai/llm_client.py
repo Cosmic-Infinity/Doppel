@@ -1,10 +1,14 @@
 import asyncio
 import json
 import logging
+import random
 import re
 import time
+from datetime import timedelta
 from typing import List, Dict, Any, Optional, AsyncGenerator
 import httpx
+
+from doppel.core import clock
 
 logger = logging.getLogger("doppel.ai")
 
@@ -343,6 +347,20 @@ class LLMClient:
         user_msg = messages[-1]["content"].lower() if messages else ""
         sys_msg = messages[0]["content"].lower() if (messages and messages[0].get("role") == "system") else ""
 
+        # Times in simulated output follow the real clock: the host booted
+        # clock.uptime() ago, the current login started a few minutes ago and
+        # earlier activity happened on previous days.
+        now = clock.now()
+        boot = clock.boot_time()
+        login = now - timedelta(minutes=4, seconds=12)
+
+        def day_at(days_back: int, hour: int, minute: int):
+            return (now - timedelta(days=days_back)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        deployed = day_at(1, 18, 30)
+        composer = day_at(4, 14, 20)
+        installed = boot + timedelta(minutes=2)
+
         # Check if incident report is requested
         if "incident report" in user_msg or "incident report" in sys_msg or "cyber incident response analyst" in sys_msg:
             return (
@@ -558,10 +576,15 @@ class LLMClient:
                 if not cand.startswith("-") and cand not in ("sudo", "root"):
                     target = cand
             is_local = target in ("127.0.0.1", "localhost", "0.0.0.0")
+            # Service/OS detection scans take noticeably longer than plain port scans
+            thorough = bool(re.search(r"\s-(?:s[vV]|A|O)\b", user_msg, re.I))
+            started, _, secs = clock.run_window(6.0, 16.0) if thorough else clock.run_window(0.6, 3.5)
+            nmap_start = f"{started:%Y-%m-%d %H:%M} UTC"
+            nmap_done = f"Nmap done: 1 IP address (1 host up) scanned in {secs:.2f} seconds"
 
             if is_local:
                 return (
-                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-10-12 01:30 UTC\n"
+                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at {nmap_start}\n"
                     f"Nmap scan report for {target} (127.0.0.1)\n"
                     "Host is up (0.000012s latency).\n"
                     "Not shown: 993 closed tcp ports (conn-refused)\n"
@@ -575,11 +598,11 @@ class LLMClient:
                     "9000/tcp open  cslistener?\n"
                     "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n\n"
                     "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .\n"
-                    "Nmap done: 1 IP address (1 host up) scanned in 8.42 seconds"
+                    f"{nmap_done}"
                 )
             else:
                 return (
-                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-10-12 01:30 UTC\n"
+                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at {nmap_start}\n"
                     f"Nmap scan report for {target}\n"
                     "Host is up (0.000015s latency).\n"
                     "Not shown: 996 closed tcp ports (conn-refused)\n"
@@ -590,11 +613,12 @@ class LLMClient:
                     "3306/tcp open  mysql    MySQL 8.0.36-0ubuntu0.22.04.1\n"
                     "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n\n"
                     "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .\n"
-                    "Nmap done: 1 IP address (1 host up) scanned in 8.42 seconds"
+                    f"{nmap_done}"
                 )
 
         # --- sqlmap ---
         if "sqlmap" in user_msg:
+            started, _, _ = clock.run_window(4.0, 11.0)
             return (
                 "    ___\n"
                 "   __H__\n"
@@ -602,7 +626,7 @@ class LLMClient:
                 "|_ -| . [,]     | .'| . |\n"
                 "|___|_  [\"]_|_|_|__,|  _|\n"
                 "      |_|V...       |_|   https://sqlmap.org\n\n"
-                "[*] starting @ 02:35:10\n"
+                f"[*] starting @ {started:%H:%M:%S} /{started:%Y-%m-%d}/\n"
                 "[INFO] testing connection to the target URL\n"
                 "[INFO] checking if the target is protected by some kind of WAF/IPS\n"
                 "[INFO] testing if the target URL content is stable\n"
@@ -615,25 +639,27 @@ class LLMClient:
 
         # --- hydra ---
         if "hydra" in user_msg:
+            started, ended, _ = clock.run_window(4.0, 28.0)
             return (
                 "Hydra v9.5 (c) 2023 by van Hauser/THC & David Maciejak\n\n"
-                "Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at 2026-10-12 02:36:12\n"
+                f"Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at {started:%Y-%m-%d %H:%M:%S}\n"
                 "[DATA] max 16 tasks per 1 server, overall 16 tasks, 14 login tries (l:1/p:14), ~1 tries per task\n"
                 "[DATA] attacking ssh://10.0.4.50:22/\n"
                 "[22][ssh] host: 10.0.4.50   login: admin   password: password123\n"
                 "1 of 1 target successfully completed, 1 valid password found\n"
-                "Hydra (https://github.com/vanhauser-thc/thc-hydra) finished at 2026-10-12 02:36:18"
+                f"Hydra (https://github.com/vanhauser-thc/thc-hydra) finished at {ended:%Y-%m-%d %H:%M:%S}"
             )
 
         # --- nikto ---
         if "nikto" in user_msg:
+            started, ended, secs = clock.run_window(45.0, 140.0)
             return (
                 "- Nikto v2.5.0\n"
                 "---------------------------------------------------------------------------\n"
                 "+ Target IP:          10.0.4.50\n"
                 "+ Target Hostname:    10.0.4.50\n"
                 "+ Target Port:        80\n"
-                "+ Start Time:         2026-10-12 02:39:00\n"
+                f"+ Start Time:         {started:%Y-%m-%d %H:%M:%S} (GMT0)\n"
                 "---------------------------------------------------------------------------\n"
                 "+ Server: nginx/1.18.0 (Ubuntu)\n"
                 "+ The anti-clickjacking X-Frame-Options header is not present.\n"
@@ -641,7 +667,7 @@ class LLMClient:
                 "+ The X-Content-Type-Options header is not set.\n"
                 "+ Root page / redirects to /login\n"
                 "+ 8048 requests: 0 error(s) and 4 item(s) reported on remote host\n"
-                "+ End Time:           2026-10-12 02:40:15 (75 seconds)"
+                f"+ End Time:           {ended:%Y-%m-%d %H:%M:%S} (GMT0) ({int(secs)} seconds)"
             )
 
         # --- gobuster / dirsearch / ffuf ---
@@ -669,8 +695,9 @@ class LLMClient:
 
         # --- masscan ---
         if "masscan" in user_msg:
+            started, _, _ = clock.run_window(2.0, 9.0)
             return (
-                "Starting masscan 1.3.2 (http://bit.ly/14GZzcT) at 2026-10-12 02:38:00 GMT\n"
+                f"Starting masscan 1.3.2 (http://bit.ly/14GZzcT) at {started:%Y-%m-%d %H:%M:%S} GMT\n"
                 "Initiating SYN Stealth Scan\n"
                 "Scanning 1 hosts [4 ports/host]\n"
                 "Discovered open port 22/tcp on 10.0.4.50\n"
@@ -681,11 +708,13 @@ class LLMClient:
 
         # --- tcpdump / wireshark ---
         if any(k in user_msg for k in ("tcpdump", "wireshark")):
+            t1 = clock.now()
+            t2 = t1 + timedelta(microseconds=random.randint(250, 900))
             return (
                 "tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\n"
                 "listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n"
-                "02:41:00.123456 IP 10.0.4.1.58420 > 10.0.4.15.22: Flags [.], ack 1, win 502, length 0\n"
-                "02:41:00.123890 IP 10.0.4.15.22 > 10.0.4.1.58420: Flags [P.], seq 1:45, ack 1, win 501, length 44\n"
+                f"{t1:%H:%M:%S.%f} IP 10.0.4.1.58420 > 10.0.4.15.22: Flags [.], ack 1, win 502, length 0\n"
+                f"{t2:%H:%M:%S.%f} IP 10.0.4.15.22 > 10.0.4.1.58420: Flags [P.], seq 1:45, ack 1, win 501, length 44\n"
                 "2 packets captured\n"
                 "2 packets received by filter\n"
                 "0 packets dropped by kernel"
@@ -846,25 +875,25 @@ class LLMClient:
         if ("ps " in user_msg or user_msg.endswith("ps")) or "top" in user_msg:
             return (
                 "USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n"
-                "root           1  0.0  0.1 167528 11648 ?        Ss   Aug30   0:14 /sbin/init\n"
-                "root         312  0.0  0.1  52432  9280 ?        Ss   Aug30   0:08 /lib/systemd/systemd-journald\n"
-                "root         340  0.0  0.0  25544  5888 ?        Ss   Aug30   0:02 /lib/systemd/systemd-udevd\n"
-                "systemd+     498  0.0  0.0  90168  6144 ?        Ssl  Aug30   0:04 /lib/systemd/systemd-timesyncd\n"
-                "root         651  0.0  0.0  15420  7124 ?        Ss   Aug30   0:00 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\n"
-                "root         672  0.0  0.2 245120 18450 ?        Ss   Aug30   1:12 nginx: master process /usr/sbin/nginx -g daemon on; master_process on;\n"
-                "www-data     673  0.0  0.1 245780 12340 ?        S    Aug30   3:48 nginx: worker process\n"
-                "www-data     674  0.0  0.1 245620 11980 ?        S    Aug30   3:42 nginx: worker process\n"
-                "mysql        812  0.1  3.2 1894200 258120 ?      Ssl  Aug30  52:14 /usr/sbin/mysqld\n"
-                "redis        845  0.0  0.0  54632  5120 ?        Ssl  Aug30   8:34 /usr/bin/redis-server 127.0.0.1:6379\n"
-                "root         890  0.0  0.0 199260  7508 ?        Ssl  Aug30   0:00 /usr/sbin/php-fpm8.1 --nodaemonize --fpm-config /etc/php/8.1/fpm/php-fpm.conf\n"
-                "www-data     891  0.0  0.1 201420 12800 ?        S    Aug30   2:18 php-fpm: pool www\n"
-                "ubuntu      1201  0.0  0.3 923452 28160 ?        Ssl  Aug30  15:42 PM2 v5.3.0: God Daemon (/home/ubuntu/.pm2)\n"
-                "ubuntu      1215  0.1  0.4 1014580 35840 ?       Sl   Aug30  48:30 node /var/www/api/index.js\n"
-                "ubuntu      1216  0.1  0.4 1014120 34960 ?       Sl   Aug30  47:55 node /var/www/api/index.js\n"
-                "root        3201  0.0  0.0  15852  6480 ?        Ss   01:42   0:00 sshd: ubuntu [priv]\n"
-                "ubuntu      3205  0.0  0.0  16044  5120 ?        S    01:42   0:00 sshd: ubuntu@pts/0\n"
-                "ubuntu      3206  0.0  0.0   8672  5320 pts/0    Ss   01:42   0:00 -bash\n"
-                "ubuntu      3421  0.0  0.0  10072  3360 pts/0    R+   02:30   0:00 ps aux"
+                f"root           1  0.0  0.1 167528 11648 ?        Ss   {clock.ps_start(boot):<6}  0:14 /sbin/init\n"
+                f"root         312  0.0  0.1  52432  9280 ?        Ss   {clock.ps_start(boot):<6}  0:08 /lib/systemd/systemd-journald\n"
+                f"root         340  0.0  0.0  25544  5888 ?        Ss   {clock.ps_start(boot):<6}  0:02 /lib/systemd/systemd-udevd\n"
+                f"systemd+     498  0.0  0.0  90168  6144 ?        Ssl  {clock.ps_start(boot):<6}  0:04 /lib/systemd/systemd-timesyncd\n"
+                f"root         651  0.0  0.0  15420  7124 ?        Ss   {clock.ps_start(boot):<6}  0:00 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\n"
+                f"root         672  0.0  0.2 245120 18450 ?        Ss   {clock.ps_start(boot):<6}  1:12 nginx: master process /usr/sbin/nginx -g daemon on; master_process on;\n"
+                f"www-data     673  0.0  0.1 245780 12340 ?        S    {clock.ps_start(boot):<6}  3:48 nginx: worker process\n"
+                f"www-data     674  0.0  0.1 245620 11980 ?        S    {clock.ps_start(boot):<6}  3:42 nginx: worker process\n"
+                f"mysql        812  0.1  3.2 1894200 258120 ?      Ssl  {clock.ps_start(boot):<6} 52:14 /usr/sbin/mysqld\n"
+                f"redis        845  0.0  0.0  54632  5120 ?        Ssl  {clock.ps_start(boot):<6}  8:34 /usr/bin/redis-server 127.0.0.1:6379\n"
+                f"root         890  0.0  0.0 199260  7508 ?        Ssl  {clock.ps_start(boot):<6}  0:00 /usr/sbin/php-fpm8.1 --nodaemonize --fpm-config /etc/php/8.1/fpm/php-fpm.conf\n"
+                f"www-data     891  0.0  0.1 201420 12800 ?        S    {clock.ps_start(boot):<6}  2:18 php-fpm: pool www\n"
+                f"ubuntu      1201  0.0  0.3 923452 28160 ?        Ssl  {clock.ps_start(boot):<6} 15:42 PM2 v5.3.0: God Daemon (/home/ubuntu/.pm2)\n"
+                f"ubuntu      1215  0.1  0.4 1014580 35840 ?       Sl   {clock.ps_start(boot):<6} 48:30 node /var/www/api/index.js\n"
+                f"ubuntu      1216  0.1  0.4 1014120 34960 ?       Sl   {clock.ps_start(boot):<6} 47:55 node /var/www/api/index.js\n"
+                f"root        3201  0.0  0.0  15852  6480 ?        Ss   {clock.ps_start(login):<6}  0:00 sshd: ubuntu [priv]\n"
+                f"ubuntu      3205  0.0  0.0  16044  5120 ?        S    {clock.ps_start(login):<6}  0:00 sshd: ubuntu@pts/0\n"
+                f"ubuntu      3206  0.0  0.0   8672  5320 pts/0    Ss   {clock.ps_start(login):<6}  0:00 -bash\n"
+                f"ubuntu      3421  0.0  0.0  10072  3360 pts/0    R+   {clock.ps_start(now):<6}  0:00 ps aux"
             )
 
         # --- shutdown / reboot / poweroff ---
@@ -935,7 +964,7 @@ class LLMClient:
 
         # --- uptime / w ---
         if "uptime" in user_msg or ("w" == user_msg.split("$")[-1].strip().split("#")[-1].strip()):
-            return " 02:30:14 up 43 days,  7:22,  1 user,  load average: 0.12, 0.18, 0.14"
+            return clock.uptime_line()
 
         # --- free ---
         if "free" in user_msg:
@@ -971,14 +1000,14 @@ class LLMClient:
         # --- last ---
         if "last" in user_msg and "lastlog" not in user_msg:
             return (
-                "ubuntu   pts/0        10.0.4.1         Sat Oct 12 01:42   still logged in\n"
-                "deploy   pts/1        10.0.4.5         Fri Oct 11 18:30 - 19:12  (00:42)\n"
-                "ubuntu   pts/0        10.0.4.1         Fri Oct 11 14:15 - 23:58  (09:43)\n"
-                "deploy   pts/1        10.0.4.5         Thu Oct 10 22:00 - 22:45  (00:45)\n"
-                "ubuntu   pts/0        10.0.4.1         Thu Oct 10 09:30 - 18:22  (08:52)\n"
-                "reboot   system boot  5.15.0-105-generi Thu Aug 30 17:08   still running\n"
+                f"ubuntu   pts/0        10.0.4.1         {clock.short_date(login)}   still logged in\n"
+                f"deploy   pts/1        10.0.4.5         {clock.short_date(deployed)} - {deployed + timedelta(minutes=42):%H:%M}  (00:42)\n"
+                f"ubuntu   pts/0        10.0.4.1         {clock.short_date(day_at(1, 14, 15))} - 23:58  (09:43)\n"
+                f"deploy   pts/1        10.0.4.5         {clock.short_date(day_at(2, 22, 0))} - 22:45  (00:45)\n"
+                f"ubuntu   pts/0        10.0.4.1         {clock.short_date(day_at(2, 9, 30))} - 18:22  (08:52)\n"
+                f"reboot   system boot  5.15.0-105-generi {clock.short_date(boot)}   still running\n"
                 "\n"
-                "wtmp begins Thu Aug 30 17:08:22 2026"
+                f"wtmp begins {clock.ctime(boot)}"
             )
 
         # --- sudo ---
@@ -991,7 +1020,7 @@ class LLMClient:
                 return (
                     "nginx.service - A high performance web server and a reverse proxy server\n"
                     "     Loaded: loaded (/lib/systemd/system/nginx.service; enabled; vendor preset: enabled)\n"
-                    "     Active: active (running) since Thu 2026-08-30 17:08:45 UTC; 43 days ago\n"
+                    f"     Active: active (running) since {boot + timedelta(seconds=23):%a %Y-%m-%d %H:%M:%S} UTC; {clock.days_ago_since(boot)}\n"
                     "       Docs: man:nginx(8)\n"
                     "    Process: 670 ExecStartPre=/usr/sbin/nginx -t -q -g daemon on; master_process on; (code=exited, status=0/SUCCESS)\n"
                     "    Process: 671 ExecStart=/usr/sbin/nginx -g daemon on; master_process on; (code=exited, status=0/SUCCESS)\n"
@@ -1008,7 +1037,7 @@ class LLMClient:
                 return (
                     "mysql.service - MySQL Community Server\n"
                     "     Loaded: loaded (/lib/systemd/system/mysql.service; enabled; vendor preset: enabled)\n"
-                    "     Active: active (running) since Thu 2026-08-30 17:08:52 UTC; 43 days ago\n"
+                    f"     Active: active (running) since {boot + timedelta(seconds=30):%a %Y-%m-%d %H:%M:%S} UTC; {clock.days_ago_since(boot)}\n"
                     "    Process: 810 ExecStartPre=/usr/share/mysql/mysql-systemd-start pre (code=exited, status=0/SUCCESS)\n"
                     "   Main PID: 812 (mysqld)\n"
                     "     Status: \"Server is operational\"\n"
@@ -1022,7 +1051,7 @@ class LLMClient:
                 return (
                     "ssh.service - OpenBSD Secure Shell server\n"
                     "     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; vendor preset: enabled)\n"
-                    "     Active: active (running) since Thu 2026-08-30 17:08:42 UTC; 43 days ago\n"
+                    f"     Active: active (running) since {boot + timedelta(seconds=20):%a %Y-%m-%d %H:%M:%S} UTC; {clock.days_ago_since(boot)}\n"
                     "       Docs: man:sshd(8)\n"
                     "              man:sshd_config(5)\n"
                     "   Main PID: 651 (sshd)\n"
@@ -1115,40 +1144,40 @@ class LLMClient:
                 if "-la" in user_msg or "-l" in user_msg:
                     return (
                         "total 268\n"
-                        "drwxr-xr-x 12 ubuntu www-data  4096 Oct 11 18:30 .\n"
-                        "drwxr-xr-x  4 root   root      4096 Aug 30 17:10 ..\n"
-                        "-rw-r--r--  1 ubuntu www-data   712 Oct 11 18:30 .env\n"
-                        "drwxr-xr-x  8 ubuntu www-data  4096 Oct 11 18:29 .git\n"
-                        "-rw-r--r--  1 ubuntu www-data   258 Aug 30 17:10 .gitignore\n"
-                        "drwxr-xr-x  6 ubuntu www-data  4096 Aug 30 17:10 app\n"
-                        "-rw-r--r--  1 ubuntu www-data  1743 Aug 30 17:10 artisan\n"
-                        "drwxr-xr-x  3 ubuntu www-data  4096 Aug 30 17:10 bootstrap\n"
-                        "-rw-r--r--  1 ubuntu www-data  2134 Oct  8 14:20 composer.json\n"
-                        "-rw-r--r--  1 ubuntu www-data 211450 Oct  8 14:20 composer.lock\n"
-                        "drwxr-xr-x  2 ubuntu www-data  4096 Aug 30 17:10 config\n"
-                        "drwxr-xr-x  5 ubuntu www-data  4096 Aug 30 17:10 database\n"
-                        "-rw-r--r--  1 ubuntu www-data   473 Aug 30 17:10 package.json\n"
-                        "drwxr-xr-x  2 ubuntu www-data  4096 Aug 30 17:10 public\n"
-                        "drwxr-xr-x  6 ubuntu www-data  4096 Aug 30 17:10 resources\n"
-                        "drwxr-xr-x  2 ubuntu www-data  4096 Aug 30 17:10 routes\n"
-                        "drwxr-xr-x  5 ubuntu www-data  4096 Aug 30 17:10 storage\n"
-                        "drwxr-xr-x 41 ubuntu www-data  4096 Oct  8 14:21 vendor"
+                        f"drwxr-xr-x 12 ubuntu www-data  4096 {clock.ls_time(deployed)} .\n"
+                        f"drwxr-xr-x  4 root   root      4096 {clock.ls_time(installed)} ..\n"
+                        f"-rw-r--r--  1 ubuntu www-data   712 {clock.ls_time(deployed)} .env\n"
+                        f"drwxr-xr-x  8 ubuntu www-data  4096 {clock.ls_time(deployed - timedelta(minutes=1))} .git\n"
+                        f"-rw-r--r--  1 ubuntu www-data   258 {clock.ls_time(installed)} .gitignore\n"
+                        f"drwxr-xr-x  6 ubuntu www-data  4096 {clock.ls_time(installed)} app\n"
+                        f"-rw-r--r--  1 ubuntu www-data  1743 {clock.ls_time(installed)} artisan\n"
+                        f"drwxr-xr-x  3 ubuntu www-data  4096 {clock.ls_time(installed)} bootstrap\n"
+                        f"-rw-r--r--  1 ubuntu www-data  2134 {clock.ls_time(composer)} composer.json\n"
+                        f"-rw-r--r--  1 ubuntu www-data 211450 {clock.ls_time(composer)} composer.lock\n"
+                        f"drwxr-xr-x  2 ubuntu www-data  4096 {clock.ls_time(installed)} config\n"
+                        f"drwxr-xr-x  5 ubuntu www-data  4096 {clock.ls_time(installed)} database\n"
+                        f"-rw-r--r--  1 ubuntu www-data   473 {clock.ls_time(installed)} package.json\n"
+                        f"drwxr-xr-x  2 ubuntu www-data  4096 {clock.ls_time(installed)} public\n"
+                        f"drwxr-xr-x  6 ubuntu www-data  4096 {clock.ls_time(installed)} resources\n"
+                        f"drwxr-xr-x  2 ubuntu www-data  4096 {clock.ls_time(installed)} routes\n"
+                        f"drwxr-xr-x  5 ubuntu www-data  4096 {clock.ls_time(installed)} storage\n"
+                        f"drwxr-xr-x 41 ubuntu www-data  4096 {clock.ls_time(composer + timedelta(minutes=1))} vendor"
                     )
                 return "app  artisan  bootstrap  composer.json  composer.lock  config  database  package.json  public  resources  routes  storage  vendor"
             if "-la" in user_msg or "-l" in user_msg or "-al" in user_msg:
                 return (
                     "total 44\n"
-                    "drwxr-xr-x 6 ubuntu ubuntu 4096 Oct 12 01:00 .\n"
-                    "drwxr-xr-x 4 root   root   4096 Aug 30 17:08 ..\n"
-                    "-rw------- 1 ubuntu ubuntu 2841 Oct 12 01:42 .bash_history\n"
+                    f"drwxr-xr-x 6 ubuntu ubuntu 4096 {clock.ls_time(login)} .\n"
+                    f"drwxr-xr-x 4 root   root   4096 {clock.ls_time(boot)} ..\n"
+                    f"-rw------- 1 ubuntu ubuntu 2841 {clock.ls_time(login)} .bash_history\n"
                     "-rw-r--r-- 1 ubuntu ubuntu  220 Apr 15  2024 .bash_logout\n"
                     "-rw-r--r-- 1 ubuntu ubuntu 3771 Apr 15  2024 .bashrc\n"
-                    "drwx------ 2 ubuntu ubuntu 4096 Aug 30 17:10 .cache\n"
-                    "-rw------- 1 ubuntu ubuntu  124 Oct  8 14:15 .mysql_history\n"
-                    "drwxrwxr-x 6 ubuntu ubuntu 4096 Aug 30 18:45 .pm2\n"
+                    f"drwx------ 2 ubuntu ubuntu 4096 {clock.ls_time(installed)} .cache\n"
+                    f"-rw------- 1 ubuntu ubuntu  124 {clock.ls_time(composer - timedelta(minutes=5))} .mysql_history\n"
+                    f"drwxrwxr-x 6 ubuntu ubuntu 4096 {clock.ls_time(installed + timedelta(minutes=95))} .pm2\n"
                     "-rw-r--r-- 1 ubuntu ubuntu  807 Apr 15  2024 .profile\n"
-                    "drwx------ 2 ubuntu ubuntu 4096 Aug 30 17:08 .ssh\n"
-                    "drwxrwxr-x 3 ubuntu ubuntu 4096 Aug 30 17:10 .local"
+                    f"drwx------ 2 ubuntu ubuntu 4096 {clock.ls_time(boot)} .ssh\n"
+                    f"drwxrwxr-x 3 ubuntu ubuntu 4096 {clock.ls_time(installed)} .local"
                 )
             return ".bash_history  .bash_logout  .bashrc  .cache  .local  .mysql_history  .pm2  .profile  .ssh"
 
@@ -1197,13 +1226,17 @@ class LLMClient:
 
         # --- journalctl ---
         if "journalctl" in user_msg:
+            def j(minutes_ago):
+                t = (now - timedelta(minutes=minutes_ago)).replace(microsecond=0)
+                return f"{t:%b} {t.day:2d} {t:%H:%M:%S}"
+
             return (
-                "-- Journal begins at Thu 2026-08-30 17:08:42 UTC, ends at Sat 2026-10-12 02:30:14 UTC. --\n"
-                "Oct 12 02:25:01 prod-api-node-01 CRON[4012]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)\n"
-                "Oct 12 02:28:14 prod-api-node-01 sshd[3201]: Accepted publickey for ubuntu from 10.0.4.1 port 58420 ssh2: ED25519 SHA256:q3Vt8mK1zR6wL9xN2bP5cH7jF0sD4aG1eY8uT3iO6rM\n"
-                "Oct 12 02:28:14 prod-api-node-01 sshd[3201]: pam_unix(sshd:session): session opened for user ubuntu(uid=1000) by (uid=0)\n"
-                "Oct 12 02:28:14 prod-api-node-01 systemd-logind[498]: New session 14 of user ubuntu.\n"
-                "Oct 12 02:30:01 prod-api-node-01 CRON[4098]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)"
+                f"-- Journal begins at {boot:%a %Y-%m-%d %H:%M:%S} UTC, ends at {now:%a %Y-%m-%d %H:%M:%S} UTC. --\n"
+                f"{j(9)} prod-api-node-01 CRON[4012]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)\n"
+                f"{j(4)} prod-api-node-01 sshd[3201]: Accepted publickey for ubuntu from 10.0.4.1 port 58420 ssh2: ED25519 SHA256:q3Vt8mK1zR6wL9xN2bP5cH7jF0sD4aG1eY8uT3iO6rM\n"
+                f"{j(4)} prod-api-node-01 sshd[3201]: pam_unix(sshd:session): session opened for user ubuntu(uid=1000) by (uid=0)\n"
+                f"{j(4)} prod-api-node-01 systemd-logind[498]: New session 14 of user ubuntu.\n"
+                f"{j(0)} prod-api-node-01 CRON[4098]: (ubuntu) CMD (/usr/bin/curl -sf http://localhost:3000/health > /dev/null || /usr/bin/systemctl restart pm2-ubuntu)"
             )
 
         # --- find ---

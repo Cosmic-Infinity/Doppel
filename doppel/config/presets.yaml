@@ -7,7 +7,8 @@
 #
 # Prompt placeholders: {user}, {hostname} (short name, like bash's \h),
 #   {cwd} (full path with ~, like \w), {cwd_base} (last component, like \W).
-# MOTD placeholders: {date} (current time), {last_login} ("Last login: ... from ...").
+# MOTD placeholders: {date} (current time), {last_login} ("Last login: ... from ..."),
+# {sysload}, {processes}, {mem_usage} (values that vary slightly per login).
 #
 # Selected with active_preset in config.yaml (hot-reloadable from the dashboard).
 
@@ -36,9 +37,9 @@ presets:
 
        System information as of {date}
 
-        System load:  0.18               Processes:             112
+        System load:  {sysload}               Processes:             {processes}
         Usage of /:   37.6% of 48.29GB   Users logged in:       1
-        Memory usage: 41%                IPv4 address for eth0: 10.0.4.15
+        Memory usage: {mem_usage}                IPv4 address for eth0: 10.0.4.15
         Swap usage:   0%
 
       Expanded Security Maintenance for Applications is not enabled.

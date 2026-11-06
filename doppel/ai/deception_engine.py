@@ -1,8 +1,10 @@
 import re
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple, Union
 from doppel.ai.llm_client import LLMClient
-from doppel.ai.prompts.deception_prompts import build_deception_system_prompt
+from doppel.ai.prompts.deception_prompts import build_clock_context, build_deception_system_prompt
+from doppel.core import clock
 from doppel.router.hybrid_router import COMMON_BINARIES
 if TYPE_CHECKING:
     from doppel.core.fake_filesystem import FakeFilesystem
@@ -54,6 +56,7 @@ class DeceptionEngine:
     ):
         self.llm_client = llm_client
         self.persona = persona
+        clock.set_persona(persona)
         self.system_prompt = build_deception_system_prompt(persona)
         self.host_profile: Dict[str, str] = dict(DEFAULT_HOST_PROFILE)
         self.dynamic_honeytokens = dynamic_honeytokens
@@ -64,6 +67,7 @@ class DeceptionEngine:
         """Switch persona; the system prompt is derived from it, so rebuild it too."""
         if persona and persona != self.persona:
             self.persona = persona
+            clock.set_persona(persona)
             self.system_prompt = build_deception_system_prompt(persona)
 
     def set_host_profile(self, profile: Dict[str, Any]):
@@ -256,13 +260,14 @@ class DeceptionEngine:
             fields = [f for f in _UNAME_FIELDS if f in wanted] or ["s"]
         return " ".join(values[f] for f in fields)
 
-    def deterministic_posix_response(self, command: str, user: str = "ubuntu") -> Optional[str]:
+    def deterministic_posix_response(self, command: str, user: str = "ubuntu", login_time: Optional[str] = None) -> Optional[str]:
         """
         Answer simple identity commands locally, without the model.
 
         Only plain invocations are handled; anything a shell would interpret
         (chaining, pipes, redirection, expansion, quoting) returns None so the
         whole command line goes to the sandbox or the model instead.
+        `login_time` (ISO 8601) is when the session started, shown by who.
         """
         cmd_clean = command.strip()
         if not cmd_clean:
@@ -282,22 +287,25 @@ class DeceptionEngine:
         hostname = self.host_profile["hostname"]
 
         if binary == "who":
+            login = clock.parse_iso(login_time) or (clock.now() - timedelta(minutes=4))
+            boot = clock.boot_time(self.persona)
+            session_line = f"{user}   pts/0        {login:%Y-%m-%d %H:%M} (10.0.4.1)"
             # who am i / who am I / who mom likes
             if len(args) == 2 and (
                 (args[0].lower() == "am" and args[1].lower() == "i")
                 or (args[0].lower() == "mom" and args[1].lower() == "likes")
             ):
-                return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
+                return session_line
             if not args:
-                return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
+                return session_line
             if len(args) == 1 and args[0] in ("-a", "-b", "-d", "-h", "-H", "-l", "-m", "-p", "-q", "-r", "-s", "-t", "-T", "-u"):
                 if args[0] == "-q":
                     return f"{user}\n# users=1"
                 if args[0] == "-b":
-                    return "         system boot  2026-08-30 18:20"
+                    return f"         system boot  {boot:%Y-%m-%d %H:%M}"
                 if args[0] == "-r":
-                    return "         run-level 5  2026-08-30 18:20"
-                return f"{user}   pts/0        2026-10-15 02:40 (10.0.4.1)"
+                    return f"         run-level 5  {boot:%Y-%m-%d %H:%M}"
+                return session_line
             return f"who: extra operand '{args[0]}'\nTry 'who --help' for more information."
 
         if binary == "whoami":
@@ -379,10 +387,11 @@ class DeceptionEngine:
         fake_fs: Optional["FakeFilesystem"] = None,
         session_id: Optional[str] = None,
         return_reasoning: bool = False,
+        login_time: Optional[str] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Generate authentic simulated output for a command in the current session context."""
         # Fast path: Check deterministic POSIX response first (no LLM call needed)
-        deterministic = self.deterministic_posix_response(command, user=user)
+        deterministic = self.deterministic_posix_response(command, user=user, login_time=login_time)
         if deterministic is not None:
             if return_reasoning:
                 return deterministic, None
@@ -396,8 +405,8 @@ class DeceptionEngine:
                     return cached_sim, "Session FakeFilesystem cached read"
                 return cached_sim
 
-        # Build system prompt — append fake filesystem state when it exists
-        system_prompt = self.system_prompt
+        # Build system prompt with the current clock, then the fake filesystem state when it exists
+        system_prompt = self.system_prompt + "\n\n" + build_clock_context(self.persona, login_time)
         if fake_fs:
             fs_block = fake_fs.build_context_block()
             if fs_block:
@@ -492,6 +501,7 @@ class DeceptionEngine:
         cwd: str = "/home/ubuntu",
         session_id: Optional[str] = None,
         return_reasoning: bool = False,
+        login_time: Optional[str] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Tier 2: Transform real Linux sandbox output with persona camouflage and canary honeytokens."""
         from doppel.ai.prompts.deception_prompts import build_grounded_transformation_prompt
@@ -502,7 +512,7 @@ class DeceptionEngine:
             real_stdout=real_stdout,
             real_stderr=real_stderr,
             exit_code=exit_code,
-        )
+        ) + "\n\n" + build_clock_context(self.persona, login_time)
 
         # Inject dynamic canary honeytokens if applicable
         cmd_lower = command.lower()

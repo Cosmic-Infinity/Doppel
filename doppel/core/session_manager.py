@@ -288,6 +288,7 @@ class SessionManager:
                         cwd=session.cwd,
                         session_id=session.session_id,
                         return_reasoning=True,
+                        login_time=session.start_time,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Grounded command '{cmd_clean}' timed out in sandbox; falling back to LLM synthesis")
@@ -299,6 +300,7 @@ class SessionManager:
                         fake_fs=session.fake_fs,
                         session_id=session.session_id,
                         return_reasoning=True,
+                        login_time=session.start_time,
                     )
                 if session.fake_fs:
                     mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
@@ -328,6 +330,7 @@ class SessionManager:
                         fake_fs=session.fake_fs,
                         session_id=session.session_id,
                         return_reasoning=True,
+                        login_time=session.start_time,
                     )
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:

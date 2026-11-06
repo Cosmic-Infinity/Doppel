@@ -10,8 +10,13 @@ from doppel.config import DoppelConfig, get_active_preset
 from doppel.core.session_manager import SessionManager, SessionState
 from doppel.core.credential_analyzer import CredentialAnalyzer
 from doppel.core.geoip import enrich as geoip_enrich, format_summary as geoip_summary
+from doppel.core import clock
 
 logger = logging.getLogger("doppel.ssh")
+
+# Seconds field of the previous login shown in the banner; fixed per process so
+# repeated logins agree with each other, but not a constant across deployments.
+_LAST_LOGIN_SECOND = __import__("random").randint(0, 59)
 
 # One shared analyzer instance — stateless, safe to reuse across connections
 _credential_analyzer = CredentialAnalyzer()
@@ -506,15 +511,15 @@ class DoppelSSHServer(asyncssh.SSHServer):
 
 
 def _render_motd(motd: str, preset: dict) -> str:
-    """Fill the {date} and {last_login} placeholders of a login banner."""
+    """Fill the time and system-status placeholders of a login banner."""
     if not motd:
         return ""
-    from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)
-    # The persona's admin was last on earlier the same day (or the evening before)
-    previous = now.replace(hour=8, minute=42, second=17, microsecond=0)
-    if previous >= now:
-        previous = (now - timedelta(days=1)).replace(hour=23, minute=42, second=17, microsecond=0)
+    import random
+    from datetime import timedelta
+    now = clock.now()
+    # The previous interactive login: yesterday afternoon, matching the
+    # session history that last(1) reports (seconds vary per process start)
+    previous = (now - timedelta(days=1)).replace(hour=14, minute=15, second=_LAST_LOGIN_SECOND, microsecond=0)
 
     def stamp(dt):  # "Wed Nov  4 10:15:02 UTC 2026", ctime-style with padded day
         return f"{dt:%a %b} {dt.day:>2} {dt:%H:%M:%S}"
@@ -524,6 +529,9 @@ def _render_motd(motd: str, preset: dict) -> str:
         motd.rstrip("\n")
         .replace("{date}", f"{stamp(now)} UTC {now.year}")
         .replace("{last_login}", last_login)
+        .replace("{sysload}", f"{random.uniform(0.05, 0.35):.2f}".ljust(4))
+        .replace("{processes}", str(random.randint(106, 124)))
+        .replace("{mem_usage}", f"{random.randint(38, 45)}%")
     )
 
 
