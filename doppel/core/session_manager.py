@@ -17,6 +17,11 @@ from doppel.analytics.reporter import IncidentReporter
 from doppel.core.fake_filesystem import FakeFilesystem
 from doppel.analytics.profiler import AttackerProfiler, ProfilerState
 from doppel.alerts.email import EmailAlerter
+from doppel.ai.prompt_shield import (
+    detect_prompt_injection,
+    PROMPT_INJECTION_THREAT_META,
+    get_posix_syntax_error,
+)
 
 logger = logging.getLogger("doppel.core.session")
 
@@ -415,6 +420,9 @@ class SessionManager:
                 if route_reason == "dos_containment":
                     output = "Killed\n"
                     reasoning = "DoS containment: simulated process termination"
+                elif route_reason == "prompt_injection_defense":
+                    output = get_posix_syntax_error(cmd_clean)
+                    reasoning = "Adversarial prompt injection detected and neutralized by prompt shield"
                 else:
                     output, reasoning = await self.deception_engine.generate_command_output(
                         command=cmd_clean,
@@ -528,25 +536,48 @@ class SessionManager:
             logger.error(f"Failed to log command to DB: {db_err}")
 
         # 6. Background MITRE analysis & profiling
-        task = asyncio.create_task(
-            self._analyze_and_record(
-                session=session,
-                command=cmd_clean,
-                output=output,
-                decision=decision.value if hasattr(decision, "value") else str(decision),
-                cmd_id=cmd_id,
-                keystroke_timestamps=keystroke_timestamps,
-                cmd_ts=completed_mono,
-                history_snapshot=[h["command"] for h in session.history],
-                log_fields={
-                    "cwd": prompt_cwd,
-                    "timestamp": received_at,
-                    "duration_ms": duration_ms,
-                    "prompt_user": prompt_user,
-                    "reasoning": cmd_reasoning,
-                },
-            )
-        )
+        # task = asyncio.create_task(
+        #     self._analyze_and_record(
+        #         session=session,
+        #         command=cmd_clean,
+        #         output=output,
+        #         decision=decision.value if hasattr(decision, "value") else str(decision),
+        #         cmd_id=cmd_id,
+        #         keystroke_timestamps=keystroke_timestamps,
+        #         cmd_ts=completed_mono,
+        #         history_snapshot=[h["command"] for h in session.history],
+        #         log_fields={
+        #             "cwd": prompt_cwd,
+        #             "timestamp": received_at,
+        #             "duration_ms": duration_ms,
+        #             "prompt_user": prompt_user,
+        #             "reasoning": cmd_reasoning,
+        #         },
+        #     )
+        # )
+          threat_override = dict(PROMPT_INJECTION_THREAT_META) if route_reason == "prompt_injection_defense" else None
+
+          task = asyncio.create_task(
+              self._analyze_and_record(
+                  session=session,
+                  command=cmd_clean,
+                  output=output,
+                  decision=decision.value if hasattr(decision, "value") else str(decision),
+                  cmd_id=cmd_id,
+                  keystroke_timestamps=keystroke_timestamps,
+                  cmd_ts=completed_mono,
+                  history_snapshot=[h["command"] for h in session.history],
+                  log_fields={
+                      "cwd": prompt_cwd,
+                      "timestamp": received_at,
+                      "duration_ms": duration_ms,
+                      "prompt_user": prompt_user,
+                      "reasoning": cmd_reasoning,
+                  },
+                  threat_override=threat_override,
+              )
+          )
+
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
@@ -627,23 +658,39 @@ class SessionManager:
         cmd_ts: Optional[float] = None,
         history_snapshot: Optional[List[str]] = None,
         log_fields: Optional[Dict[str, Any]] = None,
+        threat_override: Optional[Dict[str, Any]] = None,
+
     ):
         # This runs in the background, so later commands may already have been
         # appended to session.history. Use the values captured for this command.
         fields = log_fields or {}
         try:
             threat_meta = None
-            if self.config.analytics.enable_mitre_tagging:
-                threat_meta = await self.observer.analyze_command(
-                    session_id=session.session_id,
-                    command=command,
-                    cwd=fields.get("cwd", session.cwd),
-                    user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
-                    session_history=(
-                        history_snapshot if history_snapshot is not None
-                        else [h["command"] for h in session.history]
-                    ),
-                )
+            # if self.config.analytics.enable_mitre_tagging:
+            #     threat_meta = await self.observer.analyze_command(
+            #         session_id=session.session_id,
+            #         command=command,
+            #         cwd=fields.get("cwd", session.cwd),
+            #         user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
+            #         session_history=(
+            #             history_snapshot if history_snapshot is not None
+            #             else [h["command"] for h in session.history]
+            #         ),
+            #     )
+              if threat_override:
+                  threat_meta = threat_override
+              elif self.config.analytics.enable_mitre_tagging:
+                  threat_meta = await self.observer.analyze_command(
+                      session_id=session.session_id,
+                      command=command,
+                      cwd=fields.get("cwd", session.cwd),
+                      user=fields.get("prompt_user") or getattr(session, "effective_user", session.username),
+                      session_history=(
+                          history_snapshot if history_snapshot is not None
+                          else [h["command"] for h in session.history]
+                      ),
+                  )
+
                 if threat_meta:
                     session.threat_score = max(session.threat_score, threat_meta.get("threat_score", 0))
                     self._notify("threat_analyzed", {

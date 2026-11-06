@@ -3,6 +3,7 @@ import shlex
 import logging
 from enum import Enum
 from typing import Tuple, Set, List, Optional
+from doppel.ai.prompt_shield import detect_prompt_injection
 
 logger = logging.getLogger("doppel.router")
 
@@ -322,6 +323,9 @@ class HybridRouter:
         # 1. Shell built-ins answered from session state
         if binary in {"cd", "exit", "logout", "clear", "pwd"}:
             return RouteDecision.BUILTIN, binary
+
+        if detect_prompt_injection(cmd_clean):
+            return RouteDecision.LLM_DECEPTION, "prompt_injection_defense"
 
         # 2. Check for DoS / fork bomb payloads (Tier 3 Containment)
         for pattern in DOS_CONTAINMENT_PATTERNS:

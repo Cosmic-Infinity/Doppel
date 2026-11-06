@@ -8,6 +8,7 @@ from doppel.ai.prompts.threat_prompts import (
     build_command_analysis_prompt,
 )
 from doppel.analytics.db import TelemetryDB
+from doppel.ai.prompt_shield import detect_prompt_injection, PROMPT_INJECTION_THREAT_META
 
 logger = logging.getLogger("doppel.analytics.observer")
 
@@ -198,6 +199,10 @@ class ThreatObserver:
         """Analyze attacker command and return structured MITRE threat intelligence."""
         cmd_clean = command.strip()
         cmd_lower = cmd_clean.lower()
+        # Check prompt injection shield before any LLM call
+        if detect_prompt_injection(cmd_clean):
+            logger.warning(f"[PROMPT SHIELD] Neutralized prompt injection: {cmd_clean[:80]!r}")
+            return dict(PROMPT_INJECTION_THREAT_META)
 
         # Fast-Path Rulebook Check: Bypass LLM for standard simple recon commands (< 1 ms)
         is_compound = any(sep in cmd_clean for sep in ("|", ">", "<", ";", "&&", "||", "`", "$("))
