@@ -37,6 +37,8 @@ deception:
   intercept_sensitive_files: true
   intercept_missing_tools: true
   dynamic_honeytokens: true
+  # When true, sensitive commands and missing tools route to AI deception even from safe IPs (useful for testing)
+  enforce_for_safe_ips: false
   # Public address of the HTTP decoy, used in leaked canary URLs so that stolen
   # tokens reach /auth/v1/verify. Empty: derived from honeypot host + http_sensor_port.
   canary_base_url: ""

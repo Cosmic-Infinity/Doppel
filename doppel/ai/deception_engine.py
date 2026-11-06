@@ -106,9 +106,9 @@ class DeceptionEngine:
     def failure_output(command: str) -> str:
         """
         What to show when no believable output could be produced (LLM error,
-        timeout, or a suppressed leak). Utilities every server has print
-        nothing, which is far less suspicious than claiming cat or echo does
-        not exist; anything else gets the usual bash error.
+        timeout, or a suppressed leak). Common POSIX tools fail silently rather
+        than printing 'command not found', which would expose that the system
+        is an incomplete simulation.
         """
         tokens = command.strip().split()
         if not tokens:
@@ -387,6 +387,15 @@ class DeceptionEngine:
             if return_reasoning:
                 return deterministic, None
             return deterministic
+
+        # Check if FakeFilesystem has previously cached/stored this file content for session consistency
+        if fake_fs and hasattr(fake_fs, "read_file_simulated"):
+            cached_sim = fake_fs.read_file_simulated(command, cwd=cwd)
+            if cached_sim is not None:
+                if return_reasoning:
+                    return cached_sim, "Session FakeFilesystem cached read"
+                return cached_sim
+
         # Build system prompt — append fake filesystem state when it exists
         system_prompt = self.system_prompt
         if fake_fs:
@@ -434,22 +443,43 @@ class DeceptionEngine:
         ]
 
         try:
-            raw_response = await self.llm_client.chat_completion(
+            metrics = await self.llm_client.chat_completion_with_metrics(
                 messages=messages,
                 temperature=0.2,
                 frequency_penalty=0.4,
                 stop=stop_tokens,
             )
+            raw_response = metrics["content"]
+            is_fallback = metrics.get("fallback", False) or getattr(self.llm_client, "mock_mode", False)
             stripped_text, reasoning = self.extract_reasoning(raw_response)
             cleaned = self._clean_output(stripped_text, command=command, user=user)
+
+            if is_fallback:
+                fallback_note = "Deterministic synthetic fallback"
+                reasoning = f"{reasoning}\n[{fallback_note}]" if reasoning else fallback_note
+
+            # If this command read a file and produced output, cache it into FakeFS for session consistency
+            if fake_fs and cleaned and hasattr(fake_fs, "set_file"):
+                tokens = command.strip().split()
+                if tokens and tokens[0].rsplit("/", 1)[-1].lower() in ("cat", "more", "less", "head", "tail"):
+                    file_args = [a for a in tokens[1:] if not a.startswith("-")]
+                    if len(file_args) == 1:
+                        fake_fs.set_file(file_args[0], cleaned, cwd=cwd)
+
             if return_reasoning:
                 return cleaned, reasoning
             return cleaned
         except Exception as e:
             logger.error(f"Error generating deception output: {e}")
             fallback = self.failure_output(command)
+            if fake_fs and fallback and hasattr(fake_fs, "set_file"):
+                tokens = command.strip().split()
+                if tokens and tokens[0].rsplit("/", 1)[-1].lower() in ("cat", "more", "less", "head", "tail"):
+                    file_args = [a for a in tokens[1:] if not a.startswith("-")]
+                    if len(file_args) == 1:
+                        fake_fs.set_file(file_args[0], fallback, cwd=cwd)
             if return_reasoning:
-                return fallback, None
+                return fallback, "Fallback output generated after error"
             return fallback
 
     async def transform_grounded_output(

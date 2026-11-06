@@ -39,6 +39,7 @@ class DeceptionSettings(BaseModel):
     intercept_sensitive_files: bool = True
     intercept_missing_tools: bool = True
     dynamic_honeytokens: bool = True
+    enforce_for_safe_ips: bool = False
     # Base URL of the HTTP decoy as attackers can reach it, used in leaked canary
     # URLs (e.g. "http://203.0.113.10:8080"). Empty: derived from the honeypot
     # host and HTTP sensor port.

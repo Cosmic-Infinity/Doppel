@@ -331,6 +331,12 @@ class SessionManager:
                     )
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:
+                    read_tokens = cmd_clean.split()
+                    if read_tokens and read_tokens[0].rsplit("/", 1)[-1].lower() in ("cat", "more", "less", "head", "tail"):
+                        file_args = [a for a in read_tokens[1:] if not a.startswith("-")]
+                        if len(file_args) == 1 and output:
+                            session.fake_fs.set_file(file_args[0], output, cwd=session.cwd)
+
                     mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
                     if mutated and session.container_id and self.sandbox_manager.is_available:
                         for fpath in mutated:

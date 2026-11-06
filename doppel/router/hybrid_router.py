@@ -1,7 +1,8 @@
 import re
+import shlex
 import logging
 from enum import Enum
-from typing import Tuple, Set, Optional
+from typing import Tuple, Set, List, Optional
 
 logger = logging.getLogger("doppel.router")
 
@@ -13,10 +14,28 @@ class RouteDecision(Enum):
     LLM_DECEPTION = "llm_deception"
 
 
-# Sensitive file patterns that should trigger deception/honeytokens rather than real file reads
-SENSITIVE_TARGETS: Set[str] = {
+# Sensitive credential and honeytoken target files that must ALWAYS route directly to LLM_DECEPTION
+CREDENTIAL_TARGETS: Set[str] = {
     "/etc/shadow",
     "/etc/passwd",
+    ".env",
+    "wp-config.php",
+    "config.php",
+    "config.json",
+    "config.yaml",
+    "id_rsa",
+    "id_dsa",
+    "id_ed25519",
+    "authorized_keys",
+    ".aws/credentials",
+    ".aws/config",
+    ".bash_history",
+    "database.yml",
+    "settings.py",
+}
+
+# Container files that need grounded inspection camouflage (transformed via real stdout/stderr)
+CONTAINER_CAMOUFLAGE_TARGETS: Set[str] = {
     "/etc/os-release",
     "/etc/issue",
     "/etc/lsb-release",
@@ -30,38 +49,93 @@ SENSITIVE_TARGETS: Set[str] = {
     "/sys/fs/cgroup",
     "mountinfo",
     "/.dockerenv",
-    ".env",
-    "wp-config.php",
-    "config.json",
-    "config.yaml",
-    "id_rsa",
-    "id_ed25519",
-    "authorized_keys",
-    ".aws/credentials",
-    ".aws/config",
-    ".bash_history",
-    "credentials",
-    "password",
-    "secret",
-    "token",
-    "database.yml",
-    "settings.py",
 }
 
-# Advanced attacker tools to simulate with LLM if missing from standard minimal container
+# Retain SENSITIVE_TARGETS for backward compatibility
+SENSITIVE_TARGETS: Set[str] = CREDENTIAL_TARGETS | CONTAINER_CAMOUFLAGE_TARGETS
+
+# Advanced attacker and penetration-testing tools to simulate with LLM
 DECEPTION_TOOLS: Set[str] = {
     "nmap",
-    "linpeas",
-    "linpeas.sh",
-    "sqlmap",
+    "masscan",
+    "netcat",
+    "nc",
     "hydra",
-    "john",
+    "sqlmap",
     "nikto",
     "gobuster",
-    "dirb",
+    "dirsearch",
+    "ffuf",
+    "linpeas",
+    "linpeas.sh",
+    "linenum",
+    "linenum.sh",
+    "enum4linux",
     "metasploit",
     "msfconsole",
+    "tcpdump",
+    "wireshark",
+    "john",
+    "dirb",
 }
+
+# Command wrappers that prefix executed binaries
+COMMON_WRAPPERS: Set[str] = {
+    "sudo", "doas", "nohup", "time", "busybox", "env", "exec", "xargs", "command"
+}
+
+
+def extract_effective_command(cmd_clean: str) -> Tuple[str, List[str]]:
+    """
+    Extract the effective executable binary and tokens, unwrapping common wrappers
+    such as sudo, nohup, env, etc., and stripping directory paths.
+    """
+    try:
+        tokens = shlex.split(cmd_clean)
+    except Exception:
+        tokens = cmd_clean.split()
+    if not tokens:
+        return "", []
+
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx].rsplit("/", 1)[-1].lower()
+        if token in COMMON_WRAPPERS:
+            idx += 1
+            # Skip options to the wrapper (e.g. sudo -u root, sudo -i, env -i)
+            while idx < len(tokens) and tokens[idx].startswith("-"):
+                if tokens[idx] in ("-u", "-g", "-C", "-D", "-h", "-p", "-a"):
+                    idx += 2
+                else:
+                    idx += 1
+            # Skip environment assignments (e.g. env FOO=bar ...)
+            while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
+                idx += 1
+            continue
+        break
+
+    if idx >= len(tokens):
+        return tokens[0].rsplit("/", 1)[-1].lower(), tokens[1:]
+
+    effective_binary = tokens[idx].rsplit("/", 1)[-1].lower()
+    return effective_binary, tokens[idx:]
+
+
+def is_deception_tool(cmd_clean: str) -> bool:
+    """Check if the command invokes a known penetration testing or reconnaissance tool."""
+    effective_binary, tokens = extract_effective_command(cmd_clean)
+    if effective_binary in DECEPTION_TOOLS:
+        return True
+    # If wrapped in a script runner (python3 script.py, bash script.sh)
+    if effective_binary in ("python", "python3", "bash", "sh", "perl", "ruby"):
+        for arg in tokens[1:]:
+            script_name = arg.rsplit("/", 1)[-1].lower()
+            if script_name in DECEPTION_TOOLS:
+                return True
+            stem = script_name.rsplit(".", 1)[0]
+            if stem in DECEPTION_TOOLS:
+                return True
+    return False
 
 # Utilities any server of the personas has installed. When no believable output
 # can be produced for these, printing nothing is safer than "command not found".
@@ -150,6 +224,7 @@ class HybridRouter:
         sandbox_available: bool = False,
         benign_commands: Optional[Set[str]] = None,
         safe_ip_mode: bool = False,
+        enforce_for_safe_ips: bool = False,
     ):
         self.intercept_sensitive_files = intercept_sensitive_files
         self.intercept_missing_tools = intercept_missing_tools
@@ -158,6 +233,8 @@ class HybridRouter:
         self.benign_commands: Set[str] = benign_commands or set()
         # When True, ALL commands go to sandbox — no deception at all
         self.safe_ip_mode = safe_ip_mode
+        # When True, enforce AI deception for sensitive commands & missing tools even from safe IPs (useful for testing)
+        self.enforce_for_safe_ips = enforce_for_safe_ips
 
     def classify_command(self, raw_cmd: str, is_safe_ip: Optional[bool] = None) -> Tuple[RouteDecision, str]:
         """Determine whether to handle internally, execute in sandbox, or intercept with LLM."""
@@ -167,14 +244,15 @@ class HybridRouter:
 
         tokens = cmd_clean.split()
         binary = tokens[0].lower()
+        effective_binary, effective_tokens = extract_effective_command(cmd_clean)
 
         # 1. Shell built-ins answered from session state
         if binary in {"cd", "exit", "logout", "clear", "pwd"}:
             return RouteDecision.BUILTIN, binary
 
-        # 2. Safe-IP mode: bypass all deception for trusted admin connections
+        # 2. Safe-IP mode: bypass all deception for trusted admin connections unless test enforcement is enabled
         safe_ip_active = self.safe_ip_mode if is_safe_ip is None else is_safe_ip
-        if safe_ip_active and self.sandbox_available:
+        if safe_ip_active and not self.enforce_for_safe_ips and self.sandbox_available:
             return RouteDecision.SANDBOX, "safe_ip_passthrough"
 
         # 3. Check for DoS / fork bomb payloads (Tier 3 Containment)
@@ -187,43 +265,51 @@ class HybridRouter:
             return RouteDecision.LLM_DECEPTION, "payload_download"
 
         # 5. Check for missing/specialized penetration testing tools (Tier 3 Simulation)
-        if self.intercept_missing_tools and any(tool in binary for tool in DECEPTION_TOOLS):
+        if self.intercept_missing_tools and is_deception_tool(cmd_clean):
             return RouteDecision.LLM_DECEPTION, "deception_tool"
 
         # 5b. Network clients and package downloads are simulated (sandbox has no network)
-        if binary in NETWORK_TOOLS or (
-            len(tokens) > 1 and tokens[1].lower() in NETWORK_SUBCOMMANDS.get(binary, ())
+        if effective_binary in NETWORK_TOOLS or (
+            len(effective_tokens) > 1 and effective_tokens[1].lower() in NETWORK_SUBCOMMANDS.get(effective_binary, ())
         ):
             return RouteDecision.LLM_DECEPTION, "network_simulated"
 
         # 5c. Login/session reports reflect the attacker's own connection
-        if binary in SESSION_INFO_COMMANDS:
+        if effective_binary in SESSION_INFO_COMMANDS:
             return RouteDecision.LLM_DECEPTION, "session_info"
 
-        # 6. Check if command touches sensitive files or honeytokens (Tier 2 Grounded if container available)
+        # 6. Check if command touches sensitive files or honeytokens
         if self.intercept_sensitive_files:
             cmd_lower = cmd_clean.lower()
 
-            # Regex search for active credential harvesting attempts (e.g. grep -i password)
-            if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or ("find" in binary and ("perm" in cmd_lower or "pass" in cmd_lower)):
+            # Priority 6a: Credential and honeytoken target files ALWAYS invoke pure LLM_DECEPTION directly
+            for pattern in CREDENTIAL_TARGETS:
+                if pattern in cmd_lower:
+                    return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
+
+            # Priority 6b: Regex search for active credential harvesting attempts
+            if re.search(r"grep.*(pass|cred|secret|key)", cmd_lower) or (
+                "find" in effective_binary and ("perm" in cmd_lower or "pass" in cmd_lower)
+            ):
                 if self.sandbox_available:
                     return RouteDecision.GROUNDED_DECEPTION, "credential_harvesting_grounded"
                 return RouteDecision.LLM_DECEPTION, "credential_harvesting"
 
-            for pattern in SENSITIVE_TARGETS:
+            # Priority 6c: Container camouflage targets (e.g. /etc/os-release, /proc/version)
+            for pattern in CONTAINER_CAMOUFLAGE_TARGETS:
                 if pattern in cmd_lower:
                     if self.sandbox_available:
                         return RouteDecision.GROUNDED_DECEPTION, f"sensitive_file_grounded:{pattern}"
                     return RouteDecision.LLM_DECEPTION, f"sensitive_file:{pattern}"
 
         # 7. Check for system discovery & process/network inspection (Tier 2 Grounded if container available)
-        if binary in GROUNDED_COMMANDS:
+        if effective_binary in GROUNDED_COMMANDS:
             if self.sandbox_available:
-                return RouteDecision.GROUNDED_DECEPTION, f"grounded_discovery:{binary}"
-            return RouteDecision.LLM_DECEPTION, f"system_discovery:{binary}"
+                return RouteDecision.GROUNDED_DECEPTION, f"grounded_discovery:{effective_binary}"
+            return RouteDecision.LLM_DECEPTION, f"system_discovery:{effective_binary}"
 
         # 8. Explicitly benign commands: route to real sandbox when available
-        if binary in self.benign_commands and self.sandbox_available:
+        if effective_binary in self.benign_commands and self.sandbox_available:
             return RouteDecision.SANDBOX, "benign_command"
 
         # 9. Standard commands: Tier 1 Direct Sandbox Execution

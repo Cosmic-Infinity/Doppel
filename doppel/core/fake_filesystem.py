@@ -36,13 +36,15 @@ Tracked operations (heuristic, not a real shell parser):
 """
 
 import re
+import shlex
+import posixpath
 import logging
 from typing import Dict, Optional, List
 
 logger = logging.getLogger("doppel.core.fake_filesystem")
 
-# Maximum characters stored per file (truncated for prompt budget)
-_MAX_FILE_CONTENT = 512
+# Maximum characters stored per file (generous to accommodate full configs/.env)
+_MAX_FILE_CONTENT = 4096
 # Maximum total files tracked per session
 _MAX_FILES = 128
 
@@ -220,6 +222,136 @@ class FakeFilesystem:
         f = self._files.get(self._resolve(path, cwd=cwd))
         return f.content if f else None
 
+    def set_file(self, path: str, content: str, cwd: str = "/home/ubuntu", is_executable: bool = False) -> str:
+        """Store or update a file's content in the fake filesystem."""
+        resolved = self._resolve(path, cwd=cwd)
+        self._files[resolved] = FakeFile(content=content, is_executable=is_executable)
+        parent = posixpath.dirname(resolved)
+        if parent:
+            self._dirs.add(parent)
+        if path.startswith("~"):
+            alias = path.replace("~", "/home/ubuntu", 1)
+            self._files[alias] = self._files[resolved]
+        logger.debug(f"FakeFS: set_file {resolved!r} ({len(content)} chars)")
+        return resolved
+
+    def read_file_simulated(self, cmd: str, cwd: str = "/home/ubuntu") -> Optional[str]:
+        """
+        Produce authentic stdout for simple file reads (cat, head, tail, grep, less, more)
+        if the target file is tracked in FakeFilesystem.
+        Returns None if not handled, piping/redirection is present, or target is untracked.
+        """
+        # Complex pipelines or redirects should be processed by the LLM
+        if any(ch in cmd for ch in ("|", ">", "<", ";", "&", "`", "$(")):
+            return None
+
+        try:
+            tokens = shlex.split(cmd)
+        except Exception:
+            tokens = cmd.split()
+        if not tokens:
+            return None
+
+        # Unwrap wrappers like sudo, time, nohup
+        idx = 0
+        while idx < len(tokens):
+            tok = tokens[idx].rsplit("/", 1)[-1].lower()
+            if tok in ("sudo", "nohup", "time", "doas", "busybox"):
+                idx += 1
+                while idx < len(tokens) and tokens[idx].startswith("-"):
+                    if tokens[idx] in ("-u", "-g", "-C", "-D", "-h", "-p"):
+                        idx += 2
+                    else:
+                        idx += 1
+                continue
+            break
+
+        if idx >= len(tokens):
+            return None
+
+        binary = tokens[idx].rsplit("/", 1)[-1].lower()
+        args = tokens[idx + 1:]
+
+        if binary in ("cat", "more", "less"):
+            file_args = [a for a in args if not a.startswith("-")]
+            if len(file_args) != 1:
+                return None
+            target = file_args[0]
+            if self.file_exists(target, cwd=cwd):
+                return self.get_content(target, cwd=cwd) or ""
+            return None
+
+        if binary in ("head", "tail"):
+            n = 10
+            target = None
+            i = 0
+            while i < len(args):
+                a = args[i]
+                if a == "-n" and i + 1 < len(args):
+                    try:
+                        n = int(args[i + 1])
+                    except ValueError:
+                        pass
+                    i += 2
+                elif a.startswith("-n") and len(a) > 2:
+                    try:
+                        n = int(a[2:])
+                    except ValueError:
+                        pass
+                    i += 1
+                elif not a.startswith("-"):
+                    target = a
+                    i += 1
+                else:
+                    i += 1
+            if target and self.file_exists(target, cwd=cwd):
+                content = self.get_content(target, cwd=cwd) or ""
+                lines = content.splitlines()
+                selected = lines[:n] if binary == "head" else lines[-n:]
+                return "\n".join(selected)
+            return None
+
+        if binary == "grep":
+            ignore_case = False
+            invert_match = False
+            pattern = None
+            target = None
+            i = 0
+            while i < len(args):
+                a = args[i]
+                if a.startswith("-"):
+                    if "i" in a:
+                        ignore_case = True
+                    if "v" in a:
+                        invert_match = True
+                    i += 1
+                elif pattern is None:
+                    pattern = a
+                    i += 1
+                elif target is None:
+                    target = a
+                    i += 1
+                else:
+                    i += 1
+
+            if pattern and target and self.file_exists(target, cwd=cwd):
+                content = self.get_content(target, cwd=cwd) or ""
+                flags = re.IGNORECASE if ignore_case else 0
+                try:
+                    pat_re = re.compile(pattern, flags)
+                except Exception:
+                    pat_re = re.compile(re.escape(pattern), flags)
+
+                matched = []
+                for line in content.splitlines():
+                    found = bool(pat_re.search(line))
+                    if (found and not invert_match) or (not found and invert_match):
+                        matched.append(line)
+                return "\n".join(matched)
+            return None
+
+        return None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -229,6 +361,10 @@ class FakeFilesystem:
         path = path.strip("'\"").rstrip("/")
         if not path:
             return cwd
+        if path == "~":
+            return "/home/ubuntu"
+        if path.startswith("~/"):
+            path = "/home/ubuntu" + path[1:]
         if not path.startswith("/"):
             path = cwd.rstrip("/") + "/" + path
         # Collapse // and simple /./ segments

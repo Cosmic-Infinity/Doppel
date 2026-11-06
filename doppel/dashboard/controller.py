@@ -163,6 +163,7 @@ class HoneypotController:
                 intercept_missing_tools=self.config.deception.intercept_missing_tools,
                 sandbox_available=sandbox_manager.is_available,
                 benign_commands=set(self.config.benign_commands),
+                enforce_for_safe_ips=self.config.deception.enforce_for_safe_ips,
             )
             observer = ThreatObserver(llm_client=llm_client, db=self.db)
             reporter = IncidentReporter(
@@ -582,6 +583,10 @@ class HoneypotController:
             self.session_manager.reporter.llm_client.base_url = self.config.llm.base_url.rstrip("/")
             self.session_manager.reporter.llm_client.model = self.config.llm.model
             self.session_manager.reporter.llm_client.mock_mode = self.config.llm.mock_mode
+        if hasattr(self.session_manager, "router") and self.session_manager.router:
+            self.session_manager.router.intercept_sensitive_files = self.config.deception.intercept_sensitive_files
+            self.session_manager.router.intercept_missing_tools = self.config.deception.intercept_missing_tools
+            self.session_manager.router.enforce_for_safe_ips = self.config.deception.enforce_for_safe_ips
         if hasattr(self.session_manager, "sandbox_manager") and self.session_manager.sandbox_manager:
             self.session_manager.sandbox_manager.enabled = self.config.sandbox.enabled
             if not self.config.sandbox.enabled:

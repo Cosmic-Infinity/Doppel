@@ -518,3 +518,168 @@ async def test_session_container_id_propagation_and_builtins():
         assert "ubuntu   pts/0" in engine.deterministic_posix_response("who mom likes", "ubuntu")
 
 
+@pytest.mark.asyncio
+async def test_fake_fs_honeytoken_and_file_consistency():
+    """Verify that file reads cache synthetic content in FakeFS and stay consistent across commands."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.deception.simulate_latency = False
+        config.analytics.db_path = os.path.join(tmpdir, "test.db")
+
+        llm = LLMClient(mock_mode=True)
+        engine = DeceptionEngine(llm)
+        sandbox = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=config.analytics.db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm, db)
+        reporter = IncidentReporter(llm, db, reports_dir=tmpdir)
+
+        mgr = SessionManager(
+            config=config,
+            deception_engine=engine,
+            sandbox_manager=sandbox,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        session = await mgr.create_session(
+            remote_ip="192.168.1.100",
+            remote_port=44222,
+            username="ubuntu",
+        )
+
+        # 1. First command reads .env
+        output1 = await mgr.process_command(session.session_id, "cat .env")
+        assert "DB_PASSWORD=" in output1
+        assert "DB_HOST=" in output1
+
+        # Extract generated DB_PASSWORD value
+        password_line = [l for l in output1.splitlines() if "DB_PASSWORD=" in l][0]
+        expected_pass = password_line.split("=", 1)[1]
+
+        # 2. Subsequent command greps from the same .env file
+        output2 = await mgr.process_command(session.session_id, "grep DB_PASSWORD .env")
+        assert expected_pass in output2
+        assert output2.strip() == password_line.strip()
+
+        # 3. head command reads top lines of the same file
+        output3 = await mgr.process_command(session.session_id, "head -n 2 .env")
+        assert len(output3.splitlines()) <= 2
+        assert output1.startswith(output3.splitlines()[0])
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_graceful_fallback():
+    """When the live LLM fails or times out, the system falls back to synthetic deception output."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        config = DoppelConfig()
+        config.llm.mock_mode = False
+        config.sandbox.enabled = False
+        config.analytics.db_path = os.path.join(tmpdir, "test.db")
+
+        # Mock LLMClient that fails on live calls
+        llm = LLMClient(base_url="http://invalid-llm-host:9999/v1", mock_mode=False)
+        engine = DeceptionEngine(llm)
+        sandbox = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=config.analytics.db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm, db)
+        reporter = IncidentReporter(llm, db, reports_dir=tmpdir)
+
+        mgr = SessionManager(
+            config=config,
+            deception_engine=engine,
+            sandbox_manager=sandbox,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        session = await mgr.create_session(
+            remote_ip="192.168.1.100",
+            remote_port=44222,
+            username="ubuntu",
+        )
+
+        # Intercepted sensitive command produces deterministic mock fallback instead of dying or hanging
+        output = await mgr.process_command(session.session_id, "cat .env")
+        assert "DB_PASSWORD=" in output
+        assert "DB_HOST=" in output
+
+
+@pytest.mark.asyncio
+async def test_port_inventory_consistency_across_recon_commands():
+    """Verify that nmap, ss -tlnp, and netstat -an reflect consistent service ports."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.analytics.db_path = os.path.join(tmpdir, "test.db")
+
+        llm = LLMClient(mock_mode=True)
+        engine = DeceptionEngine(llm)
+        sandbox = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=config.analytics.db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm, db)
+        reporter = IncidentReporter(llm, db, reports_dir=tmpdir)
+
+        mgr = SessionManager(
+            config=config,
+            deception_engine=engine,
+            sandbox_manager=sandbox,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        session = await mgr.create_session(
+            remote_ip="192.168.1.100",
+            remote_port=44222,
+            username="ubuntu",
+        )
+
+        # Test nmap
+        nmap_out = await mgr.process_command(session.session_id, "nmap -sV 10.0.4.50")
+        assert "22/tcp" in nmap_out
+        assert "80/tcp" in nmap_out
+        assert "3306/tcp" in nmap_out
+        assert "Nmap done:" in nmap_out
+
+        # Test ss -tlnp
+        ss_out = await mgr.process_command(session.session_id, "ss -tlnp")
+        assert ":22" in ss_out
+        assert ":80" in ss_out
+        assert ":3306" in ss_out
+
+        # Test netstat -an
+        netstat_out = await mgr.process_command(session.session_id, "netstat -an")
+        assert ":22" in netstat_out
+        assert ":80" in netstat_out
+        assert ":3306" in netstat_out
+
+
+def test_docker_bash_error_normalization():
+    """Verify regex correctly normalizes container bash errors with line numbers."""
+    from doppel.sandbox.docker_manager import DockerSandboxManager
+    mgr = DockerSandboxManager(enabled=False)
+
+    raw_error_1 = "/bin/bash: line 1: nmap: command not found\n"
+    normalized_1 = mgr._normalize_error(raw_error_1)
+    assert normalized_1.strip() == "bash: nmap: command not found"
+
+    raw_error_2 = "/bin/sh: line 12: foo: not found\n"
+    normalized_2 = mgr._normalize_error(raw_error_2)
+    assert normalized_2.strip() == "bash: foo: command not found"
+
+
+

@@ -550,27 +550,188 @@ class LLMClient:
 
         # --- nmap ---
         if "nmap" in user_msg:
+            # Extract target host or IP if provided
+            target = "10.0.4.50"
+            m = re.search(r"nmap\s+.*?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z0-9_\.\-]+)", user_msg)
+            if m:
+                cand = m.group(1).strip()
+                if not cand.startswith("-") and cand not in ("sudo", "root"):
+                    target = cand
+            is_local = target in ("127.0.0.1", "localhost", "0.0.0.0")
+
+            if is_local:
+                return (
+                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-10-12 01:30 UTC\n"
+                    f"Nmap scan report for {target} (127.0.0.1)\n"
+                    "Host is up (0.000012s latency).\n"
+                    "Not shown: 993 closed tcp ports (conn-refused)\n"
+                    "PORT     STATE SERVICE  VERSION\n"
+                    "22/tcp   open  ssh      OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)\n"
+                    "80/tcp   open  http     nginx/1.18.0 (Ubuntu)\n"
+                    "443/tcp  open  ssl/http nginx/1.18.0 (Ubuntu)\n"
+                    "3000/tcp open  http     Node.js Express framework\n"
+                    "3306/tcp open  mysql    MySQL 8.0.36-0ubuntu0.22.04.1\n"
+                    "6379/tcp open  redis    Redis key-value store 6.0.16\n"
+                    "9000/tcp open  cslistener?\n"
+                    "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n\n"
+                    "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .\n"
+                    "Nmap done: 1 IP address (1 host up) scanned in 8.42 seconds"
+                )
+            else:
+                return (
+                    f"Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-10-12 01:30 UTC\n"
+                    f"Nmap scan report for {target}\n"
+                    "Host is up (0.000015s latency).\n"
+                    "Not shown: 996 closed tcp ports (conn-refused)\n"
+                    "PORT     STATE SERVICE  VERSION\n"
+                    "22/tcp   open  ssh      OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)\n"
+                    "80/tcp   open  http     nginx/1.18.0 (Ubuntu)\n"
+                    "443/tcp  open  ssl/http nginx/1.18.0 (Ubuntu)\n"
+                    "3306/tcp open  mysql    MySQL 8.0.36-0ubuntu0.22.04.1\n"
+                    "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n\n"
+                    "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .\n"
+                    "Nmap done: 1 IP address (1 host up) scanned in 8.42 seconds"
+                )
+
+        # --- sqlmap ---
+        if "sqlmap" in user_msg:
             return (
-                "Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-10-12 01:30 UTC\n"
-                "Nmap scan report for localhost (127.0.0.1)\n"
-                "Host is up (0.000012s latency).\n"
-                "Not shown: 993 closed tcp ports (conn-refused)\n"
-                "PORT     STATE SERVICE  VERSION\n"
-                "22/tcp   open  ssh      OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)\n"
-                "80/tcp   open  http     nginx/1.18.0 (Ubuntu)\n"
-                "443/tcp  open  ssl/http nginx/1.18.0 (Ubuntu)\n"
-                "3000/tcp open  http     Node.js Express framework\n"
-                "3306/tcp open  mysql    MySQL 8.0.36-0ubuntu0.22.04.1\n"
-                "6379/tcp open  redis    Redis key-value store 6.0.16\n"
-                "9000/tcp open  cslistener?\n"
-                "Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel\n"
-                "\n"
-                "Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .\n"
-                "Nmap done: 1 IP address (1 host up) scanned in 8.42 seconds"
+                "    ___\n"
+                "   __H__\n"
+                " ___ ___[']_____ ___ ___  {1.7.11#stable}\n"
+                "|_ -| . [,]     | .'| . |\n"
+                "|___|_  [\"]_|_|_|__,|  _|\n"
+                "      |_|V...       |_|   https://sqlmap.org\n\n"
+                "[*] starting @ 02:35:10\n"
+                "[INFO] testing connection to the target URL\n"
+                "[INFO] checking if the target is protected by some kind of WAF/IPS\n"
+                "[INFO] testing if the target URL content is stable\n"
+                "[WARNING] heuristic (basic) test shows that GET parameter 'id' might not be injectable\n"
+                "[INFO] testing for SQL injection on GET parameter 'id'\n"
+                "[INFO] testing 'AND boolean-based blind - WHERE or HAVING clause'\n"
+                "[INFO] GET parameter 'id' appears to be 'AND boolean-based blind - WHERE or HAVING clause' injectable\n"
+                "[INFO] target URL appears to be vulnerable"
             )
 
-        # --- linpeas ---
-        if "linpeas" in user_msg:
+        # --- hydra ---
+        if "hydra" in user_msg:
+            return (
+                "Hydra v9.5 (c) 2023 by van Hauser/THC & David Maciejak\n\n"
+                "Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at 2026-10-12 02:36:12\n"
+                "[DATA] max 16 tasks per 1 server, overall 16 tasks, 14 login tries (l:1/p:14), ~1 tries per task\n"
+                "[DATA] attacking ssh://10.0.4.50:22/\n"
+                "[22][ssh] host: 10.0.4.50   login: admin   password: password123\n"
+                "1 of 1 target successfully completed, 1 valid password found\n"
+                "Hydra (https://github.com/vanhauser-thc/thc-hydra) finished at 2026-10-12 02:36:18"
+            )
+
+        # --- nikto ---
+        if "nikto" in user_msg:
+            return (
+                "- Nikto v2.5.0\n"
+                "---------------------------------------------------------------------------\n"
+                "+ Target IP:          10.0.4.50\n"
+                "+ Target Hostname:    10.0.4.50\n"
+                "+ Target Port:        80\n"
+                "+ Start Time:         2026-10-12 02:39:00\n"
+                "---------------------------------------------------------------------------\n"
+                "+ Server: nginx/1.18.0 (Ubuntu)\n"
+                "+ The anti-clickjacking X-Frame-Options header is not present.\n"
+                "+ The X-XSS-Protection header is not defined.\n"
+                "+ The X-Content-Type-Options header is not set.\n"
+                "+ Root page / redirects to /login\n"
+                "+ 8048 requests: 0 error(s) and 4 item(s) reported on remote host\n"
+                "+ End Time:           2026-10-12 02:40:15 (75 seconds)"
+            )
+
+        # --- gobuster / dirsearch / ffuf ---
+        if any(k in user_msg for k in ("gobuster", "dirsearch", "ffuf")):
+            return (
+                "===============================================================\n"
+                "Gobuster v3.6\n"
+                "by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)\n"
+                "===============================================================\n"
+                "[+] Url:                     http://10.0.4.50\n"
+                "[+] Method:                  GET\n"
+                "[+] Threads:                 10\n"
+                "[+] Wordlist:                common.txt\n"
+                "===============================================================\n"
+                "Starting gobuster in directory enumeration mode\n"
+                "===============================================================\n"
+                "/admin                (Status: 301) [Size: 178] [--> http://10.0.4.50/admin/]\n"
+                "/api                  (Status: 200) [Size: 42]\n"
+                "/login                (Status: 200) [Size: 3412]\n"
+                "/public               (Status: 301) [Size: 178]\n"
+                "/.env                 (Status: 200) [Size: 512]\n"
+                "===============================================================\n"
+                "Finished"
+            )
+
+        # --- masscan ---
+        if "masscan" in user_msg:
+            return (
+                "Starting masscan 1.3.2 (http://bit.ly/14GZzcT) at 2026-10-12 02:38:00 GMT\n"
+                "Initiating SYN Stealth Scan\n"
+                "Scanning 1 hosts [4 ports/host]\n"
+                "Discovered open port 22/tcp on 10.0.4.50\n"
+                "Discovered open port 80/tcp on 10.0.4.50\n"
+                "Discovered open port 443/tcp on 10.0.4.50\n"
+                "Discovered open port 3306/tcp on 10.0.4.50"
+            )
+
+        # --- tcpdump / wireshark ---
+        if any(k in user_msg for k in ("tcpdump", "wireshark")):
+            return (
+                "tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\n"
+                "listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n"
+                "02:41:00.123456 IP 10.0.4.1.58420 > 10.0.4.15.22: Flags [.], ack 1, win 502, length 0\n"
+                "02:41:00.123890 IP 10.0.4.15.22 > 10.0.4.1.58420: Flags [P.], seq 1:45, ack 1, win 501, length 44\n"
+                "2 packets captured\n"
+                "2 packets received by filter\n"
+                "0 packets dropped by kernel"
+            )
+
+        # --- netcat / nc ---
+        if re.search(r"\b(nc|netcat)\b", user_msg):
+            return ""
+
+        # --- metasploit / msfconsole ---
+        if any(k in user_msg for k in ("metasploit", "msfconsole")):
+            return (
+                "       =[ metasploit v6.3.35-dev                          ]\n"
+                "+ -- --=[ 2362 exploits - 1227 auxiliary - 413 post       ]\n"
+                "+ -- --=[ 1391 payloads - 46 encoders - 11 nops           ]\n"
+                "+ -- --=[ 9 evasion                                       ]\n\n"
+                "msf6 > "
+            )
+
+        # --- SSH keys and authorized_keys ---
+        if any(k in user_msg for k in ("id_rsa", "id_ed25519", "authorized_keys")):
+            if "authorized_keys" in user_msg:
+                return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1b9xP0L9Q8uN7Y2K3vW4rZ1mXo5P6qRsTuVwXyZaBc deploy-key-2026\n"
+            return (
+                "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+                "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n"
+                "QyNTUxOQAAACDNXy3zQ06q5tE8pL9sV1bY7k2W3m4n5o6p7q8r9s0tAAAAJNhb8V/YW/Ff\n"
+                "2AAAAtzc2gtZWQyNTUxOQAAACDNXy3zQ06q5tE8pL9sV1bY7k2W3m4n5o6p7q8r9s0tAA\n"
+                "AEC3b2x1bXB1c0Bwcm9kLWFwaS1ub2RlLTAxAQIDBAU=\n"
+                "-----END OPENSSH PRIVATE KEY-----"
+            )
+
+        # --- wp-config.php / config.php ---
+        if "wp-config" in user_msg or "config.php" in user_msg:
+            return (
+                "<?php\n"
+                "define( 'DB_NAME', 'app_production' );\n"
+                "define( 'DB_USER', 'api_prod' );\n"
+                "define( 'DB_PASSWORD', 'P@ssw0rdProd2026!' );\n"
+                "define( 'DB_HOST', '10.0.4.50:3306' );\n"
+                "define( 'DB_CHARSET', 'utf8mb4' );\n"
+                "define( 'DB_COLLATE', '' );\n"
+            )
+
+        # --- linpeas / linenum / enum4linux ---
+        if any(k in user_msg for k in ("linpeas", "linenum", "enum4linux")):
             return (
                 "\n"
                 "                            .--.  .-.\n"

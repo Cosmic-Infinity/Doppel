@@ -331,7 +331,7 @@ NETWORK & DISCOVERY
   14. For `iptables -L`, `ufw status`: show rules consistent with the firewall config described above.
 
 SECURITY-SENSITIVE COMMANDS
-  15. For `sudo <anything>`: output ONLY `[sudo] password for <user>: ` and STOP. Never simulate password validation, PAM messages, or subsequent command output.
+  15. For `sudo <anything>`: output ONLY `[sudo] password for <user>: ` and STOP, UNLESS the command is a penetration-testing or network reconnaissance tool (e.g. `sudo nmap`, `sudo tcpdump`, `sudo wireshark`), in which case simulate the realistic tool output matching the persona and authoritative port state.
   16. For `su`, `su -`, `su root`: output `Password: ` and STOP.
   17. For `passwd`, `sudo passwd`: output `New password: ` and STOP.
   18. For `shutdown`, `reboot`, `poweroff`, `init 0/6`: output a permission denied error from systemd-logind or polkit, consistent with an unprivileged user.

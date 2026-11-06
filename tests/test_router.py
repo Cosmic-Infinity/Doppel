@@ -17,20 +17,26 @@ def test_builtin_routing():
 
 
 def test_sensitive_file_interception():
-    # Tier 2: With sandbox available, sensitive files route to GROUNDED_DECEPTION
+    # Sensitive credential and honeytoken targets route directly to LLM_DECEPTION
     router = HybridRouter(intercept_sensitive_files=True, sandbox_available=True)
 
     decision, reason = router.classify_command("cat /etc/shadow")
-    assert decision == RouteDecision.GROUNDED_DECEPTION
+    assert decision == RouteDecision.LLM_DECEPTION
     assert "sensitive_file" in reason
 
     decision, reason = router.classify_command("head -n 20 .env")
-    assert decision == RouteDecision.GROUNDED_DECEPTION
+    assert decision == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
 
     decision, reason = router.classify_command("cat ~/.aws/credentials")
-    assert decision == RouteDecision.GROUNDED_DECEPTION
+    assert decision == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
 
-    # Tier 3 fallback: Without sandbox, sensitive files route to LLM_DECEPTION
+    decision, reason = router.classify_command("grep PASSWORD .env")
+    assert decision == RouteDecision.LLM_DECEPTION
+    assert "sensitive_file" in reason
+
+    # Tier 3 fallback: Without sandbox, sensitive files also route to LLM_DECEPTION
     router_offline = HybridRouter(intercept_sensitive_files=True, sandbox_available=False)
     decision, reason = router_offline.classify_command("cat /etc/shadow")
     assert decision == RouteDecision.LLM_DECEPTION
@@ -131,13 +137,14 @@ def test_benign_commands_routing_and_priority():
     assert dec == RouteDecision.BUILTIN
 
     # Even though 'cat' and 'grep' are in benign_commands,
-    # sensitive file access and credential harvesting MUST be intercepted by Grounded Deception!
+    # sensitive file access MUST be intercepted directly by LLM_DECEPTION,
+    # and generic credential searches across files by Grounded Deception.
     dec, reason = router.classify_command("cat /etc/shadow")
-    assert dec == RouteDecision.GROUNDED_DECEPTION
+    assert dec == RouteDecision.LLM_DECEPTION
     assert "sensitive_file" in reason
 
     dec, reason = router.classify_command("cat .env")
-    assert dec == RouteDecision.GROUNDED_DECEPTION
+    assert dec == RouteDecision.LLM_DECEPTION
     assert "sensitive_file" in reason
 
     dec, reason = router.classify_command("grep -i password /var/www/html/app.py")
@@ -151,13 +158,14 @@ def test_safe_ip_passthrough():
         intercept_sensitive_files=True,
         intercept_missing_tools=True,
         benign_commands={"ls"},
+        enforce_for_safe_ips=False,
     )
 
-    # Untrusted session (is_safe_ip=False): intercepts sensitive targets (Tier 2)
+    # Untrusted session (is_safe_ip=False): intercepts sensitive targets (LLM_DECEPTION)
     dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=False)
-    assert dec == RouteDecision.GROUNDED_DECEPTION
+    assert dec == RouteDecision.LLM_DECEPTION
 
-    # Trusted session (is_safe_ip=True): passes through directly to sandbox (Tier 1)
+    # Trusted session (is_safe_ip=True): passes through directly to sandbox when enforce_for_safe_ips=False
     dec, reason = router.classify_command("cat /etc/shadow", is_safe_ip=True)
     assert dec == RouteDecision.SANDBOX
     assert reason == "safe_ip_passthrough"
@@ -165,3 +173,77 @@ def test_safe_ip_passthrough():
     # Shell built-in still handled as built-in even for safe IP
     dec, reason = router.classify_command("cd /tmp", is_safe_ip=True)
     assert dec == RouteDecision.BUILTIN
+
+    # When enforce_for_safe_ips=True, testing mode intercepts sensitive commands even from safe IP
+    router_enforced = HybridRouter(
+        sandbox_available=True,
+        intercept_sensitive_files=True,
+        intercept_missing_tools=True,
+        enforce_for_safe_ips=True,
+    )
+    dec, reason = router_enforced.classify_command("cat .env", is_safe_ip=True)
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    dec, reason = router_enforced.classify_command("nmap -sV 10.0.4.50", is_safe_ip=True)
+    assert dec == RouteDecision.LLM_DECEPTION
+
+
+def test_required_routing_scenarios():
+    """Verify all 10 core routing scenarios specified in the system audit."""
+    router = HybridRouter(
+        sandbox_available=True,
+        intercept_sensitive_files=True,
+        intercept_missing_tools=True,
+        benign_commands={"ls", "whoami", "pwd", "grep", "cat"},
+        enforce_for_safe_ips=False,
+    )
+
+    # 1. whoami -> SANDBOX
+    dec, _ = router.classify_command("whoami")
+    assert dec == RouteDecision.SANDBOX
+
+    # 2. pwd -> BUILTIN
+    dec, _ = router.classify_command("pwd")
+    assert dec == RouteDecision.BUILTIN
+
+    # 3. cat .env -> LLM_DECEPTION
+    dec, _ = router.classify_command("cat .env")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 4. cat ~/.aws/credentials -> LLM_DECEPTION
+    dec, _ = router.classify_command("cat ~/.aws/credentials")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 5. grep PASSWORD .env -> LLM_DECEPTION
+    dec, _ = router.classify_command("grep PASSWORD .env")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 6. nmap -sV 10.0.4.50 -> LLM_DECEPTION
+    dec, _ = router.classify_command("nmap -sV 10.0.4.50")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 7. sudo nmap -sS localhost -> LLM_DECEPTION
+    dec, _ = router.classify_command("sudo nmap -sS localhost")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 8. /usr/bin/nmap -A localhost -> LLM_DECEPTION
+    dec, _ = router.classify_command("/usr/bin/nmap -A localhost")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 9. sqlmap -u http://example.com -> LLM_DECEPTION
+    dec, _ = router.classify_command("sqlmap -u http://example.com")
+    assert dec == RouteDecision.LLM_DECEPTION
+
+    # 10. Safe IPs: bypass when enforce_for_safe_ips=False; intercepted when enforce_for_safe_ips=True
+    dec_safe, reason = router.classify_command("cat .env", is_safe_ip=True)
+    assert dec_safe == RouteDecision.SANDBOX
+    assert reason == "safe_ip_passthrough"
+
+    router_test_mode = HybridRouter(
+        sandbox_available=True,
+        intercept_sensitive_files=True,
+        intercept_missing_tools=True,
+        enforce_for_safe_ips=True,
+    )
+    dec_test, _ = router_test_mode.classify_command("cat .env", is_safe_ip=True)
+    assert dec_test == RouteDecision.LLM_DECEPTION

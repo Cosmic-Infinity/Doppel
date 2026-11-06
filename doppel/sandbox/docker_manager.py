@@ -190,11 +190,15 @@ class DockerSandboxManager:
 
                 decoy_seed = (
                     "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
+                    "mkdir -p /home/ubuntu/.ssh && "
                     "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\\nAWS_SECRET_ACCESS_KEY=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\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
                     "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
+                    "printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1b9xP0L9Q8uN7Y2K3vW4rZ1mXo5P6qRsTuVwXyZaBc deploy-key-2026\\n' > /home/ubuntu/.ssh/authorized_keys && "
+                    "printf 'SELECT user, host FROM mysql.user;\\nGRANT ALL PRIVILEGES ON app_production.* TO '\''api_prod'\''@'\''10.0.4.%%'\'' IDENTIFIED BY '\''P@ssw0rdProd2026!'\'';\\nFLUSH PRIVILEGES;\\n' > /home/ubuntu/.mysql_history && "
                     "printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > /home/ubuntu/.bash_history && "
                     "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
-                    "chmod 600 /home/ubuntu/.bash_history 2>/dev/null || true; "
+                    "chmod 700 /home/ubuntu/.ssh 2>/dev/null || true; "
+                    "chmod 600 /home/ubuntu/.ssh/authorized_keys /home/ubuntu/.mysql_history /home/ubuntu/.bash_history 2>/dev/null || true; "
                     "chown -R 1000:1000 /var/www/html /home/ubuntu 2>/dev/null || true; "
                 )
 
@@ -223,6 +227,19 @@ class DockerSandboxManager:
         except Exception as e:
             logger.error(f"Failed to spawn container for session {session_id}: {e}")
             return None
+
+    @classmethod
+    def normalize_error(cls, stderr: str) -> str:
+        """Normalize container shell error messages to standard bash format."""
+        if not stderr:
+            return ""
+        return re.sub(
+            r"/bin/(?:sh|bash):\s*(?:line\s*\d+:\s*)?([a-zA-Z0-9_\-\.]+):\s*(?:not found|command not found)",
+            r"bash: \1: command not found",
+            stderr,
+        )
+
+    _normalize_error = normalize_error
 
     def execute_in_sandbox(
         self,
@@ -292,11 +309,7 @@ class DockerSandboxManager:
 
             # Normalize error messages so missing binaries output standard bash format
             if stderr:
-                stderr = re.sub(
-                    r"/bin/(sh|bash):\s*([a-zA-Z0-9_\-\.]+):\s*(not found|command not found)",
-                    r"bash: \2: command not found",
-                    stderr
-                )
+                stderr = self.normalize_error(stderr)
 
             return ExecutionResult(stdout=stdout, stderr=stderr, exit_code=exec_res.exit_code)
         except Exception as e:
