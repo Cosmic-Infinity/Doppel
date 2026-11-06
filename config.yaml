@@ -35,8 +35,8 @@ llm:
   analysis_model: ""
   # Nothing waits on analysis, so it may take longer than terminal replies
   analysis_timeout_seconds: 120.0
-  # Qwen3 models only: skip the reasoning step for terminal output, which
-  # attackers see and wait for. Has no meaning for other model families.
+  # Reasoning models (Qwen3, Qwen3.6, ...): skip the reasoning step for terminal
+  # output, which attackers see and wait for. Models without reasoning ignore it.
   terminal_no_think: false
 
 deception:

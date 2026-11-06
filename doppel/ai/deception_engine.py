@@ -37,7 +37,16 @@ _GROUNDED_SCAFFOLD_RE = re.compile(
     re.I | re.M,
 )
 # Signs of a container runtime in command output
-_CONTAINER_HINT_RE = re.compile(r"overlay|containerd|docker|kubepods|lowerdir=|/var/lib/desktop-", re.I)
+_CONTAINER_HINT_RE = re.compile(r"overlay|containerd|docker|kubepods|lowerdir=|/var/lib/desktop-|microsoft-standard|WSL2", re.I)
+# The sandbox host's own kernel (Docker Desktop on Windows runs containers on a WSL2 kernel)
+_HOST_KERNEL_RE = re.compile(r"\b\d+\.\d+\.\d+(?:\.\d+)*-microsoft-standard-WSL2\+?", re.I)
+_PROC_VERSION_LINE_RE = re.compile(r"^Linux version (\S+) .*$", re.M)
+# The sandbox lacks what the persona has (no such binary, no systemd as PID 1):
+# there is no real output to ground on, so the reply is generated instead
+_UNGROUNDABLE_RE = re.compile(
+    r"command not found|System has not been booted with systemd|Failed to connect to bus|Running in chroot",
+    re.I,
+)
 # Storage paths that exist only on a container host
 _CONTAINER_PATH_RE = re.compile(r"lowerdir=|upperdir=|/var/lib/(?:docker|containerd|desktop-containerd)|io\.containerd\.|kubepods", re.I)
 
@@ -72,14 +81,18 @@ class DeceptionEngine:
         self.system_prompt = build_deception_system_prompt(persona)
         self.host_profile: Dict[str, str] = dict(DEFAULT_HOST_PROFILE)
         self.dynamic_honeytokens = dynamic_honeytokens
-        # Qwen3 soft switch: skip the reasoning step for terminal output
         self.no_think = no_think
         if host_profile:
             self.set_host_profile(host_profile)
 
-    def _with_think_switch(self, prompt: str) -> str:
-        """Append Qwen3's /no_think switch when reasoning is disabled for terminal output."""
-        return prompt + "\n/no_think" if self.no_think else prompt
+    @property
+    def no_think(self) -> bool:
+        """Skip the model's reasoning step for terminal output, which the attacker waits on."""
+        return self.llm_client.reasoning_off
+
+    @no_think.setter
+    def no_think(self, value: bool):
+        self.llm_client.reasoning_off = bool(value)
 
     def set_persona(self, persona: str):
         """Switch persona; the system prompt is derived from it, so rebuild it too."""
@@ -278,6 +291,20 @@ class DeceptionEngine:
             fields = [f for f in _UNAME_FIELDS if f in wanted] or ["s"]
         return " ".join(values[f] for f in fields)
 
+    def _proc_version_line(self) -> str:
+        """/proc/version for the persona kernel, with the distribution's usual build host and toolchain."""
+        hp = self.host_profile
+        release = hp["kernel_release"]
+        build = hp.get("kernel_build")
+        if not build:
+            if release.endswith("-generic"):
+                build = "(buildd@lcy02-amd64-079) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38)"
+            elif "amzn" in release:
+                build = "(mockbuild@ip-10-0-48-202) (gcc11 (GCC) 11.4.1 20230605 (Red Hat 11.4.1-2), GNU ld version 2.39-6.amzn2023.0.10)"
+            else:
+                build = "(debian-kernel@lists.debian.org) (gcc-12 (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40)"
+        return f"Linux version {release} {build} {hp['kernel_version']}"
+
     def deterministic_posix_response(self, command: str, user: str = "ubuntu", login_time: Optional[str] = None) -> Optional[str]:
         """
         Answer simple identity commands locally, without the model.
@@ -345,6 +372,9 @@ class DeceptionEngine:
 
         if binary == "uname":
             return self._uname_response(args)
+
+        if binary == "cat" and args == ["/proc/version"]:
+            return self._proc_version_line()
 
         if binary in ("true", ":"):
             return ""
@@ -424,7 +454,7 @@ class DeceptionEngine:
                 return cached_sim
 
         # Build system prompt with the current clock, then the fake filesystem state when it exists
-        system_prompt = self._with_think_switch(self.system_prompt + "\n\n" + build_clock_context(self.persona, login_time))
+        system_prompt = self.system_prompt + "\n\n" + build_clock_context(self.persona, login_time)
         if fake_fs:
             fs_block = fake_fs.build_context_block()
             if fs_block:
@@ -520,9 +550,18 @@ class DeceptionEngine:
         session_id: Optional[str] = None,
         return_reasoning: bool = False,
         login_time: Optional[str] = None,
+        session_history: Optional[List[Dict[str, str]]] = None,
+        fake_fs: Optional["FakeFilesystem"] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Tier 2: Transform real Linux sandbox output with persona camouflage and canary honeytokens."""
         from doppel.ai.prompts.deception_prompts import build_grounded_transformation_prompt
+
+        # The persona has what the sandbox lacks (e.g. systemctl): nothing real to ground on
+        if not real_stdout.strip() and (exit_code == 127 or _UNGROUNDABLE_RE.search(real_stderr)):
+            return await self.generate_command_output(
+                command=command, cwd=cwd, user=user, session_history=session_history, fake_fs=fake_fs,
+                session_id=session_id, return_reasoning=return_reasoning, login_time=login_time,
+            )
 
         # A plain error (nothing printed to stdout, nothing container-specific in
         # stderr) is already what a real server would print: no model call needed.
@@ -537,7 +576,6 @@ class DeceptionEngine:
             real_stderr=real_stderr,
             exit_code=exit_code,
         ) + "\n\n" + build_clock_context(self.persona, login_time)
-        transformation_prompt = self._with_think_switch(transformation_prompt)
 
         # Inject dynamic canary honeytokens if applicable
         cmd_lower = command.lower()
@@ -592,10 +630,16 @@ class DeceptionEngine:
         """
         Last-line defence for grounded output: remove what only a container
         would show (overlay root filesystem, containerd and Docker storage
-        paths). Applied after the model rewrite and to the raw fallback.
+        paths, the host's WSL2 kernel). Applied after the model rewrite and to
+        the raw fallback.
         """
         if not text or not _CONTAINER_HINT_RE.search(text):
             return text
+        if _HOST_KERNEL_RE.search(text):
+            text = _PROC_VERSION_LINE_RE.sub(
+                lambda m: self._proc_version_line() if _HOST_KERNEL_RE.match(m.group(1)) else m.group(0), text
+            )
+            text = _HOST_KERNEL_RE.sub(self.host_profile["kernel_release"], text)
         k8s_persona = self.persona == "cloud_worker"  # containerd is genuine on a Kubernetes node
         root_dev = "/dev/sda1"
         kept = []

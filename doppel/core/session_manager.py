@@ -138,6 +138,7 @@ class SessionManager:
                     command=head, real_stdout=res.stdout or "", real_stderr=res.stderr or "",
                     exit_code=res.exit_code, user=user, cwd=session.cwd, session_id=session.session_id,
                     return_reasoning=True, login_time=session.start_time,
+                    session_history=session.history, fake_fs=session.fake_fs,
                 )
             else:
                 head_out, reasoning = await self.deception_engine.generate_command_output(
@@ -170,9 +171,9 @@ class SessionManager:
     _IDENTITY_BINARIES = {"whoami", "id", "uname", "hostname"}
 
     def _persona_identity_answer(self, session: "SessionState", command: str) -> Optional[str]:
-        """Persona answer for a plain whoami/id/uname/hostname, or None to route normally."""
+        """Persona answer for a plain whoami/id/uname/hostname or cat /proc/version, or None to route normally."""
         tokens = command.split()
-        if not tokens or tokens[0] not in self._IDENTITY_BINARIES:
+        if not tokens or (tokens[0] not in self._IDENTITY_BINARIES and tokens != ["cat", "/proc/version"]):
             return None
         return self.deception_engine.deterministic_posix_response(
             command, user=getattr(session, "effective_user", session.username), login_time=session.start_time
@@ -380,6 +381,8 @@ class SessionManager:
                         session_id=session.session_id,
                         return_reasoning=True,
                         login_time=session.start_time,
+                        session_history=session.history,
+                        fake_fs=session.fake_fs,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Grounded command '{cmd_clean}' timed out in sandbox; falling back to LLM synthesis")

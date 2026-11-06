@@ -201,3 +201,85 @@ def test_grounded_uses_real_output_when_model_fails():
     real = "* * * * * /tmp/x.sh\n"
     out = asyncio.run(engine.transform_grounded_output("crontab -l", real, "", 0))
     assert out == "* * * * * /tmp/x.sh"
+
+
+def test_host_wsl2_kernel_is_replaced_with_the_persona_kernel():
+    engine = _engine()
+    real = ("Linux version 6.6.87.2-microsoft-standard-WSL2 (root@439a258ad544) (gcc (GCC) 11.2.0, "
+            "GNU ld (GNU Binutils) 2.37) #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025")
+    out = engine.scrub_container_artifacts(real)
+    assert "microsoft" not in out.lower() and "wsl" not in out.lower()
+    assert out == engine._proc_version_line()
+    assert engine.host_profile["kernel_release"] in out
+    mixed = engine.scrub_container_artifacts("5.15.0 x 6.6.87.2-microsoft-standard-WSL2 y")
+    assert mixed == f"5.15.0 x {engine.host_profile['kernel_release']} y"
+
+
+def test_proc_version_answers_from_persona():
+    engine = _engine()
+    out = engine.deterministic_posix_response("cat /proc/version")
+    assert out.startswith(f"Linux version {engine.host_profile['kernel_release']} ")
+    assert engine.deterministic_posix_response("cat /proc/version | head -1") is None
+
+
+def test_missing_sandbox_binary_is_generated_not_leaked():
+    calls = []
+
+    class Recording(LLMClient):
+        async def chat_completion_with_metrics(self, messages, **kwargs):
+            calls.append(messages)
+            return {"content": "● nginx.service - A high performance web server\n   Active: active (running)"}
+
+    engine = DeceptionEngine(Recording(mock_mode=False))
+    for stderr, code in (("bash: systemctl: command not found\n", 127),
+                         ("System has not been booted with systemd as init system (PID 1). Can't operate.\n", 1)):
+        out = asyncio.run(engine.transform_grounded_output("systemctl status nginx", "", stderr, code))
+        assert "not found" not in out and "booted" not in out
+        assert "nginx.service" in out
+    # Generated through the terminal prompt, not the rewrite of real output
+    assert all("Operator command to transform" not in m[-1]["content"] for m in calls)
+
+
+def test_no_think_sends_reasoning_effort_none():
+    sent = []
+
+    class Capture(LLMClient):
+        pass
+
+    client = Capture(mock_mode=False)
+    engine = DeceptionEngine(client, no_think=True)
+    assert client.reasoning_off is True
+
+    import httpx
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 1}}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            sent.append(json)
+            return FakeResp()
+
+    orig = httpx.AsyncClient
+    httpx.AsyncClient = FakeClient
+    try:
+        asyncio.run(client.chat_completion([{"role": "user", "content": "ls"}]))
+        engine.no_think = False
+        asyncio.run(client.chat_completion([{"role": "user", "content": "ls"}]))
+    finally:
+        httpx.AsyncClient = orig
+    assert sent[0].get("reasoning_effort") == "none"
+    assert "reasoning_effort" not in sent[1]

@@ -31,6 +31,9 @@ class LLMClient:
         self.timeout = timeout
         self.temperature = temperature
         self.mock_mode = mock_mode
+        # Ask the server to skip the reasoning step (OpenAI-style reasoning_effort).
+        # Models without reasoning ignore it.
+        self.reasoning_off = False
 
     async def chat_completion(
         self,
@@ -99,6 +102,8 @@ class LLMClient:
             payload["frequency_penalty"] = frequency_penalty
         if presence_penalty is not None:
             payload["presence_penalty"] = presence_penalty
+        if self.reasoning_off:
+            payload["reasoning_effort"] = "none"
 
         url = f"{self.base_url}/chat/completions"
         try:
@@ -213,6 +218,8 @@ class LLMClient:
             payload["frequency_penalty"] = frequency_penalty
         if presence_penalty is not None:
             payload["presence_penalty"] = presence_penalty
+        if self.reasoning_off:
+            payload["reasoning_effort"] = "none"
 
         url = f"{self.base_url}/chat/completions"
         token_count = 0

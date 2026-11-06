@@ -37,8 +37,8 @@ class LLMSettings(BaseModel):
     analysis_model: str = ""
     # Analysis runs in the background, so it can wait longer than the terminal
     analysis_timeout_seconds: float = 120.0
-    # Ask Qwen3-family models to skip their reasoning step for terminal output
-    # (adds Qwen3's /no_think switch). Leave off for other model families.
+    # Ask reasoning models to skip their reasoning step for terminal output
+    # (sends reasoning_effort "none"). Models without reasoning ignore it.
     terminal_no_think: bool = False
 
 
