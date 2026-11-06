@@ -80,7 +80,6 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const statusDot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
   const metaPort = document.getElementById('nav-meta-port');
-  const metaModel = document.getElementById('nav-meta-model');
   const navBadgeLlm = document.getElementById('nav-badge-llm');
   const dotNavLlm = document.getElementById('dot-nav-llm');
   const textNavLlm = document.getElementById('text-nav-llm');
@@ -89,6 +88,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const textNavDocker = document.getElementById('text-nav-docker');
   const btnToggle = document.getElementById('btn-toggle-honeypot');
   const btnToggleLabel = document.getElementById('btn-toggle-label');
+  // Model badge: name from /api/status, health from /api/diagnostics
+  let currentModel = '';
+  let lastLlmDiag = null;
 
   // DOM Elements - Global Warning Banner
   const systemWarningBanner = document.getElementById('system-warning-banner');
@@ -241,16 +243,19 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     const conf = Math.round((profile.type_confidence || 0) * 100);
     const labels = { bot: 'Automated', human: 'Human', 'semi-automated': 'Semi-automated' };
     detailProfileTag.className = 'profile-tag';
+    const sub = document.getElementById('detail-profile-sub');
 
     if (!labels[type]) {
       detailProfileTag.textContent = 'Profiling';
       detailProfileTag.title = 'Not enough commands to classify yet';
+      if (sub) sub.textContent = 'Needs a few more commands';
       return;
     }
     const tentative = (profile.type_confidence || 0) < PROFILE_CONFIDENT;
     detailProfileTag.textContent = tentative ? `Likely ${labels[type].toLowerCase()}` : labels[type];
     detailProfileTag.classList.add(type === 'bot' ? 'bot' : (type === 'human' ? 'human' : 'scanner'));
     detailProfileTag.title = `Confidence ${conf}%`;
+    if (sub) sub.textContent = `${conf}% confidence`;
   }
 
   function showWebProbeAlert(data) {
@@ -284,12 +289,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       viewLaunch.classList.remove('hidden');
       viewDashboard.classList.add('hidden');
       document.documentElement.classList.remove('init-dashboard');
-      btnViewSwitchLabel.textContent = 'Live Dashboard';
+      btnViewSwitchLabel.textContent = 'Dashboard';
     } else {
       viewLaunch.classList.add('hidden');
       viewDashboard.classList.remove('hidden');
       document.documentElement.classList.add('init-dashboard');
-      btnViewSwitchLabel.textContent = 'Setup & Config';
+      btnViewSwitchLabel.textContent = 'Settings';
     }
   }
 
@@ -497,39 +502,23 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     const persona = diag.persona || {};
 
     // 1. Update Top Navigation Subsystem Badges
-    if (navBadgeLlm && dotNavLlm && textNavLlm) {
-      if (llm.status === 'ready') {
-        dotNavLlm.className = 'subsystem-dot ready';
-        textNavLlm.textContent = 'LLM Ready';
-        navBadgeLlm.title = `AI Model ready (${llm.latency_ms || 0}ms): ${llm.configured_model || ''}`;
-      } else if (llm.status === 'mock_mode') {
-        dotNavLlm.className = 'subsystem-dot neutral';
-        textNavLlm.textContent = 'LLM Mock';
-        navBadgeLlm.title = 'AI Mock Mode active';
-      } else if (llm.status === 'model_missing') {
-        dotNavLlm.className = 'subsystem-dot warning';
-        textNavLlm.textContent = 'Model Missing';
-        navBadgeLlm.title = `Model '${llm.configured_model || ''}' not pulled`;
-      } else {
-        dotNavLlm.className = 'subsystem-dot error';
-        textNavLlm.textContent = 'LLM Offline';
-        navBadgeLlm.title = `LLM endpoint unreachable at ${llm.endpoint || 'local'}`;
-      }
-    }
+    lastLlmDiag = llm;
+    renderModelBadge();
+    renderReasoningToggle(llm);
 
     if (navBadgeDocker && dotNavDocker && textNavDocker) {
       if (docker.status === 'ready') {
         dotNavDocker.className = 'subsystem-dot ready';
-        textNavDocker.textContent = 'Docker Ready';
-        navBadgeDocker.title = `Docker Sandbox active (v${docker.version || 'Engine'})`;
+        textNavDocker.textContent = 'Sandbox';
+        navBadgeDocker.title = `Sandbox ready (Docker ${docker.version || 'Engine'})`;
       } else if (docker.status === 'disabled') {
         dotNavDocker.className = 'subsystem-dot neutral';
-        textNavDocker.textContent = 'Docker Off';
-        navBadgeDocker.title = 'Docker sandbox disabled in configuration';
+        textNavDocker.textContent = 'Sandbox off';
+        navBadgeDocker.title = 'Sandbox disabled in configuration: every command is simulated';
       } else {
         dotNavDocker.className = 'subsystem-dot warning';
-        textNavDocker.textContent = 'Docker Offline';
-        navBadgeDocker.title = 'Docker Engine not running (safe simulation mode)';
+        textNavDocker.textContent = 'Sandbox offline';
+        navBadgeDocker.title = 'Docker is not running: every command is simulated';
       }
     }
 
@@ -816,8 +805,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   // --- Event Listeners for Controls on Launch Screen ---
 
-  selectLlmModel.addEventListener('change', (e) => {
-    applyQuickFix('set_model', e.target.value);
+  selectLlmModel.addEventListener('change', async (e) => {
+    await applyQuickFix('set_model', e.target.value);
+    fetchDiagnostics();  // the reasoning switch depends on the new model
   });
 
   btnApplyCustomPort.addEventListener('click', () => {
@@ -943,6 +933,101 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   // --- Status UI & Auto-Switching ---
 
+  // Reasoning for terminal replies: greyed out when the model cannot reason
+  const toggleTerminalReasoning = document.getElementById('toggle-terminal-reasoning');
+  const rowTerminalReasoning = document.getElementById('row-terminal-reasoning');
+  const hintTerminalReasoning = document.getElementById('hint-terminal-reasoning');
+
+  // Chat has its own reasoning switch, on by default and remembered in this browser
+  const toggleChatReasoning = document.getElementById('toggle-chat-reasoning');
+  const rowChatReasoning = document.getElementById('row-chat-reasoning');
+  let chatReasoningWanted = localStorage.getItem('doppel_chat_reasoning') !== 'false';
+
+  function chatModel() {
+    return (assistantModelSelect && assistantModelSelect.value) || (lastLlmDiag && lastLlmDiag.configured_model) || currentModel;
+  }
+
+  function chatReasoningSupported() {
+    const llm = lastLlmDiag;
+    if (!llm || llm.status === 'mock_mode') return llm ? false : null;
+    if (llm.reasoning_unknown || !(llm.models_available || []).length) return null;
+    return (llm.reasoning_models || []).includes(chatModel());
+  }
+
+  function renderChatReasoningToggle() {
+    if (!toggleChatReasoning) return;
+    const supported = chatReasoningSupported();
+    const unavailable = supported === false;
+    toggleChatReasoning.disabled = unavailable;
+    toggleChatReasoning.checked = !unavailable && chatReasoningWanted;
+    rowChatReasoning.classList.toggle('is-disabled', unavailable);
+    rowChatReasoning.title = unavailable
+      ? 'This model does not support reasoning'
+      : supported === null
+        ? 'The model reasons before answering (support could not be confirmed for this server)'
+        : 'The model reasons before answering: better answers, slower replies';
+  }
+
+  function chatReasoningEnabled() {
+    return Boolean(toggleChatReasoning && !toggleChatReasoning.disabled && toggleChatReasoning.checked);
+  }
+
+  if (toggleChatReasoning) {
+    toggleChatReasoning.addEventListener('change', (e) => {
+      chatReasoningWanted = e.target.checked;
+      localStorage.setItem('doppel_chat_reasoning', String(chatReasoningWanted));
+    });
+  }
+
+  function renderReasoningToggle(llm) {
+    renderChatReasoningToggle();
+    if (!toggleTerminalReasoning) return;
+    const supported = llm.supports_reasoning;  // true, false, or null (server cannot tell)
+    const unavailable = llm.status === 'mock_mode' || supported === false;
+    toggleTerminalReasoning.disabled = unavailable;
+    toggleTerminalReasoning.checked = !unavailable && Boolean(llm.terminal_reasoning);
+    rowTerminalReasoning.classList.toggle('is-disabled', unavailable);
+    let hint;
+    if (llm.status === 'mock_mode') hint = 'Not used in mock mode.';
+    else if (supported === false) hint = 'This model does not support reasoning.';
+    else if (toggleTerminalReasoning.checked) hint = 'The model reasons before each reply: more consistent output, much slower replies.';
+    else hint = 'Off by default: replies skip the reasoning step. Reports still use it.';
+    if (supported === null && llm.status !== 'mock_mode') hint += ' This server does not report whether the model supports it.';
+    hintTerminalReasoning.textContent = hint;
+  }
+
+  if (toggleTerminalReasoning) {
+    toggleTerminalReasoning.addEventListener('change', async (e) => {
+      await applyQuickFix('set_terminal_reasoning', e.target.checked);
+      fetchDiagnostics();
+    });
+  }
+
+  // One badge for the model: its name, with health as the dot colour
+  function renderModelBadge() {
+    if (!navBadgeLlm || !dotNavLlm || !textNavLlm) return;
+    const llm = lastLlmDiag || {};
+    const model = llm.configured_model || currentModel || 'Model';
+    textNavLlm.textContent = model;
+    if (!lastLlmDiag) {
+      dotNavLlm.className = 'subsystem-dot checking';
+      navBadgeLlm.title = `Model: ${model}`;
+    } else if (llm.status === 'ready') {
+      dotNavLlm.className = 'subsystem-dot ready';
+      navBadgeLlm.title = `Model ready (${llm.latency_ms || 0} ms): ${model}`;
+    } else if (llm.status === 'mock_mode') {
+      dotNavLlm.className = 'subsystem-dot neutral';
+      textNavLlm.textContent = 'Mock mode';
+      navBadgeLlm.title = 'Mock mode: replies are generated without a model';
+    } else if (llm.status === 'model_missing') {
+      dotNavLlm.className = 'subsystem-dot warning';
+      navBadgeLlm.title = `Model '${model}' is not downloaded on the server`;
+    } else {
+      dotNavLlm.className = 'subsystem-dot error';
+      navBadgeLlm.title = `Model server unreachable at ${llm.endpoint || 'local'}`;
+    }
+  }
+
   function updateStatusUI(status, config) {
     honeypotStatus = status;
     localStorage.setItem('doppel_last_status', status);
@@ -950,8 +1035,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     statusText.textContent = status === 'RUNNING' ? 'Active' : status;
 
     if (config) {
-      metaPort.textContent = `Port: ${config.honeypot_port}`;
-      metaModel.textContent = `Model: ${config.llm_model}`;
+      metaPort.textContent = `:${config.honeypot_port}`;
+      currentModel = config.llm_model || '';
+      renderModelBadge();
       if (config.prompt) {
         promptConfig = Object.assign({}, promptConfig, config.prompt);
       }
@@ -962,7 +1048,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     if (status === 'RUNNING') {
-      btnToggleLabel.textContent = 'Stop Honeypot';
+      btnToggleLabel.textContent = 'Stop';
       btnToggle.className = 'btn btn-primary danger';
       btnViewSwitch.classList.remove('hidden');
 
@@ -971,7 +1057,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         switchView('dashboard');
       }
     } else {
-      btnToggleLabel.textContent = 'Start Honeypot';
+      btnToggleLabel.textContent = 'Start';
       btnToggle.className = 'btn btn-primary';
 
       // If stopped and no sessions exist, return to setup screen
@@ -1124,7 +1210,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         );
         appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
         detailCwd.textContent = data.cwd;
-        detailCmdCount.textContent = (parseInt(detailCmdCount.textContent, 10) || 0) + 1;
+        setCommandCount((parseInt(detailCmdCount.textContent, 10) || 0) + 1);
       }
     } else if (msg.type === 'threat_analyzed') {
       const data = msg.data;
@@ -1289,6 +1375,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       sessionsContainer.appendChild(buildSessionCard(sess));
     });
     applySessionFilter();
+    applyQueueIndicators();
   }
 
   function threatClass(score) {
@@ -1378,7 +1465,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       // Never let the previous session's lines remain in the new session's view
       terminalOutput.innerHTML = '';
       telemetryTableBody.innerHTML = '';
-      detailCmdCount.textContent = '0';
+      setCommandCount(0);
+      const top = document.getElementById('detail-threat-top');
+      if (top) top.textContent = '';
       stopReplay();
       if (isTabActive('replay')) loadReplay(sessionId);
     }
@@ -1445,6 +1534,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     shared_credentials: 'Shared credentials',
     command_sequence: 'Same command sequence',
   };
+
+  function setCommandCount(n) {
+    detailCmdCount.textContent = String(n);
+    const noun = document.getElementById('detail-cmd-noun');
+    if (noun) noun.textContent = n === 1 ? 'command' : 'commands';
+  }
 
   function plural(n, one, many) {
     return `${n} ${n === 1 ? one : many}`;
@@ -1554,14 +1649,19 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
   function updateCampaignPill() {
     if (!detailCampaignPill) return;
+    const campaignSub = document.getElementById('detail-campaign-sub');
     const campaign = activeSessionId ? campaignBySession[activeSessionId] : null;
     if (!campaign) {
       detailCampaignPill.classList.add('hidden');
       detailCampaignPill.dataset.campaignId = '';
       if (detailCampaignNone) detailCampaignNone.classList.remove('hidden');
+      if (campaignSub) campaignSub.textContent = '';
       return;
     }
     detailCampaignPill.textContent = plural(campaign.session_count || 0, 'session', 'sessions');
+    if (campaignSub) {
+      campaignSub.textContent = (campaign.link_reasons || []).map(r => LINK_REASON_LABELS[r] || r).join(' · ');
+    }
     detailCampaignPill.dataset.campaignId = campaign.campaign_id;
     detailCampaignPill.classList.remove('hidden');
     if (detailCampaignNone) detailCampaignNone.classList.add('hidden');
@@ -1594,9 +1694,145 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const navBadgeQueue = document.getElementById('nav-badge-queue');
   const dotNavQueue = document.getElementById('dot-nav-queue');
   const textNavQueue = document.getElementById('text-nav-queue');
-  const btnQueueRunNow = document.getElementById('btn-queue-run-now');
+  const queuePop = document.getElementById('queue-pop');
 
   let lastBackground = null;
+
+  const ACTIVITY_LABEL = { tagging: 'Tagging', report: 'Writing report' };
+
+  function sessionLabel(sessionId) {
+    const sess = sessionsCache[sessionId];
+    if (!sess) return String(sessionId).slice(0, 8);
+    const user = String(sessionId).startsWith('http_') ? 'web' : (sess.username || 'user');
+    return `${user}@${sess.remote_ip || 'unknown'}`;
+  }
+
+  // Spinner on the card of the session whose analysis is running
+  function applyQueueIndicators() {
+    const bg = lastBackground;
+    document.querySelectorAll('.session-card .card-activity').forEach(el => el.remove());
+    if (!bg || !bg.running || !bg.running_session) return;
+    const card = document.querySelector(`.session-card[data-session-id="${bg.running_session}"]`);
+    const meta = card && card.querySelector('.card-meta');
+    if (!meta) return;
+    const activity = document.createElement('span');
+    activity.className = 'card-activity';
+    activity.title = 'Analysis in progress';
+    const spinner = document.createElement('span');
+    spinner.className = 'activity-spinner';
+    activity.append(spinner, document.createTextNode(ACTIVITY_LABEL[bg.running] || 'Analyzing'));
+    meta.appendChild(activity);
+  }
+
+  function setQueuePopOpen(open) {
+    if (!queuePop || !navBadgeQueue) return;
+    queuePop.classList.toggle('hidden', !open);
+    navBadgeQueue.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) renderQueuePop();
+  }
+
+  function renderQueuePop() {
+    const bg = lastBackground;
+    if (!queuePop || queuePop.classList.contains('hidden') || !bg) return;
+    let head;
+    if (bg.running) head = 'Analyzing now. Terminal replies take priority.';
+    else if (bg.terminal_active) head = 'Waiting while the terminal is using the model.';
+    else if (bg.forced) head = 'Starting now.';
+    else head = `Starts after ${bg.idle_seconds} s without terminal activity.`;
+
+    queuePop.replaceChildren();
+    const headEl = document.createElement('div');
+    headEl.className = 'queue-pop-head';
+    headEl.textContent = head;
+    queuePop.appendChild(headEl);
+
+    (bg.by_session || []).forEach(group => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'queue-row';
+
+      const main = document.createElement('span');
+      main.className = 'queue-row-main';
+      const name = document.createElement('span');
+      name.className = 'queue-row-name';
+      name.textContent = sessionLabel(group.session_id);
+      const detail = document.createElement('span');
+      detail.className = 'queue-row-detail';
+      const parts = [];
+      if (group.tags) parts.push(plural(group.tags, 'command to tag', 'commands to tag'));
+      if (group.report) parts.push('incident report');
+      detail.textContent = parts.join(' · ');
+      main.append(name, detail);
+
+      const state = document.createElement('span');
+      state.className = `queue-row-state${group.running ? ' running' : ''}`;
+      if (group.running) {
+        const spinner = document.createElement('span');
+        spinner.className = 'activity-spinner';
+        state.append(spinner, document.createTextNode(ACTIVITY_LABEL[group.running] || 'Analyzing'));
+      } else {
+        state.textContent = 'Waiting';
+      }
+
+      row.append(main, state);
+      row.addEventListener('click', () => {
+        setQueuePopOpen(false);
+        selectSession(group.session_id);
+      });
+      queuePop.appendChild(row);
+    });
+
+    if (!bg.running && !bg.forced) {
+      const foot = document.createElement('div');
+      foot.className = 'queue-pop-foot';
+      const runNow = document.createElement('button');
+      runNow.type = 'button';
+      runNow.className = 'queue-run-now';
+      runNow.textContent = 'Run now';
+      runNow.title = 'Start without waiting for the terminal to be idle';
+      runNow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        runQueueNow(runNow);
+      });
+      foot.appendChild(runNow);
+      queuePop.appendChild(foot);
+    }
+  }
+
+  async function runQueueNow(button) {
+    button.disabled = true;
+    try {
+      const res = await fetch('/api/background/run-now', { method: 'POST' });
+      const data = await res.json();
+      renderBackgroundQueue(data.background);
+    } catch (e) {
+      console.error('Error starting queued analysis:', e);
+      button.disabled = false;
+    }
+  }
+
+  if (navBadgeQueue) {
+    navBadgeQueue.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setQueuePopOpen(queuePop.classList.contains('hidden'));
+    });
+    navBadgeQueue.addEventListener('keydown', (e) => {
+      if (e.target !== navBadgeQueue) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setQueuePopOpen(queuePop.classList.contains('hidden'));
+      }
+    });
+    document.addEventListener('click', (e) => {
+      if (queuePop && !queuePop.classList.contains('hidden') && !e.target.closest('.queue-wrap')) setQueuePopOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && queuePop && !queuePop.classList.contains('hidden')) {
+        setQueuePopOpen(false);
+        navBadgeQueue.focus();
+      }
+    });
+  }
 
   function queuedReportState(sessionId) {
     const bg = lastBackground;
@@ -1615,39 +1851,29 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     } else if (state === 'queued') {
       setReportStatus('queued', lastBackground.forced
         ? 'Report queued. Starting shortly.'
-        : 'Report queued. It runs when the model is idle, or select Run now in the top bar.');
+        : 'Report queued. It runs when the model is idle, or select Run now in the queue panel.');
     }
   }
 
   function renderBackgroundQueue(bg) {
     lastBackground = bg || null;
     renderQueuedReportStatus();
+    applyQueueIndicators();
     if (!navBadgeQueue) return;
     const count = bg ? bg.queued || 0 : 0;
     navBadgeQueue.classList.toggle('hidden', count === 0);
-    if (count === 0) return;
+    if (count === 0) {
+      setQueuePopOpen(false);
+      return;
+    }
+    renderQueuePop();
     const active = Boolean(bg.running) || Boolean(bg.forced);
     const parts = [];
     if (bg.reports) parts.push(plural(bg.reports, 'report', 'reports'));
     if (bg.tagging) parts.push(plural(bg.tagging, 'tag', 'tags'));
-    textNavQueue.textContent = `${active ? 'Analyzing' : 'Queued'}: ${parts.join(', ')}`;
+    textNavQueue.textContent = active ? `Analyzing · ${count}` : `${count} queued`;
+    navBadgeQueue.title = `Analysis queue: ${parts.join(', ')}`;
     dotNavQueue.className = `subsystem-dot ${active ? 'neutral' : 'warning'}`;
-    btnQueueRunNow.classList.toggle('hidden', active);
-  }
-
-  if (btnQueueRunNow) {
-    btnQueueRunNow.addEventListener('click', async () => {
-      btnQueueRunNow.disabled = true;
-      try {
-        const res = await fetch('/api/background/run-now', { method: 'POST' });
-        const data = await res.json();
-        renderBackgroundQueue(data.background);
-      } catch (e) {
-        console.error('Error starting queued analysis:', e);
-      } finally {
-        btnQueueRunNow.disabled = false;
-      }
-    });
   }
 
   function setReportStatus(status, text) {
@@ -1887,8 +2113,24 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  const THREAT_LEVEL = { low: 'Low', medium: 'Medium', high: 'High' };
+
+  // Highest-scoring tagged command: what the threat score is based on
+  function renderTopTechnique(commands) {
+    const el = document.getElementById('detail-threat-top');
+    if (!el) return;
+    let top = null;
+    (commands || []).forEach(cmd => {
+      if (cmd.technique_id && (!top || (cmd.threat_score || 0) > (top.threat_score || 0))) top = cmd;
+    });
+    el.textContent = top ? `${top.technique_id} ${top.technique_name || ''}`.trim() : '';
+    el.title = top ? `Highest-scoring command: ${top.command}` : '';
+  }
+
   function setThreatDisplay(score) {
     const value = Math.max(0, Math.min(100, Number(score) || 0));
+    const level = document.getElementById('detail-threat-level');
+    if (level) level.textContent = THREAT_LEVEL[threatClass(value)];
     detailThreatScore.textContent = String(value);
     detailThreatScore.className = `stat-value threat-${threatClass(value)}`;
     if (detailThreatBar) {
@@ -1916,8 +2158,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         ? `Started ${timing.started}${timing.duration ? ` · ${isLive ? 'connected' : 'lasted'} ${timing.duration}` : ''}`
         : '';
     }
-    detailCmdCount.textContent = Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0);
+    setCommandCount(Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0));
     detailCwd.textContent = session.cwd || '/home/ubuntu';
+    renderTopTechnique(session.commands);
 
     updatePhaseBadge(session.current_phase || (sessionsCache[session.session_id] && sessionsCache[session.session_id].current_phase) || 'Reconnaissance');
     updateProfileTag({
@@ -2512,6 +2755,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (userChosenAssistantModel) {
       assistantModelSelect.value = userChosenAssistantModel;
     }
+    assistantModelSelect.addEventListener('change', () => renderChatReasoningToggle());
     assistantModelSelect.addEventListener('change', (e) => {
       userChosenAssistantModel = e.target.value;
       localStorage.setItem('doppel_assistant_model', userChosenAssistantModel);
@@ -2594,7 +2838,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     let lastMetrics = null;
 
     try {
-      const payload = { message: text };
+      const payload = { message: text, reasoning: chatReasoningEnabled() };
       if (targetModel) {
         payload.model = targetModel;
       }

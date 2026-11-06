@@ -100,3 +100,50 @@ def test_job_errors_reach_the_caller():
             return str(e)
 
     assert asyncio.run(scenario()) == "model said no"
+
+
+def test_tagging_runs_before_queued_reports():
+    async def scenario():
+        q = BackgroundQueue(idle_seconds=0.15)
+        order = []
+
+        def make(name, seconds):
+            async def job():
+                await asyncio.sleep(seconds)
+                order.append(name)
+                return name
+            return job
+
+        # A terminal session is active while work piles up: a long report first, then tags
+        async with q.terminal():
+            report = asyncio.create_task(q.submit("report", "s1", make("report", 0.3)))
+            await asyncio.sleep(0)
+            tags = [asyncio.create_task(q.submit("tagging", "s2", make(f"tag{i}", 0.01))) for i in range(3)]
+            await asyncio.sleep(0.05)
+        await asyncio.wait_for(asyncio.gather(report, *tags), 5)
+        return order
+
+    assert asyncio.run(scenario()) == ["tag0", "tag1", "tag2", "report"]
+
+
+def test_interrupted_report_does_not_hold_up_later_tags():
+    async def scenario():
+        q = BackgroundQueue(idle_seconds=0.1)
+        done = []
+
+        async def report():
+            await asyncio.sleep(0.4)
+            done.append("report")
+
+        async def tag():
+            done.append("tag")
+
+        r = asyncio.create_task(q.submit("report", "s1", report))
+        await asyncio.sleep(0.05)  # report is running
+        async with q.terminal():  # a command interrupts it ...
+            t = asyncio.create_task(q.submit("tagging", "s1", tag))  # ... and queues a tag
+            await asyncio.sleep(0.02)
+        await asyncio.wait_for(asyncio.gather(r, t), 5)
+        return done
+
+    assert asyncio.run(scenario()) == ["tag", "report"]

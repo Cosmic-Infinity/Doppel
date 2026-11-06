@@ -33,6 +33,9 @@ class HoneypotController:
         self.error_message: Optional[str] = None
 
         self.session_manager: Optional[SessionManager] = None
+        # Reasoning for attacker-facing replies. Off at every start: attackers wait
+        # on these replies. Chat and reports reason by default; tagging never does.
+        self.terminal_reasoning: bool = False
         self.ssh_server = None
         self.http_server = None          # uvicorn server for HTTP sensor
         self._http_server_task: Optional[asyncio.Task] = None
@@ -137,7 +140,7 @@ class HoneypotController:
                 persona=preset.get("persona_context", self.config.deception.persona),
                 host_profile=preset,
                 dynamic_honeytokens=self.config.deception.dynamic_honeytokens,
-                no_think=self.config.llm.terminal_no_think,
+                no_think=not self.terminal_reasoning,
             )
             sandbox_manager = DockerSandboxManager(
                 image=self.config.sandbox.image,
@@ -361,9 +364,12 @@ class HoneypotController:
 
         return client, target_model, messages, system_state
 
-    async def query_assistant(self, message: str, model_override: Optional[str] = None) -> Dict[str, Any]:
+    async def query_assistant(
+        self, message: str, model_override: Optional[str] = None, reasoning: bool = True
+    ) -> Dict[str, Any]:
         """Query the in-built security assistant with live telemetry, state context, and benchmark metrics."""
         client, target_model, messages, system_state = await self._prepare_assistant_context(message, model_override)
+        client.reasoning_off = not reasoning
         try:
             metrics = await client.chat_completion_with_metrics(messages=messages, max_tokens=2048)
             return {
@@ -387,10 +393,11 @@ class HoneypotController:
             }
 
     async def query_assistant_stream(
-        self, message: str, model_override: Optional[str] = None
+        self, message: str, model_override: Optional[str] = None, reasoning: bool = True
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream assistant response tokens, live latency, and throughput metrics."""
         client, target_model, messages, system_state = await self._prepare_assistant_context(message, model_override)
+        client.reasoning_off = not reasoning
         try:
             async for chunk in client.chat_completion_stream(messages=messages, max_tokens=2048):
                 chunk["system_state"] = system_state
@@ -567,7 +574,7 @@ class HoneypotController:
             if preset:
                 self.session_manager.deception_engine.set_host_profile(preset)
             self.session_manager.deception_engine.dynamic_honeytokens = self.config.deception.dynamic_honeytokens
-            self.session_manager.deception_engine.no_think = self.config.llm.terminal_no_think
+            self.session_manager.deception_engine.no_think = not self.terminal_reasoning
             if hasattr(self.session_manager.deception_engine, "llm_client") and self.session_manager.deception_engine.llm_client:
                 self.session_manager.deception_engine.llm_client.base_url = self.config.llm.base_url.rstrip("/")
                 self.session_manager.deception_engine.llm_client.model = self.config.llm.model
@@ -684,6 +691,11 @@ class HoneypotController:
             "mock_mode": self.config.llm.mock_mode,
             "backend_available": False,
             "can_switch_live": False,
+            # True / False from the server's model metadata; None when it cannot tell
+            "supports_reasoning": None,
+            "terminal_reasoning": self.terminal_reasoning,
+            # Installed models that report reasoning support (Ollama only)
+            "reasoning_models": [],
             "detail": "",
             "suggestion": None,
             "info": "The LLM powers dynamic terminal simulation, fake honeytoken credentials, and real-time MITRE ATT&CK analysis. Mock Mode runs locally using built-in simulated responses without requiring an AI model or GPU.",
@@ -753,6 +765,13 @@ class HoneypotController:
                     llm_diag["status"] = "ready"
                     llm_diag["reachable"] = True
                     llm_diag["detail"] = f"Connected to LLM backend ({elapsed_ms}ms). Model '{self.config.llm.model}' is ready."
+
+                if models and model_found:
+                    llm_diag["supports_reasoning"] = await self._model_supports_reasoning(client, base, self.config.llm.model)
+                if models:
+                    support = {m: await self._model_supports_reasoning(client, base, m) for m in models if m}
+                    llm_diag["reasoning_models"] = [m for m, ok in support.items() if ok]
+                    llm_diag["reasoning_unknown"] = all(ok is None for ok in support.values())
         except Exception:
             llm_diag["backend_available"] = False
             llm_diag["can_switch_live"] = False
@@ -825,6 +844,23 @@ class HoneypotController:
             },
         }
 
+    async def _model_supports_reasoning(self, client, base: str, model: str) -> Optional[bool]:
+        """Whether the model can reason, from Ollama's model metadata (cached per model).
+
+        Ollama lists a "thinking" capability for reasoning models. Other servers
+        have no such endpoint, so the answer there is None (unknown).
+        """
+        cache = self.__dict__.setdefault("_reasoning_capability", {})
+        key = (base, model)
+        if key not in cache:
+            try:
+                resp = await client.post(base.replace("/v1", "") + "/api/show", json={"model": model})
+                caps = resp.json().get("capabilities") if resp.status_code == 200 else None
+                cache[key] = ("thinking" in caps) if isinstance(caps, list) else None
+            except Exception:
+                return None  # not cached: try again on the next check
+        return cache[key]
+
     async def apply_quick_fix(self, action: str, value: Any = None) -> Dict[str, Any]:
         """Apply 1-click proactive resolution for environment suggestions."""
         if action == "set_port":
@@ -838,6 +874,11 @@ class HoneypotController:
             self.config.llm.mock_mode = bool(value)
             self._sync_runtime_components()
             return {"message": f"Mock mode set to {value}", "config": self.get_config_dict()}
+        elif action == "set_terminal_reasoning":
+            # Reasoning for attacker-facing replies; analysis settings are unaffected
+            self.terminal_reasoning = bool(value)
+            self._sync_runtime_components()
+            return {"message": f"Terminal reasoning set to {bool(value)}", "config": self.get_config_dict()}
         elif action == "toggle_sandbox":
             self.config.sandbox.enabled = bool(value)
             self._sync_runtime_components()

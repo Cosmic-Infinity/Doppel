@@ -326,3 +326,75 @@ async def test_session_report_stream_and_delete_flow(client):
     assert del_res_404.status_code == 404
 
 
+
+
+def test_terminal_reasoning_switch(client):
+    # Not read from the config file: off at start, switched live from the dashboard
+    assert not hasattr(controller.config.llm, "terminal_no_think")
+    orig = controller.terminal_reasoning
+    try:
+        res = client.post("/api/quick-fix", json={"action": "set_terminal_reasoning", "value": True})
+        assert res.status_code == 200
+        assert controller.terminal_reasoning is True
+        client.post("/api/quick-fix", json={"action": "set_terminal_reasoning", "value": False})
+        assert controller.terminal_reasoning is False
+        diag = client.get("/api/diagnostics").json()
+        assert diag["llm"]["terminal_reasoning"] is False
+        assert "supports_reasoning" in diag["llm"] and "reasoning_models" in diag["llm"]
+        html = client.get("/").text
+        assert 'id="toggle-terminal-reasoning"' in html and 'id="toggle-chat-reasoning"' in html
+    finally:
+        controller.terminal_reasoning = orig
+
+
+def test_terminal_reasoning_is_off_at_start():
+    from doppel.dashboard.controller import HoneypotController
+    assert HoneypotController().terminal_reasoning is False
+
+
+def test_chat_reasoning_flag_reaches_the_model_request(client):
+    seen = {}
+    orig = controller.query_assistant
+
+    async def fake(message, model_override=None, reasoning=True):
+        seen["reasoning"] = reasoning
+        return {"success": True, "reply": "ok"}
+
+    controller.query_assistant = fake
+    try:
+        client.post("/api/chat-assistant", json={"message": "hi"})
+        assert seen["reasoning"] is True  # chat reasons by default
+        client.post("/api/chat-assistant", json={"message": "hi", "reasoning": False})
+        assert seen["reasoning"] is False
+    finally:
+        controller.query_assistant = orig
+
+
+def test_reasoning_capability_from_ollama_metadata():
+    import asyncio
+
+    class Resp:
+        def __init__(self, caps):
+            self.status_code = 200
+            self._caps = caps
+
+        def json(self):
+            return {"capabilities": self._caps} if self._caps is not None else {}
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def post(self, url, json=None):
+            self.calls += 1
+            assert url.endswith("/api/show")
+            return Resp({"thinker": ["completion", "thinking"], "plain": ["completion", "tools"]}.get(json["model"]))
+
+    c = Client()
+    controller.__dict__.pop("_reasoning_capability", None)
+    run = lambda m: asyncio.run(controller._model_supports_reasoning(c, "http://x:11434/v1", m))
+    assert run("thinker") is True
+    assert run("plain") is False
+    assert run("other-server-model") is None  # no capabilities field: unknown
+    run("thinker")
+    assert c.calls == 3  # cached per model

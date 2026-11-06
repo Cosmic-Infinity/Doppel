@@ -29,7 +29,6 @@
         <span class="logo-mark">D</span>
         <div class="brand-text">
           <span class="brand-title">Doppel</span>
-          <span class="brand-subtitle">AI Deception Honeypot</span>
         </div>
       </div>
 
@@ -37,21 +36,22 @@
         <div class="status-indicator" id="system-status-indicator">
           <span class="status-dot stopped" id="status-dot"></span>
           <span class="status-text" id="status-text">Stopped</span>
+          <span class="status-port" id="nav-meta-port" title="SSH port"></span>
         </div>
-        <div class="meta-badge" id="nav-meta-port">Port: 2222</div>
-        <div class="meta-badge" id="nav-meta-model">Model: qwen2.5-coder:7b</div>
-        <div class="subsystem-badge" id="nav-badge-llm" title="AI Deception Model">
+        <div class="subsystem-badge" id="nav-badge-llm" title="Model">
           <span class="subsystem-dot checking" id="dot-nav-llm"></span>
-          <span id="text-nav-llm">LLM</span>
+          <span class="badge-label" id="text-nav-llm">Model</span>
         </div>
-        <div class="subsystem-badge" id="nav-badge-docker" title="Docker Sandbox">
+        <div class="subsystem-badge" id="nav-badge-docker" title="Sandbox">
           <span class="subsystem-dot checking" id="dot-nav-docker"></span>
-          <span id="text-nav-docker">Docker</span>
+          <span class="badge-label" id="text-nav-docker">Sandbox</span>
         </div>
-        <div class="subsystem-badge queue-badge hidden" id="nav-badge-queue" title="ATT&amp;CK tagging and reports wait while the terminal is using the model">
-          <span class="subsystem-dot warning" id="dot-nav-queue"></span>
-          <span id="text-nav-queue">Analysis queued</span>
-          <button type="button" class="queue-run-now" id="btn-queue-run-now">Run now</button>
+        <div class="queue-wrap">
+          <div class="subsystem-badge queue-badge hidden" id="nav-badge-queue" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" aria-controls="queue-pop" title="Show analysis queue">
+            <span class="subsystem-dot warning" id="dot-nav-queue"></span>
+            <span class="badge-label" id="text-nav-queue">Queued</span>
+          </div>
+          <div class="detail-menu-pop queue-pop hidden" id="queue-pop" role="dialog" aria-label="Analysis queue"></div>
         </div>
       </div>
 
@@ -60,13 +60,13 @@
           <svg class="btn-svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
           </svg>
-          <span>AI Assistant</span>
+          <span>Assistant</span>
         </button>
         <button id="btn-view-switch" class="btn btn-secondary hidden">
-          <span id="btn-view-switch-label">Live Dashboard</span>
+          <span id="btn-view-switch-label">Dashboard</span>
         </button>
         <button id="btn-toggle-honeypot" class="btn btn-primary">
-          <span id="btn-toggle-label">Start Honeypot</span>
+          <span id="btn-toggle-label">Start</span>
         </button>
       </div>
     </header>
@@ -118,6 +118,14 @@
                 </div>
                 <span class="control-hint">Changes apply to new commands immediately.</span>
               </div>
+              <label class="switch-row" id="row-terminal-reasoning">
+                <input type="checkbox" class="switch-input" id="toggle-terminal-reasoning">
+                <span class="switch-track" aria-hidden="true"></span>
+                <span class="switch-text">
+                  <span class="switch-label">Reasoning for terminal replies</span>
+                  <span class="control-hint" id="hint-terminal-reasoning"></span>
+                </span>
+              </label>
               <div class="card-action-bar" id="action-bar-llm">
                 <!-- 1-Click Fixes dynamically inserted -->
               </div>
@@ -280,6 +288,10 @@
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 </button>
                 <span class="detail-started" id="detail-started"></span>
+                <span class="detail-meta-sep" aria-hidden="true">·</span>
+                <span class="detail-meta-item"><span id="detail-cmd-count">0</span> <span id="detail-cmd-noun">commands</span></span>
+                <span class="detail-meta-sep" aria-hidden="true">·</span>
+                <span class="detail-meta-item detail-meta-path" id="detail-cwd" title="Working directory">/home/ubuntu</span>
               </div>
             </div>
 
@@ -293,32 +305,33 @@
             </div>
           </div>
 
-          <div class="detail-stats">
-            <div class="stat-tile">
-              <span class="stat-label">Threat</span>
-              <span class="stat-value" id="detail-threat-score">0</span>
-              <span class="threat-bar"><span class="threat-bar-fill" id="detail-threat-bar"></span></span>
+          <div class="detail-facts">
+            <div class="fact">
+              <span class="fact-label">Threat</span>
+              <span class="fact-value">
+                <span class="stat-value" id="detail-threat-score">0</span>
+                <span class="fact-level" id="detail-threat-level">Low</span>
+                <span class="threat-bar"><span class="threat-bar-fill" id="detail-threat-bar"></span></span>
+              </span>
+              <span class="fact-sub" id="detail-threat-top"></span>
             </div>
-            <div class="stat-tile">
-              <span class="stat-label">Commands</span>
-              <span class="stat-value" id="detail-cmd-count">0</span>
+            <div class="fact">
+              <span class="fact-label">Phase</span>
+              <span class="fact-value"><span class="phase-pill" id="detail-phase-pill">Reconnaissance</span></span>
+              <span class="fact-sub">Furthest kill-chain stage reached</span>
             </div>
-            <div class="stat-tile">
-              <span class="stat-label">Phase</span>
-              <span class="phase-pill" id="detail-phase-pill">Reconnaissance</span>
+            <div class="fact">
+              <span class="fact-label">Attacker</span>
+              <span class="fact-value"><span class="profile-tag" id="detail-profile-tag">Profiling</span></span>
+              <span class="fact-sub" id="detail-profile-sub"></span>
             </div>
-            <div class="stat-tile">
-              <span class="stat-label">Attacker</span>
-              <span class="profile-tag" id="detail-profile-tag">Profiling</span>
-            </div>
-            <div class="stat-tile">
-              <span class="stat-label">Campaign</span>
-              <button type="button" class="campaign-pill hidden" id="detail-campaign-pill" title="Show campaign"></button>
-              <span class="stat-value muted" id="detail-campaign-none">None</span>
-            </div>
-            <div class="stat-tile stat-tile-wide">
-              <span class="stat-label">Directory</span>
-              <span class="stat-value stat-path" id="detail-cwd">/home/ubuntu</span>
+            <div class="fact">
+              <span class="fact-label">Campaign</span>
+              <span class="fact-value">
+                <button type="button" class="campaign-pill hidden" id="detail-campaign-pill" title="Show campaign"></button>
+                <span class="fact-none" id="detail-campaign-none">Not linked</span>
+              </span>
+              <span class="fact-sub" id="detail-campaign-sub"></span>
             </div>
           </div>
 
@@ -508,6 +521,11 @@
                 <option value="qwen3.6:35b-a3b">qwen3.6:35b-a3b</option>
               </select>
             </div>
+            <label class="assistant-switch" id="row-chat-reasoning">
+              <input type="checkbox" class="switch-input" id="toggle-chat-reasoning" checked>
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="assistant-switch-label">Reasoning</span>
+            </label>
             <button type="button" class="btn btn-secondary assistant-btn-reset" id="btn-reset-assistant" title="Reset chat history">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
                 <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>

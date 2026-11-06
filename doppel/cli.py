@@ -40,7 +40,7 @@ def build_system_stack(config: DoppelConfig) -> SessionManager:
         persona=preset.get("persona_context", config.deception.persona),
         host_profile=preset,
         dynamic_honeytokens=config.deception.dynamic_honeytokens,
-        no_think=config.llm.terminal_no_think,
+        no_think=True,  # attackers wait on terminal replies
     )
     sandbox_manager = DockerSandboxManager(
         image=config.sandbox.image,

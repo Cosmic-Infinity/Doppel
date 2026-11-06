@@ -54,6 +54,8 @@ class QuickFixRequest(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str
     model: Optional[str] = None
+    # Chat reasons by default; the assistant panel has its own switch
+    reasoning: bool = True
 
 
 class ReportStreamRequest(BaseModel):
@@ -80,7 +82,7 @@ async def apply_quick_fix(req: QuickFixRequest):
 
 @app.post("/api/chat-assistant")
 async def chat_assistant(req: AssistantChatRequest):
-    return await controller.query_assistant(message=req.message, model_override=req.model)
+    return await controller.query_assistant(message=req.message, model_override=req.model, reasoning=req.reasoning)
 
 
 @app.post("/api/chat-assistant/stream")
@@ -88,7 +90,9 @@ async def chat_assistant_stream(req: AssistantChatRequest):
     """Stream assistant response tokens and live throughput metrics via Server-Sent Events."""
     async def sse_generator():
         try:
-            async for chunk in controller.query_assistant_stream(message=req.message, model_override=req.model):
+            async for chunk in controller.query_assistant_stream(
+                message=req.message, model_override=req.model, reasoning=req.reasoning
+            ):
                 yield f"data: {json.dumps(chunk)}\n\n"
         except asyncio.CancelledError:
             yield f"data: {json.dumps({'delta': '', 'done': True, 'stopped': True})}\n\n"

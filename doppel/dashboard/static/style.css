@@ -109,6 +109,38 @@ body {
   font-weight: 500;
 }
 
+.status-port {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.status-port:empty {
+  display: none;
+}
+
+.badge-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Narrow windows: badges keep their status dot, the text moves to the tooltip */
+@media (max-width: 1180px) {
+  #nav-badge-docker .badge-label {
+    display: none;
+  }
+}
+
+@media (max-width: 1020px) {
+  #nav-badge-llm .badge-label,
+  .status-port {
+    display: none;
+  }
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -186,9 +218,121 @@ body {
   background-color: var(--accent-blue);
 }
 
+.queue-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
 .queue-badge {
   gap: 8px;
   padding-right: 4px;
+  cursor: pointer;
+}
+
+.queue-badge:focus-visible {
+  outline: 1px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.queue-pop {
+  left: 0;
+  right: auto;
+  width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.queue-pop-head {
+  padding: 4px 8px 8px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue-row-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-row-detail,
+.queue-row-state {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.queue-row-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.queue-row-state.running {
+  color: var(--accent-blue);
+}
+
+.activity-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--border-subtle);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: assistant-spin 0.8s linear infinite;
+}
+
+.card-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  color: var(--accent-blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
+  }
+}
+
+.queue-pop-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 6px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .queue-run-now {
@@ -709,6 +853,30 @@ body {
   outline-offset: 2px;
 }
 
+.assistant-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.assistant-switch.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switch-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switch-input:disabled + .switch-track {
+  cursor: not-allowed;
+}
+
 .switch-text {
   display: flex;
   flex-direction: column;
@@ -1106,6 +1274,155 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.detail-meta-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.detail-meta-item {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.detail-meta-path {
+  font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Session facts: one compact row of label / value / context */
+.detail-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 20px 14px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 12px;
+}
+
+.fact + .fact {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.fact-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.fact-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.fact-value .stat-value {
+  font-size: 15px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.fact-level {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.fact-value .threat-bar {
+  flex: 1;
+  max-width: 80px;
+}
+
+.fact-sub,
+.fact-none {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fact-none {
+  font-size: 13px;
+}
+
+.fact-sub:empty {
+  display: none;
+}
+
+/* Readable values instead of all-caps chips */
+.detail-facts .phase-pill,
+.detail-facts .profile-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-facts .phase-pill::before,
+.detail-facts .profile-tag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.detail-facts .phase-pill.phase-recon::before { background: var(--accent-blue); }
+.detail-facts .phase-pill.phase-exec::before { background: var(--accent-amber); }
+.detail-facts .phase-pill.phase-priv-esc::before,
+.detail-facts .phase-pill.phase-exfil::before { background: var(--accent-red); }
+.detail-facts .profile-tag.human::before { background: #c084fc; }
+.detail-facts .profile-tag.bot::before,
+.detail-facts .profile-tag.scanner::before { background: var(--accent-blue); }
+
+.detail-facts .campaign-pill {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-blue);
+}
+
+.detail-facts .campaign-pill:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 1100px) {
+  .detail-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fact:nth-child(3) {
+    border-left: none;
+  }
+  .fact:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle);
+  }
 }
 
 .detail-started {

@@ -417,7 +417,6 @@ llm:
   mock_mode: false
   analysis_model: ""                  # ATT&CK tagging and reports; empty = same as model
   analysis_timeout_seconds: 120.0     # background analysis may wait longer than the terminal
-  terminal_no_think: false            # reasoning models: no reasoning step for terminal output
 
 deception:
   tar_pit_delay_ms: 0

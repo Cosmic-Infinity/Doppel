@@ -93,9 +93,24 @@ class BackgroundQueue:
             "reports": sum(1 for j in pending if j.kind == "report"),
             "tagging": sum(1 for j in pending if j.kind == "tagging"),
             "sessions": sorted({j.session_id for j in pending}),
+            "by_session": self._by_session(pending),
             "forced": self._forced,
+            "terminal_active": self._terminal_active > 0,
             "idle_seconds": self.idle_seconds,
         }
+
+    def _by_session(self, pending) -> list:
+        """Per-session summary in queue order: the running session first."""
+        groups: Dict[str, Dict[str, Any]] = {}
+        for job in pending:
+            g = groups.setdefault(job.session_id, {"session_id": job.session_id, "tags": 0, "report": False, "running": None})
+            if job.kind == "report":
+                g["report"] = True
+            else:
+                g["tags"] += 1
+            if job is self._running:
+                g["running"] = job.kind
+        return list(groups.values())[:50]
 
     def pending_for(self, session_id: str) -> Dict[str, int]:
         jobs = list(self._jobs) + ([self._running] if self._running else [])
@@ -138,6 +153,19 @@ class BackgroundQueue:
             except Exception as e:
                 logger.debug(f"Queue status listener failed: {e}")
 
+    def _next_job(self) -> _Job:
+        """Oldest tagging job first, then the oldest report.
+
+        Tagging is short and feeds live threat scores and alerts; a report is a
+        long call that a busy terminal may interrupt several times. Taking jobs
+        strictly in order let one restarting report hold up every tag behind it.
+        """
+        for job in self._jobs:
+            if job.kind != "report":
+                self._jobs.remove(job)
+                return job
+        return self._jobs.popleft()
+
     async def _sleep_until_woken(self, timeout: Optional[float] = None):
         self._wake.clear()
         try:
@@ -162,7 +190,7 @@ class BackgroundQueue:
                     await self._sleep_until_woken(remaining)
                     continue
 
-            job = self._jobs.popleft()
+            job = self._next_job()
             if job.future.done():  # the waiter went away
                 continue
             self._running = job
