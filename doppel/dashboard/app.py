@@ -165,6 +165,24 @@ async def update_config_endpoint(req: ConfigUpdateRequest):
     return {"message": "Configuration updated", "config": controller.get_config_dict()}
 
 
+@app.get("/api/settings")
+async def get_settings_endpoint():
+    """All adjustable settings, nested by section (honeypot, llm, deception, sandbox, analytics, alerts)."""
+    return controller.get_settings()
+
+
+@app.patch("/api/settings")
+async def update_settings_endpoint(patch: Dict[str, Any]):
+    """Change any subset of the settings returned by GET /api/settings, for example
+    {"llm": {"timeout_seconds": 60}, "analytics": {"auto_reports": false}}.
+    Values are validated and applied together, or not at all. Changes last until the
+    dashboard restarts; `applies_on_next_start` lists those that need a Stop and Start."""
+    try:
+        return controller.update_settings(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 
 @app.get("/api/sessions")
 async def get_sessions():

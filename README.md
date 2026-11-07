@@ -316,6 +316,33 @@ access:
 | `honeytoken_activated` | Canary token presented | `token_type`, `session_id`, `remote_ip` |
 | `session_closed` | Session ends | `report_path` |
 
+### Control API
+
+Everything the dashboard does goes through a REST API, so Doppel can be scripted or driven by other tools. Interactive documentation is served at `/docs` and the OpenAPI schema at `/openapi.json`; both are behind the same IP allowlist.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/status`, `GET /api/diagnostics` | State, active settings, background queue, environment checks |
+| `POST /api/start`, `POST /api/stop` | Start or stop the honeypot |
+| `GET /api/settings`, `PATCH /api/settings` | Read or change settings (see below) |
+| `POST /api/quick-fix` | One-step actions: `set_model`, `set_terminal_reasoning`, `set_auto_reports`, `toggle_sandbox`, `recheck` |
+| `POST /api/background/run-now` | Run queued analysis without waiting for idle time |
+| `GET /api/sessions`, `GET /api/sessions/{id}`, `DELETE /api/sessions/{id}` | Sessions with commands, tags and profile |
+| `GET /api/sessions/{id}/replay` | Timed replay frames |
+| `GET`, `POST .../report/stream`, `POST .../report/stop` under `/api/sessions/{id}/report` | Read, generate or stop an incident report |
+| `GET /api/campaigns`, `GET /api/campaigns/{id}` | Linked sessions and why they were linked |
+| `POST /api/chat-assistant` (and `/stream`) | Ask the operator assistant about the data |
+| `GET /api/stream`, `WS /ws/stream` | Live events (table above) |
+
+`PATCH /api/settings` takes any subset of the settings returned by `GET /api/settings`, nested by section:
+
+```bash
+curl -X PATCH http://localhost:8000/api/settings -H "Content-Type: application/json" \
+     -d '{"llm": {"timeout_seconds": 60}, "analytics": {"auto_reports": false}}'
+```
+
+Values are validated against the configuration types and applied together, or not at all (`422` with the reason). Most apply immediately; the response lists under `applies_on_next_start` those that take effect after a Stop and Start (listening ports, SSH banner, sandbox memory limit, report concurrency, canary URL). Changes last until the dashboard restarts; `config.yaml` is not rewritten. API keys, SMTP credentials, file paths, bind addresses, the dashboard allowlist and sandbox network isolation cannot be changed through the API.
+
 ---
 
 ## Quick Start
@@ -435,6 +462,7 @@ analytics:
   db_path: "doppel_telemetry.db"
   enable_mitre_tagging: true
   reports_dir: "reports"
+  auto_reports: true                  # report each closed session; off = on demand from the dashboard
   max_concurrent_reports: 2
   background_idle_seconds: 20         # analysis waits this long after the last terminal request
 

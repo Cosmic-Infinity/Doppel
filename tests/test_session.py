@@ -85,6 +85,39 @@ async def test_session_lifecycle_and_navigation():
 
 
 @pytest.mark.asyncio
+async def test_no_report_on_close_when_auto_reports_off():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        reports_dir = os.path.join(tmpdir, "reports")
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.deception.simulate_latency = False
+        config.analytics.db_path = os.path.join(tmpdir, "test_telemetry.db")
+        config.analytics.reports_dir = reports_dir
+        config.analytics.auto_reports = False
+
+        llm_client = LLMClient(mock_mode=True)
+        db = TelemetryDB(db_path=config.analytics.db_path)
+        await db.initialize()
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=DeceptionEngine(llm_client),
+            sandbox_manager=DockerSandboxManager(enabled=False),
+            router=HybridRouter(sandbox_available=False),
+            db=db,
+            observer=ThreatObserver(llm_client, db),
+            reporter=IncidentReporter(llm_client, db, reports_dir=reports_dir),
+        )
+        session = await session_mgr.create_session(
+            remote_ip="192.168.1.100", remote_port=44222, username="ubuntu", password="testpassword",
+        )
+        await session_mgr.process_command(session.session_id, "whoami")
+
+        assert await session_mgr.close_session(session.session_id) is None
+        assert not os.path.exists(reports_dir) or not os.listdir(reports_dir)
+
+
+@pytest.mark.asyncio
 async def test_commands_logged_with_prompt_state_and_receive_time():
     """Each command is logged with the prompt it was typed at and when it arrived."""
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:

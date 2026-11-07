@@ -60,6 +60,8 @@ analytics:
   db_path: "doppel_telemetry.db"
   enable_mitre_tagging: true
   reports_dir: "reports"
+  # Generate an incident report when each session closes (on demand from the dashboard otherwise)
+  auto_reports: true
   # Incident reports generated at the same time (each is an LLM call)
   max_concurrent_reports: 2
   # ATT&CK tagging and reports give way to terminal replies (one model serves one

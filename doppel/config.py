@@ -72,6 +72,9 @@ class AnalyticsSettings(BaseModel):
     db_path: str = "doppel_telemetry.db"
     enable_mitre_tagging: bool = True
     reports_dir: str = "reports"
+    # Queue an incident report when a session closes. Reports can still be
+    # generated on demand from the dashboard when this is off.
+    auto_reports: bool = True
     # Incident reports are LLM-generated when sessions close; cap how many run at
     # once so a burst of short bot sessions cannot starve live deception replies.
     max_concurrent_reports: int = 2

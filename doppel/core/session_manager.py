@@ -806,7 +806,7 @@ class SessionManager:
             logger.error(f"Error logging session end for {session_id[:8]}: {e}")
 
         report_path = None
-        if generate_report:
+        if generate_report and getattr(self.config.analytics, "auto_reports", True):
             if self.background.enabled:
                 logger.info(f"Session {session_id[:8]} closed. Incident report queued.")
                 self._notify("session_closing", {

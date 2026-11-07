@@ -21,6 +21,24 @@ from doppel.http_sensor.sensor import create_http_sensor
 
 logger = logging.getLogger("doppel.dashboard.controller")
 
+# Settings exposed through GET/PATCH /api/settings, by config section. Secrets, file paths,
+# the dashboard allow-list, bind addresses and sandbox network isolation are deliberately left out.
+API_SETTINGS: Dict[str, Set[str]] = {
+    "": {"active_preset", "http_sensor_port"},
+    "honeypot": {"hostname", "default_user", "accept_any_password", "server_banner", "port", "motd"},
+    "llm": {"base_url", "model", "timeout_seconds", "temperature", "mock_mode", "analysis_model",
+            "analysis_timeout_seconds"},
+    "deception": {"persona", "tar_pit_delay_ms", "intercept_sensitive_files", "intercept_missing_tools",
+                  "dynamic_honeytokens", "canary_base_url", "simulate_latency", "min_latency_ms", "max_latency_ms",
+                  "jitter_percent", "spike_probability", "spike_min_ms", "spike_max_ms"},
+    "sandbox": {"enabled", "memory_limit", "timeout_seconds"},
+    "analytics": {"enable_mitre_tagging", "auto_reports", "max_concurrent_reports", "background_idle_seconds"},
+    "alerts.email": {"enabled", "min_threat_score", "receiver_email"},
+}
+# These are read when the honeypot starts; the rest apply immediately
+SETTINGS_APPLIED_ON_START = {"honeypot.port", "honeypot.server_banner", "http_sensor_port", "sandbox.memory_limit",
+                             "analytics.max_concurrent_reports", "deception.canary_base_url"}
+
 
 class HoneypotController:
     """Manages honeypot daemon lifecycle (start, stop, configure) and WebSocket telemetry broadcast."""
@@ -559,6 +577,7 @@ class HoneypotController:
             "llm_mock_mode": self.config.llm.mock_mode,
             "sandbox_enabled": self.config.sandbox.enabled,
             "sandbox_image": self.config.sandbox.image,
+            "auto_reports": self.config.analytics.auto_reports,
         }
 
     def _sync_runtime_components(self):
@@ -598,6 +617,19 @@ class HoneypotController:
                 self.session_manager.sandbox_manager.check_availability()
         if hasattr(self.session_manager, "background"):
             self.session_manager.background.enabled = not self.config.llm.mock_mode
+            self.session_manager.background.idle_seconds = max(0.0, float(self.config.analytics.background_idle_seconds))
+        # Timeouts and temperature: the terminal client, then the analysis client(s)
+        engine = getattr(self.session_manager, "deception_engine", None)
+        terminal_client = getattr(engine, "llm_client", None)
+        if terminal_client is not None:
+            terminal_client.timeout = self.config.llm.timeout_seconds
+            terminal_client.temperature = self.config.llm.temperature
+        analysis_timeout = self.config.llm.analysis_timeout_seconds or self.config.llm.timeout_seconds
+        for owner in ("observer", "reporter"):
+            client = getattr(getattr(self.session_manager, owner, None), "llm_client", None)
+            if client is not None and client is not terminal_client:
+                client.timeout = analysis_timeout
+                client.temperature = self.config.llm.temperature
 
     async def _attach_session_container(self, session) -> None:
         """Asynchronously attach a new isolated sandbox container to an active session."""
@@ -635,6 +667,92 @@ class HoneypotController:
         if "http_sensor_port" in updates:
             self.config.http_sensor_port = int(updates["http_sensor_port"])
         self._sync_runtime_components()
+
+    def _settings_section(self, section: str):
+        obj = self.config
+        for part in filter(None, section.split(".")):
+            obj = getattr(obj, part)
+        return obj
+
+    def get_settings(self) -> Dict[str, Any]:
+        """Every API-adjustable setting, nested by config section."""
+        out: Dict[str, Any] = {}
+        for section, fields in API_SETTINGS.items():
+            obj = self._settings_section(section)
+            target = out
+            for part in filter(None, section.split(".")):
+                target = target.setdefault(part, {})
+            for name in sorted(fields):
+                target[name] = getattr(obj, name)
+        out["terminal_reasoning"] = self.terminal_reasoning
+        return out
+
+    def update_settings(self, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and apply a partial, nested settings update. All-or-nothing: on any
+        error nothing changes. Returns the changed keys and which of them need a restart."""
+        from pydantic import TypeAdapter, ValidationError
+
+        flat: Dict[str, Any] = {}
+
+        def walk(prefix: str, value: Any):
+            section = prefix.rsplit(".", 1)[0] if "." in prefix else ""
+            name = prefix.rsplit(".", 1)[-1]
+            if prefix and name in API_SETTINGS.get(section, set()):
+                flat[prefix] = value
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    walk(f"{prefix}.{k}" if prefix else k, v)
+            elif prefix == "terminal_reasoning":
+                flat[prefix] = value
+            else:
+                raise ValueError(f"Unknown or read-only setting: {prefix}")
+
+        walk("", patch)
+        if not flat:
+            raise ValueError("No settings given")
+
+        staged: Dict[str, Tuple[Any, str, Any]] = {}
+        for key, value in flat.items():
+            if key == "terminal_reasoning":
+                staged[key] = (self, "terminal_reasoning", TypeAdapter(bool).validate_python(value))
+                continue
+            section, name = key.rsplit(".", 1) if "." in key else ("", key)
+            obj = self._settings_section(section)
+            annotation = type(obj).model_fields[name].annotation
+            try:
+                parsed = TypeAdapter(annotation).validate_python(value)
+            except ValidationError as e:
+                raise ValueError(f"{key}: {e.errors()[0]['msg']}") from None
+            if isinstance(parsed, (int, float)) and not isinstance(parsed, bool) and parsed < 0:
+                raise ValueError(f"{key}: must not be negative")
+            staged[key] = (obj, name, parsed)
+
+        lat = self.config.deception
+        lo = staged.get("deception.min_latency_ms", (None, None, lat.min_latency_ms))[2]
+        hi = staged.get("deception.max_latency_ms", (None, None, lat.max_latency_ms))[2]
+        if lo > hi:
+            raise ValueError("deception.min_latency_ms must not exceed deception.max_latency_ms")
+        if "active_preset" in staged:
+            from doppel.config import get_presets_dict, get_preset_aliases
+            name = staged["active_preset"][2]
+            known = set(get_presets_dict()) | set(get_preset_aliases())
+            if known and name not in known:
+                raise ValueError(f"active_preset: unknown preset '{name}' (available: {', '.join(sorted(get_presets_dict()))})")
+        for key in ("llm.timeout_seconds", "llm.analysis_timeout_seconds", "sandbox.timeout_seconds"):
+            if key in staged and staged[key][2] == 0:
+                raise ValueError(f"{key}: must be greater than zero")
+
+        changed = []
+        for key, (obj, name, parsed) in staged.items():
+            if getattr(obj, name) != parsed:
+                setattr(obj, name, parsed)
+                changed.append(key)
+        self._sync_runtime_components()
+        restart = [k for k in changed if k in SETTINGS_APPLIED_ON_START]
+        if restart and self.status == "RUNNING":
+            logger.info(f"Settings applied on next start: {', '.join(restart)}")
+        return {"changed": changed, "applies_on_next_start": restart if self.status == "RUNNING" else [],
+                "settings": self.get_settings()}
 
     async def diagnose_environment(self) -> Dict[str, Any]:
         """Perform proactive pre-flight checks on Docker, Ollama/LLM, and ports."""
@@ -879,6 +997,10 @@ class HoneypotController:
             self.terminal_reasoning = bool(value)
             self._sync_runtime_components()
             return {"message": f"Terminal reasoning set to {bool(value)}", "config": self.get_config_dict()}
+        elif action == "set_auto_reports":
+            # Takes effect for sessions that close from now on; queued reports still run
+            self.config.analytics.auto_reports = bool(value)
+            return {"message": f"Automatic reports set to {bool(value)}", "config": self.get_config_dict()}
         elif action == "toggle_sandbox":
             self.config.sandbox.enabled = bool(value)
             self._sync_runtime_components()

@@ -347,6 +347,56 @@ def test_terminal_reasoning_switch(client):
         controller.terminal_reasoning = orig
 
 
+def test_settings_api_reads_validates_and_applies(client):
+    import copy
+    saved = copy.deepcopy(controller.config)
+    try:
+        settings = client.get("/api/settings").json()
+        assert "timeout_seconds" in settings["llm"] and "auto_reports" in settings["analytics"]
+        assert "api_key" not in settings["llm"] and "access" not in settings
+        assert "email" in settings["alerts"] and "smtp_password" not in settings["alerts"]["email"]
+
+        res = client.patch("/api/settings", json={"llm": {"timeout_seconds": 75},
+                                                  "analytics": {"auto_reports": False, "background_idle_seconds": 5}})
+        assert res.status_code == 200
+        assert set(res.json()["changed"]) == {"llm.timeout_seconds", "analytics.auto_reports",
+                                              "analytics.background_idle_seconds"}
+        assert controller.config.llm.timeout_seconds == 75
+        assert controller.config.analytics.auto_reports is False
+
+        # Rejected as a whole: one bad value means nothing changes
+        bad = [
+            {"llm": {"api_key": "x"}},                                   # secret, not exposed
+            {"access": {"dashboard_allowed_ips": ["0.0.0.0/0"]}},        # access control, not exposed
+            {"sandbox": {"network_disabled": False}},                    # isolation, not exposed
+            {"llm": {"timeout_seconds": "soon"}},                        # wrong type
+            {"llm": {"timeout_seconds": 0}},
+            {"deception": {"min_latency_ms": 5000, "max_latency_ms": 100}},
+            {"active_preset": "no_such_preset"},
+            {"llm": {"temperature": 0.5}, "honeypot": {"port": -1}},
+        ]
+        for patch in bad:
+            r = client.patch("/api/settings", json=patch)
+            assert r.status_code == 422, patch
+        assert controller.config.llm.temperature == saved.llm.temperature
+        assert controller.config.sandbox.network_disabled is True
+    finally:
+        controller.config = saved
+
+
+def test_auto_reports_switch(client):
+    orig = controller.config.analytics.auto_reports
+    try:
+        res = client.post("/api/quick-fix", json={"action": "set_auto_reports", "value": False})
+        assert res.status_code == 200
+        assert controller.config.analytics.auto_reports is False
+        assert client.get("/api/status").json()["config"]["auto_reports"] is False
+        client.post("/api/quick-fix", json={"action": "set_auto_reports", "value": True})
+        assert client.get("/api/status").json()["config"]["auto_reports"] is True
+    finally:
+        controller.config.analytics.auto_reports = orig
+
+
 def test_terminal_reasoning_is_off_at_start():
     from doppel.dashboard.controller import HoneypotController
     assert HoneypotController().terminal_reasoning is False
