@@ -413,7 +413,7 @@ honeypot:
 llm:
   base_url: "http://127.0.0.1:11434/v1"
   model: "qwen2.5-coder:7b"
-  timeout_seconds: 45.0
+  timeout_seconds: 60.0
   mock_mode: false
   analysis_model: ""                  # ATT&CK tagging and reports; empty = same as model
   analysis_timeout_seconds: 120.0     # background analysis may wait longer than the terminal

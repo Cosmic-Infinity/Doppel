@@ -26,7 +26,7 @@ llm:
   # Any model supported by Ollama, vLLM, or LM Studio (e.g., qwen2.5-coder:7b, llama3.1:8b, mistral-nemo:12b)
   model: "qwen2.5-coder:7b"
   api_key: "ollama"
-  timeout_seconds: 45.0
+  timeout_seconds: 60.0
   temperature: 0.2
   # When true, runs deterministic simulated responses without needing an active LLM
   mock_mode: false

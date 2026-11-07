@@ -28,7 +28,7 @@ class LLMSettings(BaseModel):
     base_url: str = "http://127.0.0.1:11434/v1"
     model: str = "qwen2.5-coder:7b"
     api_key: str = "ollama"
-    timeout_seconds: float = 45.0
+    timeout_seconds: float = 60.0
     temperature: float = 0.2
     mock_mode: bool = False
     # Model for background analysis (ATT&CK tagging, incident reports).
