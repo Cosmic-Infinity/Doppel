@@ -231,8 +231,9 @@ class SessionManager:
             if not self.sandbox_manager.is_available:
                 await asyncio.to_thread(self.sandbox_manager.check_availability)
             if self.sandbox_manager.is_available:
+                from doppel.config import get_active_preset
                 container_id = await asyncio.to_thread(
-                    self.sandbox_manager.create_sandbox_session, sess_id, username=username
+                    self.sandbox_manager.create_sandbox_session, sess_id, username=username, preset=get_active_preset(self.config)
                 )
 
         session = SessionState(
@@ -305,10 +306,12 @@ class SessionManager:
             if not self.sandbox_manager.is_available:
                 await asyncio.to_thread(self.sandbox_manager.check_availability)
             if self.sandbox_manager.is_available:
+                from doppel.config import get_active_preset
                 session.container_id = await asyncio.to_thread(
                     self.sandbox_manager.create_sandbox_session,
                     session.session_id,
                     username=session.username,
+                    preset=get_active_preset(self.config),
                 )
 
         # Update router sandbox availability status

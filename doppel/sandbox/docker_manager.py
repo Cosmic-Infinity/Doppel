@@ -135,7 +135,7 @@ class DockerSandboxManager:
         self._image_thread = threading.Thread(target=self.ensure_image, name="sandbox-image", daemon=True)
         self._image_thread.start()
 
-    def create_sandbox_session(self, session_id: str, username: str = "ubuntu") -> Optional[str]:
+    def create_sandbox_session(self, session_id: str, username: str = "ubuntu", preset: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Spawn a new isolated container for an attacker session."""
         if not self.is_available:
             self.check_availability()
@@ -146,6 +146,14 @@ class DockerSandboxManager:
             return None
 
         container_name = f"doppel_sandbox_{session_id[:8]}"
+        active_preset = preset or {}
+        persona = active_preset.get("persona_context", "ubuntu_web_server")
+        default_user = active_preset.get("default_user", username or "ubuntu")
+        user_uid = active_preset.get("user_uid", 1000)
+        home_dir = active_preset.get("home_dir", f"/home/{default_user}")
+        admin_ip = active_preset.get("admin_ip", "10.0.4.1")
+        container_hostname = active_preset.get("hostname", self.hostname)
+
         try:
             # Check if container already exists
             try:
@@ -159,7 +167,7 @@ class DockerSandboxManager:
             container = self.client.containers.run(
                 image=self.image,
                 name=container_name,
-                hostname=self.hostname,
+                hostname=container_hostname,
                 detach=True,
                 tty=True,
                 stdin_open=True,
@@ -169,13 +177,13 @@ class DockerSandboxManager:
                 remove=True,
             )
 
-            # Bootstrap standard Linux layout, user accounts, Ubuntu release markers, aliases, and env file
+            # Bootstrap standard Linux layout, user accounts, distro release markers, aliases, and env file
             try:
                 user_cmds = (
                     f"mkdir -p /home/{username} && "
                     f"(id -u '{username}' >/dev/null 2>&1 || adduser -D -s /bin/sh '{username}' 2>/dev/null || useradd -m -s /bin/sh '{username}' 2>/dev/null || true) && "
                     f"chown -R '{username}' /home/{username} 2>/dev/null || true; "
-                ) if username and username != "root" else ""
+                ) if username and username != "root" and username != default_user else ""
 
                 # who reports the session's login time (container creation) and
                 # the persona's boot time, both from the simulated clock
@@ -184,44 +192,68 @@ class DockerSandboxManager:
                 who_wrapper = (
                     "printf '#!/bin/sh\\n' > /usr/local/bin/who && "
                     "printf 'if [ $# -eq 0 ] || [ \"$1\" = \"-m\" ] || { [ $# -eq 2 ] && { [ \"$1 $2\" = \"am i\" ] || [ \"$1 $2\" = \"am I\" ] || [ \"$1 $2\" = \"mom likes\" ]; }; }; then\\n' >> /usr/local/bin/who && "
-                    "printf '    printf \"ubuntu   pts/0        " + login_stamp + " (10.0.4.1)\\n\"\\n' >> /usr/local/bin/who && "
+                    f"printf '    printf \"{default_user}   pts/0        {login_stamp} ({admin_ip})\\n\"\\n' >> /usr/local/bin/who && "
                     "printf '    exit 0\\n' >> /usr/local/bin/who && "
                     "printf 'fi\\n' >> /usr/local/bin/who && "
-                    "printf 'if [ \"$1\" = \"-q\" ]; then\\n    printf \"ubuntu\\n# users=1\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
+                    f"printf 'if [ \"$1\" = \"-q\" ]; then\\n    printf \"{default_user}\\n# users=1\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
                     "printf 'if [ \"$1\" = \"-b\" ]; then\\n    printf \"         system boot  " + boot_stamp + "\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
                     "printf 'if [ \"$1\" = \"-r\" ]; then\\n    printf \"         run-level 5  " + boot_stamp + "\\n\"\\n    exit 0\\nfi\\n' >> /usr/local/bin/who && "
                     "printf 'if [ $# -gt 0 ]; then\\n    printf \"who: extra operand '\''%%s'\''\\nTry '\''who --help'\'' for more information.\\n\" \"$1\"\\n    exit 1\\nfi\\n' >> /usr/local/bin/who && "
                     "chmod +x /usr/local/bin/who 2>/dev/null || true; "
                 )
 
-                decoy_seed = (
-                    "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
-                    "mkdir -p /home/ubuntu/.ssh && "
-                    "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\\nAWS_SECRET_ACCESS_KEY=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\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
-                    "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
-                    "printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1b9xP0L9Q8uN7Y2K3vW4rZ1mXo5P6qRsTuVwXyZaBc deploy-key-2026\\n' > /home/ubuntu/.ssh/authorized_keys && "
-                    "printf 'SELECT user, host FROM mysql.user;\\nGRANT ALL PRIVILEGES ON app_production.* TO '\''api_prod'\''@'\''10.0.4.%%'\'' IDENTIFIED BY '\''P@ssw0rdProd2026!'\'';\\nFLUSH PRIVILEGES;\\n' > /home/ubuntu/.mysql_history && "
-                    "printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > /home/ubuntu/.bash_history && "
-                    "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
-                    "chmod 700 /home/ubuntu/.ssh 2>/dev/null || true; "
-                    "chmod 600 /home/ubuntu/.ssh/authorized_keys /home/ubuntu/.mysql_history /home/ubuntu/.bash_history 2>/dev/null || true; "
-                    "chown -R 1000:1000 /var/www/html /home/ubuntu 2>/dev/null || true; "
-                )
+                if persona == "fintech_api":
+                    os_release = "printf 'PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\\nNAME=\"Debian GNU/Linux\"\\nVERSION_ID=\"12\"\\nVERSION=\"12 (bookworm)\"\\nVERSION_CODENAME=bookworm\\nID=debian\\nHOME_URL=\"https://www.debian.org/\"\\n' > /etc/os-release 2>/dev/null || true; "
+                    issue_text = "echo 'Debian GNU/Linux 12 \\n \\l' > /etc/issue 2>/dev/null || true; "
+                    decoy_seed = (
+                        f"mkdir -p {home_dir}/.ssh /var/log/payments /opt/gateway && "
+                        f"printf 'GATEWAY_ENV=staging\\nAPI_KEY=live_sec_99318a0f9b2c\\nDB_HOST=10.0.10.20\\n' > /opt/gateway/.env && "
+                        f"printf 'git status\\nsudo systemctl status payment-gw\\n' > {home_dir}/.bash_history && "
+                        f"chmod 600 {home_dir}/.bash_history 2>/dev/null || true; "
+                        f"chown -R {user_uid}:{user_uid} /opt/gateway {home_dir} 2>/dev/null || true; "
+                    )
+                elif persona == "cloud_worker":
+                    os_release = "printf 'NAME=\"Amazon Linux\"\\nVERSION=\"2023\"\\nID=\"amzn\"\\nID_LIKE=\"fedora\"\\nVERSION_ID=\"2023\"\\nPLATFORM_ID=\"platform:al2023\"\\nPRETTY_NAME=\"Amazon Linux 2023\"\\nANSI_COLOR=\"0;33\"\\nCPE_NAME=\"cpe:2.3:o:amazon:amazon_linux:2023\"\\nHOME_URL=\"https://aws.amazon.com/linux/amazon-linux-2023/\"\\n' > /etc/os-release 2>/dev/null || true; "
+                    issue_text = "echo 'Amazon Linux 2023 \\n \\l' > /etc/issue 2>/dev/null || true; "
+                    decoy_seed = (
+                        f"mkdir -p {home_dir}/.ssh {home_dir}/.kube && "
+                        f"printf 'AWS_REGION=us-east-1\\nCLUSTER_NAME=k8s-prod-worker\\n' > {home_dir}/.env && "
+                        f"printf 'kubectl get nodes\\nkubectl get pods -A\\n' > {home_dir}/.bash_history && "
+                        f"chmod 600 {home_dir}/.bash_history 2>/dev/null || true; "
+                        f"chown -R {user_uid}:{user_uid} {home_dir} 2>/dev/null || true; "
+                    )
+                else:
+                    # Standard Ubuntu 22.04 LTS layout
+                    os_release = "printf 'PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\\nNAME=\"Ubuntu\"\\nVERSION_ID=\"22.04\"\\nVERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\\nID=ubuntu\\nID_LIKE=debian\\n' > /etc/os-release 2>/dev/null || true; "
+                    issue_text = "echo 'Ubuntu 22.04.4 LTS \\n \\l' > /etc/issue 2>/dev/null || true; "
+                    decoy_seed = (
+                        "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
+                        f"mkdir -p {home_dir}/.ssh && "
+                        "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\\nAWS_SECRET_ACCESS_KEY=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\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
+                        "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
+                        f"printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1b9xP0L9Q8uN7Y2K3vW4rZ1mXo5P6qRsTuVwXyZaBc deploy-key-2026\\n' > {home_dir}/.ssh/authorized_keys && "
+                        f"printf 'SELECT user, host FROM mysql.user;\\nGRANT ALL PRIVILEGES ON app_production.* TO '\''api_prod'\''@'\''10.0.4.%%'\'' IDENTIFIED BY '\''P@ssw0rdProd2026!'\'';\\nFLUSH PRIVILEGES;\\n' > {home_dir}/.mysql_history && "
+                        f"printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > {home_dir}/.bash_history && "
+                        "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
+                        f"chmod 700 {home_dir}/.ssh 2>/dev/null || true; "
+                        f"chmod 600 {home_dir}/.ssh/authorized_keys {home_dir}/.mysql_history {home_dir}/.bash_history 2>/dev/null || true; "
+                        f"chown -R {user_uid}:{user_uid} /var/www/html {home_dir} 2>/dev/null || true; "
+                    )
 
                 bootstrap_script = (
-                    "mkdir -p /home/ubuntu /var/www/html /root /var/log /tmp /usr/local/bin && "
-                    "(id -u ubuntu >/dev/null 2>&1 || adduser -D -u 1000 ubuntu 2>/dev/null || useradd -m -u 1000 ubuntu 2>/dev/null || true) && "
-                    "chown -R 1000:1000 /home/ubuntu 2>/dev/null || true; "
+                    f"mkdir -p {home_dir} /root /var/log /tmp /usr/local/bin && "
+                    f"(id -u '{default_user}' >/dev/null 2>&1 || adduser -D -u {user_uid} '{default_user}' 2>/dev/null || useradd -m -u {user_uid} '{default_user}' 2>/dev/null || true) && "
+                    f"chown -R {user_uid}:{user_uid} {home_dir} 2>/dev/null || true; "
                     f"{user_cmds}"
                     "rm -f /.dockerenv 2>/dev/null || true; "
-                    "printf 'PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\\nNAME=\"Ubuntu\"\\nVERSION_ID=\"22.04\"\\nVERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\\nID=ubuntu\\nID_LIKE=debian\\n' > /etc/os-release 2>/dev/null || true; "
-                    "echo 'Ubuntu 22.04.4 LTS \\n \\l' > /etc/issue 2>/dev/null || true; "
+                    f"{os_release}"
+                    f"{issue_text}"
                     "which apk >/dev/null 2>&1 && apk add --no-cache bash 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -la \"$@\"\\n' > /bin/ll 2>/dev/null && chmod +x /bin/ll 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -A \"$@\"\\n' > /bin/la 2>/dev/null && chmod +x /bin/la 2>/dev/null || true; "
                     "printf '#!/bin/sh\\nexec ls -CF \"$@\"\\n' > /bin/l 2>/dev/null && chmod +x /bin/l 2>/dev/null || true; "
-                    "which sudo >/dev/null 2>&1 || (printf '#!/bin/sh\\nif [ \"$#\" -eq 0 ]; then echo \"usage: sudo -h | -K | -k | -V\"; exit 1; fi\\nif [ \"$1\" = \"-l\" ]; then echo \"Matching Defaults entries for ubuntu on $(hostname 2>/dev/null || echo prod-api-node-01):\\n    env_reset, mail_badpass, secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\\n\\nUser ubuntu may run the following commands on $(hostname 2>/dev/null || echo prod-api-node-01):\\n    (ALL : ALL) ALL\"; exit 0; fi\\nexec \"$@\"\\n' > /usr/local/bin/sudo && chmod 755 /usr/local/bin/sudo || true); "
-                    "mkdir -p /etc/sudoers.d 2>/dev/null; echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu 2>/dev/null || true; chmod 0440 /etc/sudoers.d/ubuntu 2>/dev/null || true; "
+                    f"which sudo >/dev/null 2>&1 || (printf '#!/bin/sh\\nif [ \"$#\" -eq 0 ]; then echo \"usage: sudo -h | -K | -k | -V\"; exit 1; fi\\nif [ \"$1\" = \"-l\" ]; then echo \"Matching Defaults entries for {default_user} on $(hostname 2>/dev/null || echo {container_hostname}):\\n    env_reset, mail_badpass, secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\\n\\nUser {default_user} may run the following commands on $(hostname 2>/dev/null || echo {container_hostname}):\\n    (ALL : ALL) ALL\"; exit 0; fi\\nexec \"$@\"\\n' > /usr/local/bin/sudo && chmod 755 /usr/local/bin/sudo || true); "
+                    f"mkdir -p /etc/sudoers.d 2>/dev/null; echo '{default_user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{default_user} 2>/dev/null || true; chmod 0440 /etc/sudoers.d/{default_user} 2>/dev/null || true; "
                     "touch /dev/shm/.bash_env && chmod 666 /dev/shm/.bash_env 2>/dev/null || true; "
                     f"{who_wrapper}"
                     f"{decoy_seed}"
