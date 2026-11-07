@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from doppel.dashboard.controller import HoneypotController
 from doppel.dashboard.ip_filter import IPAllowlistMiddleware
+from doppel.analytics.ioc import extract_session_iocs
 
 logger = logging.getLogger("doppel.dashboard.api")
 
@@ -291,6 +292,7 @@ async def get_session_details(session_id: str):
                 if idx < len(live_cmds):
                     live_cmds[idx].update({k: v for k, v in c.items() if v is not None})
             details["commands"] = live_cmds
+    details["iocs"] = extract_session_iocs(details.get("commands", []))
     return details
 
 
@@ -495,3 +497,21 @@ async def serve_index():
     if index_file.exists():
         return FileResponse(str(index_file))
     return PlainTextResponse("Doppel Dashboard Frontend Loading...")
+
+
+@app.get("/api/sessions/{session_id}/iocs")
+async def get_session_iocs(session_id: str):
+    """Retrieve structured IOCs (URLs, external IPs, domains) observed in session commands."""
+    details = await controller.db.get_session_details(session_id)
+    if not details and controller.session_manager and session_id in controller.session_manager.sessions:
+        live = controller.session_manager.sessions[session_id]
+        return {
+            "session_id": session_id,
+            "iocs": extract_session_iocs(live.history),
+        }
+    if not details:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session_id,
+        "iocs": extract_session_iocs(details.get("commands", [])),
+    }

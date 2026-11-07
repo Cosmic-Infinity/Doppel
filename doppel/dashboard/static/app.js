@@ -55,17 +55,17 @@ document.addEventListener('DOMContentLoaded', () => {
 The AI engine dynamically synthesizes authentic Linux terminal outputs, fake system files, and realistic honeytokens (like database passwords and API keys) on the fly. It also acts as your automated SOC analyst, tagging every attacker command with MITRE ATT&CK techniques.<br><br>
 <strong>What is Mock Mode?</strong><br>
 Mock Mode runs Doppel using built-in, realistic pre-programmed responses without connecting to an actual AI model. This is useful for offline testing, code review, or when your GPU / Ollama server is offline.`,
-    
+
     docker: `<strong>Execution Sandbox (Docker)</strong><br><br>
 Runs standard, safe Linux commands (such as <code>ls</code>, <code>pwd</code>, <code>id</code>) inside an isolated, disposable micro-container with zero network egress (<code>--network none</code>).<br><br>
 <strong>Do I need Docker?</strong><br>
 No! Docker is completely optional. If Docker Desktop is closed, Doppel automatically operates in pure AI simulation mode—the LLM simulates the entire bash environment with zero risk to your host machine.`,
-    
+
     port: `<strong>SSH Listener Port</strong><br><br>
 The TCP network port where Doppel waits for incoming attacker SSH connections. The default is <code>2222</code> so it does not conflict with your host machine's standard SSH daemon (port 22).<br><br>
 <strong>Port Conflicts:</strong><br>
 If port 2222 is already in use by another program, click one of our 1-click alternative buttons (like 2223 or 22222) to switch ports instantly.`,
-    
+
     persona: `<strong>Deception Persona</strong><br><br>
 Controls the honeypot's camouflage identity. When an attacker probes with <code>uname</code>, inspects <code>/etc/os-release</code>, or searches for configurations, all responses authentically match this persona (e.g. an Ubuntu 22.04 Web Server vs. an AWS EC2 Worker Node).`
   };
@@ -753,7 +753,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       pillPort.className = 'diag-pill error';
       pillPort.textContent = `Port ${port.port} Busy!`;
       descPort.textContent = port.detail;
-      
+
       let alternativesHtml = '<span style="font-size:11px;margin-right:4px;">Quick-switch:</span>';
       (port.suggested_alternatives || [2223, 22222]).forEach(alt => {
         alternativesHtml += `<button type="button" class="btn-quick-fix btn-alt-port" data-port="${alt}">Use Port ${alt}</button> `;
@@ -1437,16 +1437,196 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     return card;
   }
 
+  // function applySessionFilter() {
+  //   const query = (sessionSearch ? sessionSearch.value : '').trim().toLowerCase();
+  //   const liveOnly = Boolean(sessionLiveOnly && sessionLiveOnly.checked);
+  //   let shown = 0;
+  //   sessionsContainer.querySelectorAll('.session-card').forEach(card => {
+  //     const visible = (!query || (card.dataset.search || '').includes(query)) && (!liveOnly || card.dataset.live === '1');
+  //     card.classList.toggle('hidden', !visible);
+  //     if (visible) shown += 1;
+  //   });
+  //   return shown;
+  // }
+
+  // --- Multi-Facet Session Filtering ---
   function applySessionFilter() {
     const query = (sessionSearch ? sessionSearch.value : '').trim().toLowerCase();
+    const threatFilter = document.getElementById('filter-threat')?.value || '';
+    const typeFilter = document.getElementById('filter-type')?.value || '';
+    const campaignFilter = document.getElementById('filter-campaign')?.value || '';
+    const dateFilter = document.getElementById('filter-date')?.value || '';
     const liveOnly = Boolean(sessionLiveOnly && sessionLiveOnly.checked);
+
+    const now = new Date();
+    const resetBtn = document.getElementById('btn-clear-filters');
+    const hasActiveFilters = query || threatFilter || typeFilter || campaignFilter || dateFilter || liveOnly;
+    if (resetBtn) resetBtn.classList.toggle('hidden', !hasActiveFilters);
+
     let shown = 0;
     sessionsContainer.querySelectorAll('.session-card').forEach(card => {
-      const visible = (!query || (card.dataset.search || '').includes(query)) && (!liveOnly || card.dataset.live === '1');
-      card.classList.toggle('hidden', !visible);
-      if (visible) shown += 1;
+      const s = sessionsCache[card.dataset.sessionId] || {};
+
+      if (liveOnly && card.dataset.live !== '1') {
+        card.classList.add('hidden');
+        return;
+      }
+
+      if (query) {
+        const match = (s.remote_ip || '').toLowerCase().includes(query) ||
+                      (s.username || '').toLowerCase().includes(query) ||
+                      (s.session_id || '').toLowerCase().includes(query) ||
+                      (s.campaign_id || '').toLowerCase().includes(query) ||
+                      (card.dataset.search || '').includes(query);
+        if (!match) {
+          card.classList.add('hidden');
+          return;
+        }
+      }
+
+      if (threatFilter) {
+        const score = s.max_threat_score || 0;
+        if (threatFilter === 'critical' && score < 90) { card.classList.add('hidden'); return; }
+        if (threatFilter === 'high' && (score < 70 || score >= 90)) { card.classList.add('hidden'); return; }
+        if (threatFilter === 'medium' && (score < 40 || score >= 70)) { card.classList.add('hidden'); return; }
+        if (threatFilter === 'low' && score >= 40) { card.classList.add('hidden'); return; }
+      }
+
+      if (typeFilter) {
+        const profile = s.profile || {};
+        const t = (s.attacker_type || profile.attacker_type || 'unknown').toLowerCase();
+        if (t !== typeFilter) { card.classList.add('hidden'); return; }
+      }
+
+      if (campaignFilter === 'in_campaign' && !s.campaign_id) { card.classList.add('hidden'); return; }
+      if (campaignFilter === 'no_campaign' && s.campaign_id) { card.classList.add('hidden'); return; }
+
+      if (dateFilter && s.start_time) {
+        const start = parseServerTime(s.start_time);
+        if (start) {
+          const diffMs = now - start;
+          if (dateFilter === 'today' && start.toDateString() !== now.toDateString()) { card.classList.add('hidden'); return; }
+          if (dateFilter === '7d' && diffMs > 7 * 86400000) { card.classList.add('hidden'); return; }
+          if (dateFilter === '30d' && diffMs > 30 * 86400000) { card.classList.add('hidden'); return; }
+        }
+      }
+
+      card.classList.remove('hidden');
+      shown += 1;
     });
     return shown;
+  }
+
+  // Clear filters button
+  document.getElementById('btn-clear-filters')?.addEventListener('click', () => {
+    if (sessionSearch) sessionSearch.value = '';
+    if (document.getElementById('filter-threat')) document.getElementById('filter-threat').value = '';
+    if (document.getElementById('filter-type')) document.getElementById('filter-type').value = '';
+    if (document.getElementById('filter-campaign')) document.getElementById('filter-campaign').value = '';
+    if (document.getElementById('filter-date')) document.getElementById('filter-date').value = '';
+    if (sessionLiveOnly) sessionLiveOnly.checked = false;
+    applySessionFilter();
+  });
+
+  // Bind filter change events
+  ['session-search', 'filter-threat', 'filter-type', 'filter-campaign', 'filter-date', 'session-live-only'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', applySessionFilter);
+      el.addEventListener('change', applySessionFilter);
+    }
+  });
+
+  // --- IOC Panel Populator ---
+  function renderIOCPanel(iocs) {
+    const tabBtn = document.getElementById('tab-btn-iocs');
+    const countBadge = document.getElementById('badge-ioc-count');
+    const emptyCard = document.getElementById('iocs-empty-card');
+    const container = document.getElementById('iocs-container');
+    const summaryText = document.getElementById('iocs-summary-text');
+
+    const total = iocs ? (iocs.total_count || 0) : 0;
+    if (countBadge) countBadge.textContent = total;
+
+    if (!iocs || !iocs.has_iocs) {
+      if (tabBtn) {
+        tabBtn.classList.add('disabled');
+        tabBtn.setAttribute('title', 'No links or network IOCs observed in commands');
+      }
+      if (emptyCard) emptyCard.classList.remove('hidden');
+      if (container) container.classList.add('hidden');
+      return;
+    }
+
+    if (tabBtn) {
+      tabBtn.classList.remove('disabled');
+      tabBtn.removeAttribute('title');
+    }
+    if (emptyCard) emptyCard.classList.add('hidden');
+    if (container) container.classList.remove('hidden');
+
+    if (summaryText) {
+      summaryText.textContent = `${total} Indicator${total !== 1 ? 's' : ''} observed`;
+    }
+
+    function renderGroup(groupId, listId, countId, items) {
+      const groupEl = document.getElementById(groupId);
+      const listEl = document.getElementById(listId);
+      const countEl = document.getElementById(countId);
+
+      if (!items || items.length === 0) {
+        if (groupEl) groupEl.classList.add('hidden');
+        return;
+      }
+
+      if (groupEl) groupEl.classList.remove('hidden');
+      if (countEl) countEl.textContent = items.length;
+      if (listEl) {
+        listEl.innerHTML = items.map(item => `
+          <div class="ioc-card">
+            <span class="ioc-value">${escapeHtml(item.value)}</span>
+            <button type="button" class="ioc-copy-btn" data-copy="${escapeHtml(item.value)}">Copy</button>
+          </div>
+        `).join('');
+      }
+    }
+
+    renderGroup('ioc-group-urls', 'ioc-list-urls', 'ioc-count-urls', iocs.urls);
+    renderGroup('ioc-group-ips', 'ioc-list-ips', 'ioc-count-ips', iocs.ips);
+    renderGroup('ioc-group-domains', 'ioc-list-domains', 'ioc-count-domains', iocs.domains);
+
+    // Individual copy buttons
+    container.querySelectorAll('.ioc-copy-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const val = btn.getAttribute('data-copy');
+        navigator.clipboard.writeText(val).then(() => {
+          btn.textContent = 'Copied';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = 'Copy';
+            btn.classList.remove('copied');
+          }, 1500);
+        });
+      };
+    });
+
+    // Copy all button
+    const copyAllBtn = document.getElementById('btn-copy-all-iocs');
+    if (copyAllBtn) {
+      copyAllBtn.onclick = () => {
+        const all = [
+          ...(iocs.urls || []).map(x => x.value),
+          ...(iocs.ips || []).map(x => x.value),
+          ...(iocs.domains || []).map(x => x.value),
+        ];
+        navigator.clipboard.writeText(all.join('\n')).then(() => {
+          const orig = copyAllBtn.textContent;
+          copyAllBtn.textContent = 'Copied All!';
+          setTimeout(() => { copyAllBtn.textContent = orig; }, 1500);
+        });
+      };
+    }
   }
 
   if (sessionSearch) sessionSearch.addEventListener('input', applySessionFilter);
@@ -2161,6 +2341,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     setCommandCount(Math.max((session.commands || []).length, parseInt(detailCmdCount.textContent, 10) || 0));
     detailCwd.textContent = session.cwd || '/home/ubuntu';
     renderTopTechnique(session.commands);
+    renderIOCPanel(session.iocs);
 
     updatePhaseBadge(session.current_phase || (sessionsCache[session.session_id] && sessionsCache[session.session_id].current_phase) || 'Reconnaissance');
     updateProfileTag({
