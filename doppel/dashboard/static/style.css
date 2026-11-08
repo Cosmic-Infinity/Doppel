@@ -3462,7 +3462,7 @@ html.init-dashboard #view-dashboard {
 @media print {
   @page {
     size: A4 portrait;
-    margin: 0;
+    margin: 15mm;
   }
 
   /* 1. Strictly hide interactive web UI chrome, sidebar, filters, drawers, and buttons */
@@ -3498,7 +3498,7 @@ html.init-dashboard #view-dashboard {
     visibility: hidden !important;
   }
 
-  /* 2. Reset layout containers on clean white canvas */
+  /* 2. Reset layout containers to clean white space without awkward single-box borders */
   html,
   body {
     height: auto !important;
@@ -3541,30 +3541,31 @@ html.init-dashboard #view-dashboard {
     flex: none !important;
   }
 
-  /* 3. Formal Book-Border Framing (.report-view) matching academic/executive reference */
+  /* 3. Clean white-space report view: NO awkward outer border that breaks across pages */
   .report-view {
     display: block !important;
-    width: calc(100% - 30mm) !important;
-    margin: 15mm auto !important;
-    padding: 16mm 18mm !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
     box-sizing: border-box !important;
-    border: 2px solid #1e293b !important;
-    border-radius: 1px !important;
+    border: none !important;
     background: #ffffff !important;
     position: static !important;
     height: auto !important;
-    min-height: calc(297mm - 30mm) !important;
+    min-height: auto !important;
     opacity: 1 !important;
     text-shadow: none !important;
   }
 
-  /* Neutralize all opacity fades, ink-saver washes, and text shadows */
+  /* Force solid 100% dark ink contrast across all text elements */
   .report-view,
   .report-view * {
     opacity: 1 !important;
     text-shadow: none !important;
     -webkit-filter: none !important;
     filter: none !important;
+    color: #0f172a !important;
   }
 
   /* 4. Document sections formatting */
@@ -3580,14 +3581,14 @@ html.init-dashboard #view-dashboard {
     break-inside: auto;
   }
 
-  /* Academic Big Heading Style (similar to ABSTRACT in reference) */
+  /* Prominent Top Header: positioned at the top of the report */
   .print-academic-title-block {
     display: block !important;
     text-align: center !important;
-    margin-top: 10pt !important;
-    margin-bottom: 24pt !important;
-    padding-bottom: 8pt !important;
-    border-bottom: 2px solid #0f172a !important;
+    margin-top: 0 !important;
+    margin-bottom: 20pt !important;
+    padding-bottom: 0 !important;
+    border: none !important;
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
@@ -3602,22 +3603,23 @@ html.init-dashboard #view-dashboard {
     margin: 0 0 6pt 0 !important;
     padding: 0 !important;
     border: none !important;
+    text-decoration: none !important;
   }
 
   .print-doc-meta-byline {
     font-family: "Times New Roman", Times, Georgia, serif !important;
     font-size: 9.5pt !important;
     font-style: italic !important;
-    color: #334155 !important;
+    color: #0f172a !important;
     margin: 0 !important;
   }
 
-  /* Executive Header / Facts Banner */
+  /* Facts Block: Clean white background, NO boxy grey container */
   .report-header-banner {
     background: #ffffff !important;
-    border: 1.5px solid #0f172a !important;
-    border-radius: 2px !important;
-    padding: 12pt 14pt !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
     margin-bottom: 18pt !important;
     page-break-inside: avoid;
     break-inside: avoid;
@@ -3632,29 +3634,30 @@ html.init-dashboard #view-dashboard {
     font-weight: 700 !important;
     letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
-    color: #334155 !important;
+    color: #0f172a !important;
     padding-bottom: 6pt !important;
-    margin-bottom: 10pt !important;
-    border-bottom: 1px dashed #94a3b8 !important;
+    margin-bottom: 8pt !important;
+    border-bottom: 1px solid #0f172a !important;
   }
 
   .report-header-title-row {
     display: flex !important;
     align-items: baseline !important;
     justify-content: space-between !important;
-    border-bottom: 1.5px solid #0f172a !important;
-    padding-bottom: 8pt !important;
-    margin-bottom: 12pt !important;
+    border-bottom: none !important;
+    padding-bottom: 4pt !important;
+    margin-bottom: 10pt !important;
   }
 
   .report-header-title {
     font-family: "Times New Roman", Times, Georgia, serif !important;
-    font-size: 22pt !important;
+    font-size: 18pt !important;
     font-weight: 800 !important;
     color: #0f172a !important;
     letter-spacing: -0.01em !important;
     margin: 0 !important;
-    border-bottom: none !important;
+    border: none !important;
+    text-decoration: none !important;
     padding-bottom: 0 !important;
     text-transform: uppercase !important;
   }
@@ -3663,8 +3666,8 @@ html.init-dashboard #view-dashboard {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
     font-size: 8.5pt !important;
     font-weight: 700 !important;
-    background: #f1f5f9 !important;
-    border: 1px solid #475569 !important;
+    background: #ffffff !important;
+    border: 1px solid #0f172a !important;
     color: #0f172a !important;
     padding: 2.5pt 7pt !important;
     border-radius: 2px !important;
@@ -3673,7 +3676,9 @@ html.init-dashboard #view-dashboard {
   .report-meta-grid {
     display: grid !important;
     grid-template-columns: repeat(3, 1fr) !important;
-    gap: 10pt 14pt !important;
+    gap: 8pt 14pt !important;
+    padding: 6pt 0 12pt 0 !important;
+    border-bottom: 1px solid #0f172a !important;
   }
 
   .report-meta-item {
@@ -3685,7 +3690,7 @@ html.init-dashboard #view-dashboard {
   .report-meta-label {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
     font-size: 7.5pt !important;
-    color: #334155 !important;
+    color: #0f172a !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.06em !important;
@@ -3694,12 +3699,12 @@ html.init-dashboard #view-dashboard {
   .report-meta-val {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
     font-size: 9.5pt !important;
-    font-weight: 600 !important;
+    font-weight: 700 !important;
     color: #0f172a !important;
     word-break: break-word !important;
   }
 
-  /* 5. Headings styling matching publication structure in reference */
+  /* 5. Headings styling: Top of section, NO underlines, NO bottom borders */
   h1,
   .report-content.markdown-body h1 {
     font-family: "Times New Roman", Times, Georgia, serif !important;
@@ -3709,17 +3714,17 @@ html.init-dashboard #view-dashboard {
     text-align: center !important;
     text-transform: uppercase !important;
     letter-spacing: 0.08em !important;
-    border-bottom: none !important;
-    padding-bottom: 2pt !important;
-    margin-top: 24pt !important;
-    margin-bottom: 12pt !important;
+    border: none !important;
+    text-decoration: none !important;
+    padding-bottom: 0 !important;
+    margin-top: 24px !important;
+    margin-bottom: 12px !important;
     page-break-after: avoid;
     break-after: avoid;
   }
 
-  /* When the big top academic title exists, suppress duplicate h1 in body if named INCIDENT RESPONSE REPORT */
   .report-content.markdown-body h1:first-child {
-    margin-top: 8pt !important;
+    margin-top: 0 !important;
   }
 
   h2,
@@ -3731,12 +3736,20 @@ html.init-dashboard #view-dashboard {
     color: #0f172a !important;
     text-transform: uppercase !important;
     letter-spacing: 0.04em !important;
-    border-bottom: 1.5px solid #0f172a !important;
-    padding-bottom: 3pt !important;
-    margin-top: 20pt !important;
-    margin-bottom: 10pt !important;
+    border: none !important;
+    text-decoration: none !important;
+    padding-bottom: 0 !important;
+    margin-top: 24px !important;
+    margin-bottom: 12px !important;
     page-break-after: avoid;
     break-after: avoid;
+  }
+
+  /* Subheadings prefixed with Dot symbol */
+  .report-content.markdown-body h2::before {
+    content: "• " !important;
+    font-weight: 900 !important;
+    margin-right: 4pt !important;
   }
 
   h3,
@@ -3746,11 +3759,19 @@ html.init-dashboard #view-dashboard {
     font-weight: 700 !important;
     font-style: italic !important;
     color: #0f172a !important;
-    margin-top: 14pt !important;
-    margin-bottom: 6pt !important;
-    border-bottom: none !important;
+    margin-top: 18px !important;
+    margin-bottom: 8px !important;
+    border: none !important;
+    text-decoration: none !important;
     page-break-after: avoid;
     break-after: avoid;
+  }
+
+  .report-content.markdown-body h3::before {
+    content: "• " !important;
+    font-style: normal !important;
+    font-weight: 700 !important;
+    margin-right: 4pt !important;
   }
 
   /* 6. Body copy and Point-wise bullet details */
@@ -3761,16 +3782,16 @@ html.init-dashboard #view-dashboard {
     line-height: 1.6 !important;
     color: #0f172a !important;
     text-align: justify !important;
-    margin-bottom: 10pt !important;
+    margin-bottom: 12px !important;
   }
 
   ul,
   ol,
   .report-content.markdown-body ul,
   .report-content.markdown-body ol {
-    margin-top: 6pt !important;
-    margin-bottom: 14pt !important;
-    padding-left: 24pt !important;
+    margin-top: 6px !important;
+    margin-bottom: 14px !important;
+    padding-left: 20pt !important;
     page-break-inside: auto;
     break-inside: auto;
   }
@@ -3781,40 +3802,36 @@ html.init-dashboard #view-dashboard {
     font-size: 10pt !important;
     line-height: 1.55 !important;
     color: #0f172a !important;
-    margin-bottom: 5pt !important;
+    margin-bottom: 5px !important;
     text-align: left !important;
     page-break-inside: avoid;
     break-inside: avoid;
   }
 
-  /* Point-wise disc formatting matching sample document */
   .report-content.markdown-body ul {
     list-style-type: disc !important;
   }
 
   .report-content.markdown-body ul ul {
     list-style-type: circle !important;
-    margin-top: 3pt !important;
-    margin-bottom: 6pt !important;
-    padding-left: 18pt !important;
+    margin-top: 3px !important;
+    margin-bottom: 6px !important;
+    padding-left: 16pt !important;
   }
 
-  /* Star accent on critical / important finding bullet points */
   .report-content.markdown-body li strong:first-child {
     color: #0f172a !important;
     font-weight: 700 !important;
   }
 
-  /* 7. Executive Callout Box for Critical Alerts */
+  /* 7. Security Alert Callout: Clean unboxed alert with left border accent */
   .report-callout-critical {
-    background: #fef2f2 !important;
+    background: #ffffff !important;
+    border: none !important;
     border-left: 4px solid #b91c1c !important;
-    border-top: 1.5px solid #b91c1c !important;
-    border-right: 1.5px solid #b91c1c !important;
-    border-bottom: 1.5px solid #b91c1c !important;
-    border-radius: 2px !important;
-    padding: 8pt 12pt !important;
-    margin-bottom: 12pt !important;
+    padding: 6pt 10pt !important;
+    margin-top: 10px !important;
+    margin-bottom: 14px !important;
     page-break-inside: avoid;
     break-inside: avoid;
   }
@@ -3823,30 +3840,30 @@ html.init-dashboard #view-dashboard {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
     font-size: 9pt !important;
     font-weight: 800 !important;
-    color: #991b1b !important;
+    color: #b91c1c !important;
     letter-spacing: 0.04em !important;
     text-transform: uppercase !important;
-    margin-bottom: 3pt !important;
+    margin-bottom: 2pt !important;
   }
 
   .report-callout-desc {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
     font-size: 8.5pt !important;
-    color: #450a0a !important;
+    color: #0f172a !important;
     line-height: 1.4 !important;
     font-weight: 600 !important;
     text-align: left !important;
   }
 
-  /* 8. Tables styling: crisp solid borders matching academic clarity */
+  /* 8. Tables styling: clean structured data grid with proper alignment */
   table,
   .report-table,
   .data-table,
   .report-content.markdown-body table {
     width: 100% !important;
     border-collapse: collapse !important;
-    border: 1.5px solid #1e293b !important;
-    margin: 12pt 0 16pt 0 !important;
+    border: 1px solid #0f172a !important;
+    margin: 12px 0 16px 0 !important;
     page-break-inside: auto;
     break-inside: auto;
   }
@@ -3867,7 +3884,7 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body th,
   .report-content.markdown-body td {
     padding: 6pt 8pt !important;
-    border: 1px solid #94a3b8 !important;
+    border: 1px solid #cbd5e1 !important;
     color: #0f172a !important;
     font-size: 9pt !important;
     line-height: 1.4 !important;
@@ -3878,18 +3895,18 @@ html.init-dashboard #view-dashboard {
   table th,
   .report-table th,
   .report-content.markdown-body th {
-    background: #f1f5f9 !important;
+    background: #ffffff !important;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
     font-weight: 700 !important;
     color: #0f172a !important;
     text-transform: uppercase !important;
     font-size: 8pt !important;
     letter-spacing: 0.04em !important;
-    border-bottom: 1.5px solid #1e293b !important;
+    border-bottom: 1.5px solid #0f172a !important;
   }
 
   tbody tr:nth-child(even) td {
-    background: #f8fafc !important;
+    background: #ffffff !important;
   }
 
   /* 9. Code blocks */
@@ -3898,9 +3915,9 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body pre,
   .report-content.markdown-body code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-    background: #f1f5f9 !important;
+    background: #ffffff !important;
     color: #0f172a !important;
-    border: 1px solid #94a3b8 !important;
+    border: 1px solid #0f172a !important;
     border-radius: 2px !important;
     page-break-inside: avoid;
     break-inside: avoid;
@@ -3916,7 +3933,7 @@ html.init-dashboard #view-dashboard {
     padding: 0 !important;
   }
 
-  /* 10. Badges and Threat Status Tints */
+  /* 10. Badges and Status Tints */
   .badge-tag,
   .badge-route,
   .stat-score-pill {
@@ -3933,41 +3950,41 @@ html.init-dashboard #view-dashboard {
   }
 
   .badge-tag {
-    background: #f1f5f9 !important;
+    background: #ffffff !important;
     color: #0f172a !important;
-    border: 1px solid #94a3b8 !important;
+    border: 1px solid #0f172a !important;
   }
 
   .badge-route {
-    background: #e2e8f0 !important;
+    background: #ffffff !important;
     color: #0f172a !important;
-    border: 1px solid #64748b !important;
+    border: 1px solid #0f172a !important;
     text-transform: uppercase !important;
     font-size: 7.5pt !important;
   }
 
   .stat-score-pill.threat-low {
-    background: #ecfdf5 !important;
+    background: #ffffff !important;
     color: #064e3b !important;
-    border: 1px solid #34d399 !important;
+    border: 1px solid #064e3b !important;
   }
 
   .stat-score-pill.threat-medium {
-    background: #fffbeb !important;
+    background: #ffffff !important;
     color: #78350f !important;
-    border: 1px solid #fbbf24 !important;
+    border: 1px solid #78350f !important;
   }
 
   .stat-score-pill.threat-high {
-    background: #fef2f2 !important;
+    background: #ffffff !important;
     color: #7f1d1d !important;
-    border: 1px solid #f87171 !important;
+    border: 1px solid #7f1d1d !important;
   }
 
   blockquote,
   .report-content.markdown-body blockquote {
-    background: #f8fafc !important;
-    border-left: 3px solid #334155 !important;
+    background: #ffffff !important;
+    border-left: 3px solid #0f172a !important;
     color: #0f172a !important;
     padding: 6pt 10pt !important;
     margin: 8pt 0 !important;
@@ -3978,7 +3995,7 @@ html.init-dashboard #view-dashboard {
   hr,
   .report-content.markdown-body hr {
     border: 0 !important;
-    border-top: 1.5px solid #1e293b !important;
+    border-top: 1px solid #0f172a !important;
     margin: 16pt 0 !important;
   }
 }

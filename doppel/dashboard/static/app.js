@@ -2436,10 +2436,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     const commands = session.commands || [];
+    const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
+    const flaggedKeys = new Set(flaggedCommands.map(c => `${c.timestamp || ''}|${c.command || ''}`));
 
     // 2. Flagged Commands (threatScore >= 70)
     if (reportFlaggedSection) {
-      const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
       let flaggedTableHtml = '';
       if (flaggedCommands.length > 0) {
         const rows = flaggedCommands.map(cmd => {
@@ -2482,20 +2483,21 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
       reportFlaggedSection.innerHTML = `
         <div class="report-section-block">
-          <h3 class="report-section-heading">Flagged High-Risk Commands (Score &ge; 70)</h3>
+          <h3 class="report-section-heading">&bull; Flagged High-Risk Commands (Score &ge; 70)</h3>
           ${flaggedTableHtml}
         </div>
       `;
       reportFlaggedSection.classList.remove('hidden');
     }
 
-    // 3. Command Execution Timeline (Executive print format: capped to most significant events to prevent bloated multi-page dumps)
+    // 3. Command Execution Timeline (Deduplicated: excludes already-flagged commands)
     if (reportTimelineSection) {
+      // Deduplicate: exclude commands already rendered in the Flagged High-Risk table
+      const remainingCommands = commands.filter(c => !flaggedKeys.has(`${c.timestamp || ''}|${c.command || ''}`));
       let timelineTableHtml = '';
-      if (commands.length > 0) {
-        // Display up to 15 key commands in the print view with a concise summary indicator if more exist
+      if (remainingCommands.length > 0) {
         const maxPrintCmds = 15;
-        const displayCommands = commands.slice(0, maxPrintCmds);
+        const displayCommands = remainingCommands.slice(0, maxPrintCmds);
         const rows = displayCommands.map(cmd => {
           const score = Number(cmd.threat_score) || 0;
           const tech = cmd.technique_id
@@ -2513,8 +2515,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           `;
         }).join('');
 
-        const overflowNotice = commands.length > maxPrintCmds
-          ? `<div class="report-timeline-overflow">Showing first ${maxPrintCmds} of ${commands.length} total commands. Full telemetry log available in interactive session inspector.</div>`
+        const overflowNotice = remainingCommands.length > maxPrintCmds
+          ? `<div class="report-timeline-overflow">Showing first ${maxPrintCmds} of ${remainingCommands.length} standard commands (high-risk events listed above).</div>`
           : '';
 
         timelineTableHtml = `
@@ -2533,13 +2535,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           </table>
           ${overflowNotice}
         `;
+      } else if (commands.length > 0) {
+        timelineTableHtml = `<p class="report-section-empty">All commands recorded in this session exceeded the threat threshold and are detailed in the Flagged section above.</p>`;
       } else {
         timelineTableHtml = `<p class="report-section-empty">No commands recorded in this session.</p>`;
       }
 
       reportTimelineSection.innerHTML = `
         <div class="report-section-block">
-          <h3 class="report-section-heading">Command Execution Timeline</h3>
+          <h3 class="report-section-heading">&bull; Additional Command Execution Timeline</h3>
           ${timelineTableHtml}
         </div>
       `;
