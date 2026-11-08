@@ -30,7 +30,7 @@ logger = logging.getLogger("doppel.core.credential_analyzer")
 # the analyzer will load it automatically (see _load_wordlist).
 # ---------------------------------------------------------------------------
 _BUILTIN_COMMON_PASSWORDS = {
-    "", "123456", "password", "12345678", "qwerty", "abc123", "monkey",
+    "123456", "password", "12345678", "qwerty", "abc123", "monkey",
     "1234567", "letmein", "trustno1", "dragon", "baseball", "iloveyou",
     "master", "sunshine", "ashley", "bailey", "passw0rd", "shadow",
     "123123", "654321", "superman", "qazwsx", "michael", "football",
@@ -50,12 +50,12 @@ _BUILTIN_COMMON_PASSWORDS = {
 # Known default credential pairs (username → set of default passwords)
 _DEFAULT_CREDENTIALS: Dict[str, set] = {
     "admin":    {"admin", "admin123", "password", "1234", "Admin@123", "administrator"},
-    "root":     {"root", "toor", "password", "1234", "pass", ""},
+    "root":     {"root", "toor", "password", "1234", "pass"},
     "pi":       {"raspberry", "pi"},
-    "ubuntu":   {"ubuntu", "password", ""},
+    "ubuntu":   {"ubuntu", "password"},
     "user":     {"user", "user123", "password"},
-    "test":     {"test", "test123", ""},
-    "guest":    {"guest", "guest123", ""},
+    "test":     {"test", "test123"},
+    "guest":    {"guest", "guest123"},
     "support":  {"support", "support123", "password"},
     "operator": {"operator", "operator123"},
     "oracle":   {"oracle", "oracle123", "password"},
@@ -65,7 +65,7 @@ _DEFAULT_CREDENTIALS: Dict[str, set] = {
     "hadoop":   {"hadoop", "hadoop123", "password"},
     "ansible":  {"ansible", "ansible123", "password"},
     "deploy":   {"deploy", "deploy123", "password"},
-    "git":      {"git", "gitea", ""},
+    "git":      {"git", "gitea"},
     "nagios":   {"nagios", "nagios123"},
     "zabbix":   {"zabbix", "zabbix123"},
 }
@@ -169,12 +169,12 @@ class CredentialAnalyzer:
         # ---- Known default credential pair ---------------------------------
         is_default = False
         defaults_for_user = _DEFAULT_CREDENTIALS.get(username.lower(), set())
-        if password in defaults_for_user or password.lower() in defaults_for_user:
+        if bool(password) and (password in defaults_for_user or password.lower() in defaults_for_user):
             categories.append("default_credential")
             is_default = True
 
         # ---- Common password wordlist ---------------------------------------
-        is_common = password in self._wordlist or pw_lower in self._wordlist
+        is_common = bool(password) and (password in self._wordlist or pw_lower in self._wordlist)
         if is_common and "default_credential" not in categories:
             categories.append("common_password")
 
@@ -221,9 +221,10 @@ class CredentialAnalyzer:
 
         # ---- Derive primary label and risk level ---------------------------
         priority_order = [
+            "empty_password",
             "hash_pattern", "leaked_credential", "credential_stuffing",
             "default_credential", "same_as_username", "keyboard_walk",
-            "common_password", "empty_password", "complex_password", "unknown",
+            "common_password", "complex_password", "unknown",
         ]
         primary_label = next(
             (c for c in priority_order if c in categories), categories[0]
@@ -273,6 +274,10 @@ class CredentialAnalyzer:
         categories: list[str],
         hash_type: str | None,
     ) -> str:
+        if "empty_password" in categories:
+            return (
+                "Empty password submitted — scanner testing for passwordless access."
+            )
         if "hash_pattern" in categories:
             return (
                 f"Password field contains a {hash_type or 'hash'} digest — "
@@ -307,10 +312,6 @@ class CredentialAnalyzer:
             return (
                 f"Password '{password}' appears in the common-password wordlist — "
                 "dictionary/brute-force attack."
-            )
-        if "empty_password" in categories:
-            return (
-                "Empty password submitted — scanner testing for passwordless access."
             )
         if "complex_password" in categories:
             return (
