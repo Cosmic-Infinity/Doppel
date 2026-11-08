@@ -729,7 +729,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: auto;
 }
 
 .control-row {
@@ -930,7 +929,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 4px;
 }
 
 .settings-head h2 {
@@ -960,8 +959,15 @@ body {
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px 14px;
+  gap: 0 18px;
   align-items: start;
+}
+
+.settings-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
 
 @media (max-width: 960px) {
@@ -992,7 +998,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 5px 0;
+  padding: 4px 0;
 }
 
 .setting-bool {
@@ -3531,4 +3537,35 @@ html.init-dashboard #view-dashboard {
 .setting-bool .switch-track,
 .setting-row > .select-input {
   margin-right: 19px;
+}
+
+/* Label beside its control, for short controls in the setup cards */
+.control-row.is-inline {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 3px;
+}
+
+.control-row.is-inline > .control-hint {
+  grid-column: 2;
+}
+
+/* Plain number fields: no spinner buttons */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Disabled buttons stay legible */
+.btn:disabled,
+.btn:disabled:hover {
+  color: var(--text-muted);
 }

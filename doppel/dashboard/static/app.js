@@ -931,7 +931,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Persona, model, sandbox switch and SSH port live in the cards above.
   // Saved values last until the dashboard restarts; config.yaml holds the defaults.
   const SETTINGS_GROUPS = [
-    { title: 'Model', fields: [
+    { title: 'Model', column: 0, fields: [
       { key: 'llm.timeout_seconds', label: 'Reply timeout', unit: 's', type: 'number', min: 1, step: 1,
         hint: 'Longest wait for a terminal reply.' },
       { key: 'llm.temperature', label: 'Temperature', type: 'number', min: 0, max: 2, step: 0.05 },
@@ -939,7 +939,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hint: 'Tags commands and writes reports.' },
       { key: 'llm.analysis_timeout_seconds', label: 'Analysis timeout', unit: 's', type: 'number', min: 1, step: 1 },
     ] },
-    { title: 'Deception', fields: [
+    { title: 'Deception', column: 1, fields: [
       { key: 'deception.intercept_sensitive_files', label: 'Decoy credential files', type: 'bool',
         hint: 'Files such as .env and id_rsa are written by the model instead of read from the sandbox.' },
       { key: 'deception.intercept_missing_tools', label: 'Simulate missing tools', type: 'bool',
@@ -952,7 +952,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hint: '0 turns the decoy off.' },
       { key: 'honeypot.accept_any_password', label: 'Accept any password', type: 'bool' },
     ] },
-    { title: 'Response timing', fields: [
+    { title: 'Response timing', column: 2, fields: [
       { key: 'deception.simulate_latency', label: 'Match real command timing', type: 'bool',
         hint: 'Pads fast replies so response time does not give the model away.' },
       { key: 'deception.jitter_percent', label: 'Jitter', unit: '%', type: 'number', min: 0, max: 100, step: 1 },
@@ -963,19 +963,19 @@ document.addEventListener('DOMContentLoaded', () => {
       { key: 'deception.tar_pit_delay_ms', label: 'Tar pit', unit: 'ms', type: 'number', min: 0, step: 100,
         hint: 'Extra delay per command, tripled for bots.' },
     ] },
-    { title: 'Sandbox', fields: [
+    { title: 'Sandbox', column: 1, fields: [
       { key: 'sandbox.timeout_seconds', label: 'Command timeout', unit: 's', type: 'number', min: 1, step: 1,
         hint: 'Longest a command may run in the container.' },
       { key: 'sandbox.memory_limit', label: 'Memory per container', type: 'text', short: true, placeholder: '256m' },
     ] },
-    { title: 'Analysis', fields: [
+    { title: 'Analysis', column: 0, fields: [
       { key: 'analytics.enable_mitre_tagging', label: 'ATT&CK tagging', type: 'bool' },
       { key: 'analytics.auto_reports', label: 'Report when a session ends', type: 'bool' },
       { key: 'analytics.max_concurrent_reports', label: 'Reports at once', type: 'number', min: 1, step: 1 },
       { key: 'analytics.background_idle_seconds', label: 'Wait for idle terminal', unit: 's', type: 'number', min: 0, step: 1,
         hint: 'Tagging and reports start once no reply has been requested for this long.' },
     ] },
-    { title: 'Email alerts', fields: [
+    { title: 'Email alerts', column: 2, fields: [
       { key: 'alerts.email.enabled', label: 'Send alerts', type: 'bool',
         hint: 'The mail server is set in config.yaml.' },
       { key: 'alerts.email.min_threat_score', label: 'From threat score', type: 'number', min: 0, max: 100, step: 1 },
@@ -1008,7 +1008,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderSettingsPanel() {
     if (!settingsGrid || !currentSettings) return;
     const running = honeypotStatus === 'RUNNING';
-    settingsGrid.innerHTML = SETTINGS_GROUPS.map(group => `
+    // Groups are packed into three columns of similar height, so no column leaves a gap
+    const groupHtml = group => `
       <fieldset class="settings-group">
         <legend>${escapeHtml(group.title)}</legend>
         ${group.fields.map(f => {
@@ -1049,7 +1050,9 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
         }).join('')}
       </fieldset>
-    `).join('');
+    `;
+    settingsGrid.innerHTML = [0, 1, 2].map(col => `<div class="settings-col">${
+      SETTINGS_GROUPS.filter(g => g.column === col).map(groupHtml).join('')}</div>`).join('');
     updateSettingsDirty();
   }
 
