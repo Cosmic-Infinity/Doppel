@@ -2382,6 +2382,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     // 1. Session Facts Print Header
     if (reportPrintHeader) {
       const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+      const threatScoreNum = threatScore;
+      const threatBadge = threatScoreNum >= 70
+        ? `[★ CRITICAL - THREAT SCORE ${threatScoreNum}/100]`
+        : `[THREAT SCORE ${threatScoreNum}/100]`;
+
       reportPrintHeader.innerHTML = `
         <div class="report-header-banner">
           <div class="report-classification-bar">
@@ -2417,6 +2422,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
               <span class="report-meta-label">Correlated Campaign</span>
               <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
             </div>
+          </div>
+        </div>
+
+        <div class="print-academic-title-block">
+          <h1 class="print-doc-main-title">INCIDENT REPORT</h1>
+          <div class="print-doc-meta-byline">
+            Session Reference: ${escapeHtml(sessId)} &bull; Target: ${escapeHtml(fullIp)} &bull; ${escapeHtml(threatBadge)}
           </div>
         </div>
       `;
