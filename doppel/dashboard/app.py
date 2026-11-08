@@ -239,6 +239,8 @@ async def get_session_details(session_id: str):
                 "remote_ip": live.remote_ip,
                 "remote_port": live.remote_port,
                 "username": live.username,
+                "password": getattr(live, "password", ""),
+                "campaign_id": getattr(live, "campaign_id", None),
                 "start_time": live.start_time,
                 "end_time": None,
                 "max_threat_score": live.threat_score,

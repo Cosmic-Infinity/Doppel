@@ -3268,3 +3268,331 @@ html.init-dashboard #view-dashboard {
   color: var(--accent-green);
   border-color: rgba(16, 185, 129, 0.4);
 }
+
+/* ==========================================================================
+   Report Document Screen & Print Styles
+   ========================================================================== */
+
+/* Screen Styles for Report Sections */
+.report-print-header {
+  margin-bottom: 24px;
+}
+
+.report-header-banner {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+
+.report-header-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.report-header-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.report-session-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.report-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 18px;
+}
+
+.report-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.report-meta-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.report-meta-val {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.report-section-block {
+  margin-top: 24px;
+  margin-bottom: 24px;
+}
+
+.report-section-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.report-section-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 8px 0;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+
+.report-table th,
+.report-table td {
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.report-table th {
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.stat-score-pill {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.stat-score-pill.threat-low {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+}
+
+.stat-score-pill.threat-medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+}
+
+.stat-score-pill.threat-high {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}
+
+/* ==========================================================================
+   Print Stylesheet (@media print)
+   ========================================================================== */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: auto;
+  }
+
+  /* 1. Hide interactive web UI chrome and modals */
+  .top-nav,
+  .sidebar,
+  .tabs-bar,
+  .report-toolbar,
+  .report-regen-card,
+  .report-thought-wrapper,
+  #btn-open-assistant,
+  .modal-backdrop,
+  .detail-header,
+  .detail-facts,
+  .detail-menu,
+  .empty-inspector,
+  .tab-content:not(#tab-report),
+  #view-launch,
+  .report-empty,
+  .assistant-modal {
+    display: none !important;
+  }
+
+  /* 2. Reset layout containers to allow unclipped multi-page printing */
+  html,
+  body,
+  .app-shell,
+  .main-workspace,
+  .inspector-panel,
+  .session-detail,
+  #tab-report,
+  .report-view {
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    position: static !important;
+    display: block !important;
+  }
+
+  /* 3. Document sections formatting */
+  .report-print-header,
+  .report-flagged-section,
+  .report-content.markdown-body,
+  .report-timeline-section {
+    display: block !important;
+    background: transparent !important;
+    color: #000 !important;
+    max-width: 100% !important;
+    page-break-inside: auto;
+  }
+
+  .report-header-banner {
+    background: #fff !important;
+    border: 1px solid #000 !important;
+    border-radius: 4px !important;
+    padding: 12px 14px !important;
+    margin-bottom: 20px !important;
+  }
+
+  .report-header-title-row {
+    border-bottom: 1px solid #000 !important;
+    padding-bottom: 8px !important;
+    margin-bottom: 10px !important;
+  }
+
+  .report-header-title {
+    font-size: 18px !important;
+    color: #000 !important;
+  }
+
+  .report-session-pill {
+    background: #f1f5f9 !important;
+    border: 1px solid #000 !important;
+    color: #000 !important;
+  }
+
+  .report-meta-label {
+    color: #475569 !important;
+    font-weight: 700 !important;
+  }
+
+  .report-meta-val {
+    color: #000 !important;
+  }
+
+  /* 4. Headings styling for crisp B&W print */
+  h1, h2, h3, h4,
+  .report-section-heading,
+  .report-content.markdown-body h1,
+  .report-content.markdown-body h2,
+  .report-content.markdown-body h3,
+  .report-content.markdown-body h4 {
+    color: #000 !important;
+    border-bottom: 1px solid #94a3b8 !important;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* 5. Body copy */
+  p, li, span, td, th,
+  .report-content.markdown-body,
+  .report-content.markdown-body p,
+  .report-content.markdown-body li {
+    color: #000 !important;
+  }
+
+  /* 6. Tables styling */
+  table,
+  .report-table,
+  .data-table,
+  .report-content.markdown-body table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border: 1px solid #000 !important;
+    margin: 12px 0 20px 0 !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  table th,
+  table td,
+  .report-table th,
+  .report-table td,
+  .report-content.markdown-body th,
+  .report-content.markdown-body td {
+    padding: 6px 8px !important;
+    border: 1px solid #000 !important;
+    color: #000 !important;
+    background: transparent !important;
+    font-size: 11px !important;
+  }
+
+  table th,
+  .report-table th,
+  .report-content.markdown-body th {
+    background: #f1f5f9 !important;
+    font-weight: 700 !important;
+  }
+
+  /* 7. Code blocks */
+  pre,
+  code,
+  .report-content.markdown-body pre,
+  .report-content.markdown-body code {
+    background: #f8fafc !important;
+    color: #000 !important;
+    border: 1px solid #cbd5e1 !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .report-content.markdown-body pre code {
+    border: none !important;
+    background: transparent !important;
+  }
+
+  /* 8. Badges and tags */
+  .badge-tag,
+  .badge-route,
+  .stat-score-pill {
+    background: #fff !important;
+    color: #000 !important;
+    border: 1px solid #000 !important;
+    font-size: 10px !important;
+    padding: 1px 4px !important;
+  }
+
+  blockquote,
+  .report-content.markdown-body blockquote {
+    background: #f8fafc !important;
+    border-left: 3px solid #000 !important;
+    color: #000 !important;
+  }
+
+  hr,
+  .report-content.markdown-body hr {
+    border: 0 !important;
+    border-top: 1px solid #000 !important;
+  }
+}

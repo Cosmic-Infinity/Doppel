@@ -182,6 +182,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const btnStopReport = document.getElementById('btn-stop-report');
   const btnToggleRegenReport = document.getElementById('btn-toggle-regen-report');
   const btnCopyReport = document.getElementById('btn-copy-report');
+  const btnExportPdf = document.getElementById('btn-export-pdf');
+  const reportPrintHeader = document.getElementById('report-print-header');
+  const reportFlaggedSection = document.getElementById('report-flagged-section');
+  const reportTimelineSection = document.getElementById('report-timeline-section');
+  let currentSessionDetails = null;
   const reportRegenCard = document.getElementById('report-regen-card');
   const reportCustomInstructions = document.getElementById('report-custom-instructions');
   const btnSubmitRegen = document.getElementById('btn-submit-regen');
@@ -1643,6 +1648,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     });
 
     if (changed) {
+      currentSessionDetails = null;
+      if (reportPrintHeader) reportPrintHeader.classList.add('hidden');
+      if (reportFlaggedSection) reportFlaggedSection.classList.add('hidden');
+      if (reportTimelineSection) reportTimelineSection.classList.add('hidden');
       // Never let the previous session's lines remain in the new session's view
       terminalOutput.innerHTML = '';
       telemetryTableBody.innerHTML = '';
@@ -2081,6 +2090,9 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportEmpty) reportEmpty.classList.remove('hidden');
     if (reportContent) reportContent.classList.add('hidden');
     if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
+    if (reportPrintHeader) reportPrintHeader.classList.add('hidden');
+    if (reportFlaggedSection) reportFlaggedSection.classList.add('hidden');
+    if (reportTimelineSection) reportTimelineSection.classList.add('hidden');
     setReportStatus('neutral', '');
     const isLive = sessionsCache[sessionId] && Boolean(sessionsCache[sessionId].is_active);
     const queued = queuedReportState(sessionId);
@@ -2201,6 +2213,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
               if (reportThoughtBody && accumulatedThought) {
                 reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, false);
               }
+              updateReportSections(currentSessionDetails || sessionsCache[sessionId]);
+              if (!currentSessionDetails || currentSessionDetails.session_id !== sessionId) {
+                fetchSessionDetails(sessionId);
+              }
             } else if (chunk.stage === 'stopped' || chunk.stopped) {
               setReportStatus('stopped', chunk.message || 'Generation stopped');
               if (reportContent && accumulatedContent) {
@@ -2223,6 +2239,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         if (reportEmpty) reportEmpty.classList.add('hidden');
         reportContent.classList.remove('hidden');
         reportContent.innerHTML = renderMarkdown(accumulatedContent, false);
+        updateReportSections(currentSessionDetails || sessionsCache[sessionId]);
+        if (!currentSessionDetails || currentSessionDetails.session_id !== sessionId) {
+          fetchSessionDetails(sessionId);
+        }
       } else if (!accumulatedContent && activeSessionId === sessionId) {
         await fetchSessionReport(sessionId);
       }
@@ -2283,6 +2303,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           reportContent.innerHTML = renderMarkdown(markdown);
           if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
           setReportStatus('ready', 'Completed');
+          updateReportSections(currentSessionDetails || sessionsCache[sessionId]);
+          if (!currentSessionDetails || currentSessionDetails.session_id !== sessionId) {
+            fetchSessionDetails(sessionId);
+          }
         } else {
           showReportEmptyState(sessionId);
         }
@@ -2320,8 +2344,183 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  function updateReportSections(session) {
+    if (!session || !activeSessionId) return;
+    const sessId = session.session_id || activeSessionId;
+    if (sessId !== activeSessionId) return;
+
+    if (!reportContent || reportContent.classList.contains('hidden') || !reportContent.textContent.trim()) {
+      if (reportPrintHeader) reportPrintHeader.classList.add('hidden');
+      if (reportFlaggedSection) reportFlaggedSection.classList.add('hidden');
+      if (reportTimelineSection) reportTimelineSection.classList.add('hidden');
+      return;
+    }
+
+    const campaign = (typeof campaignBySession !== 'undefined' && campaignBySession[activeSessionId]) || null;
+    const campaignLabel = campaign
+      ? (campaign.campaign_title || campaign.campaign_id || 'Campaign')
+      : (session.campaign_id || session.campaign_title || 'Not linked');
+
+    const remoteIp = session.remote_ip || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].remote_ip) || 'unknown';
+    const remotePort = session.remote_port !== undefined && session.remote_port !== null ? session.remote_port : 0;
+    const fullIp = `${remoteIp}:${remotePort}`;
+
+    const username = session.username || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].username) || 'unknown';
+    const password = (session.password !== undefined && session.password !== null && session.password !== '')
+      ? session.password
+      : '—';
+    const credentials = `${username}:${password}`;
+
+    const attackerType = session.attacker_type
+      || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].attacker_type)
+      || 'unknown';
+    const threatScore = Math.max(0, Math.min(100, Number(session.max_threat_score || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].max_threat_score) || 0)));
+    const attackPhase = session.current_phase
+      || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].current_phase)
+      || 'Reconnaissance';
+
+    // 1. Session Facts Print Header
+    if (reportPrintHeader) {
+      reportPrintHeader.innerHTML = `
+        <div class="report-header-banner">
+          <div class="report-header-title-row">
+            <h2 class="report-header-title">Incident Response Report</h2>
+            <span class="report-session-pill">${escapeHtml(sessId)}</span>
+          </div>
+          <div class="report-meta-grid">
+            <div class="report-meta-item">
+              <span class="report-meta-label">IP Address</span>
+              <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Credentials</span>
+              <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Attacker Type</span>
+              <span class="report-meta-val">${escapeHtml(attackerType)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Threat Score</span>
+              <span class="report-meta-val"><strong class="threat-${threatClass(threatScore)}">${threatScore}</strong> / 100</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Attack Phase</span>
+              <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Campaign</span>
+              <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+      reportPrintHeader.classList.remove('hidden');
+    }
+
+    const commands = session.commands || [];
+
+    // 2. Flagged Commands (threatScore >= 70)
+    if (reportFlaggedSection) {
+      const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
+      let flaggedTableHtml = '';
+      if (flaggedCommands.length > 0) {
+        const rows = flaggedCommands.map(cmd => {
+          const score = Number(cmd.threat_score) || 0;
+          const tech = cmd.technique_id
+            ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}`
+            : '—';
+          return `
+            <tr>
+              <td class="font-mono text-muted">${escapeHtml(cmd.timestamp || '—')}</td>
+              <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
+              <td><span class="badge-route ${escapeHtml(cmd.route_decision || 'sandbox')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
+              <td><span class="badge-tag">${escapeHtml(tech)}</span></td>
+              <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
+            </tr>
+          `;
+        }).join('');
+
+        flaggedTableHtml = `
+          <table class="data-table report-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Command</th>
+                <th>Route</th>
+                <th>ATT&CK Technique</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      } else {
+        flaggedTableHtml = `<p class="report-section-empty">No commands exceeded the threat threshold (threat score &ge; 70).</p>`;
+      }
+
+      reportFlaggedSection.innerHTML = `
+        <div class="report-section-block">
+          <h3 class="report-section-heading">Flagged High-Risk Commands (Score &ge; 70)</h3>
+          ${flaggedTableHtml}
+        </div>
+      `;
+      reportFlaggedSection.classList.remove('hidden');
+    }
+
+    // 3. Complete Command Execution Timeline
+    if (reportTimelineSection) {
+      let timelineTableHtml = '';
+      if (commands.length > 0) {
+        const rows = commands.map(cmd => {
+          const score = Number(cmd.threat_score) || 0;
+          const tech = cmd.technique_id
+            ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}`
+            : '—';
+          return `
+            <tr>
+              <td class="font-mono text-muted">${escapeHtml(cmd.timestamp || '—')}</td>
+              <td class="font-mono text-muted">${escapeHtml(cmd.cwd || session.cwd || '/home/ubuntu')}</td>
+              <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
+              <td><span class="badge-route ${escapeHtml(cmd.route_decision || 'sandbox')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
+              <td><span class="badge-tag">${escapeHtml(tech)}</span></td>
+              <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
+            </tr>
+          `;
+        }).join('');
+
+        timelineTableHtml = `
+          <table class="data-table report-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>CWD</th>
+                <th>Command</th>
+                <th>Route</th>
+                <th>ATT&CK Technique</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      } else {
+        timelineTableHtml = `<p class="report-section-empty">No commands recorded in this session.</p>`;
+      }
+
+      reportTimelineSection.innerHTML = `
+        <div class="report-section-block">
+          <h3 class="report-section-heading">Complete Command Execution Timeline</h3>
+          ${timelineTableHtml}
+        </div>
+      `;
+      reportTimelineSection.classList.remove('hidden');
+    }
+  }
+
   function renderSessionDetail(session) {
     if (activeSessionId && session.session_id !== activeSessionId) return;
+    currentSessionDetails = session;
     emptyInspector.classList.add('hidden');
     sessionDetail.classList.remove('hidden');
 
@@ -2378,6 +2577,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           cmd.threat_score || 0
         );
       });
+    }
+
+    if (reportContent && !reportContent.classList.contains('hidden') && reportContent.textContent.trim()) {
+      updateReportSections(session);
     }
   }
 
@@ -2910,6 +3113,16 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       } catch (err) {
         console.warn('Clipboard copy failed:', err);
       }
+    });
+  }
+
+  if (btnExportPdf) {
+    btnExportPdf.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      if (!reportContent || reportContent.classList.contains('hidden') || !reportContent.textContent.trim()) {
+        return;
+      }
+      window.print();
     });
   }
 

@@ -261,6 +261,10 @@ def test_index_html_has_report_and_delete_elements(client):
     assert "btn-delete-session" in html
     assert "btn-stop-report" in html
     assert "btn-toggle-regen-report" in html
+    assert "btn-export-pdf" in html
+    assert "report-print-header" in html
+    assert "report-flagged-section" in html
+    assert "report-timeline-section" in html
     assert "report-thought-wrapper" in html
     assert "btn-stop-assistant" in html
 
@@ -448,3 +452,104 @@ def test_reasoning_capability_from_ollama_metadata():
     assert run("other-server-model") is None  # no capabilities field: unknown
     run("thinker")
     assert c.calls == 3  # cached per model
+
+
+def test_pdf_export_ui_and_print_styles(client):
+    # Verify index.html contains the Export PDF button and document containers
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert 'id="btn-export-pdf"' in html
+    assert "Export PDF" in html
+    assert 'id="report-print-header"' in html
+    assert 'id="report-flagged-section"' in html
+    assert 'id="report-timeline-section"' in html
+
+    # Verify style.css contains @media print rules
+    res_css = client.get("/static/style.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+    assert "@media print" in css
+    assert ".top-nav" in css
+    assert ".sidebar" in css
+    assert ".tabs-bar" in css
+    assert ".report-toolbar" in css
+    assert ".report-regen-card" in css
+    assert ".report-thought-wrapper" in css
+    assert "#btn-open-assistant" in css
+    assert ".modal-backdrop" in css
+    assert "overflow: visible !important" in css
+    assert "height: auto !important" in css
+
+    # Verify app.js contains window.print() and score >= 70 threshold
+    res_js = client.get("/static/app.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "window.print()" in js
+    assert "btnExportPdf" in js
+    assert ">= 70" in js
+
+
+@pytest.mark.asyncio
+async def test_session_details_all_facts_and_threshold(client):
+    import uuid
+    test_id = str(uuid.uuid4())
+
+    await controller.db.log_session_start(
+        session_id=test_id,
+        remote_ip="203.0.113.50",
+        remote_port=2222,
+        username="admin",
+        password="secretpassword123",
+    )
+    # Log command with score 69 (below threshold)
+    await controller.db.log_command(
+        session_id=test_id,
+        cwd="/root",
+        command="id",
+        output="uid=0(root) gid=0(root)",
+        route_decision="sandbox",
+        threat_meta={
+            "technique_id": "T1033",
+            "technique_name": "System Owner/User Discovery",
+            "threat_score": 69,
+        },
+    )
+    # Log command with score 70 (at threshold)
+    await controller.db.log_command(
+        session_id=test_id,
+        cwd="/root",
+        command="cat /etc/shadow",
+        output="root:$6$xyz:19000:0:99999:7:::",
+        route_decision="grounded_deception",
+        threat_meta={
+            "technique_id": "T1003.008",
+            "technique_name": "/etc/passwd and /etc/shadow",
+            "threat_score": 70,
+        },
+    )
+
+    res = client.get(f"/api/sessions/{test_id}")
+    assert res.status_code == 200
+    data = res.json()
+
+    # Verify all 6 session facts exist in response
+    assert data["remote_ip"] == "203.0.113.50"
+    assert data["remote_port"] == 2222
+    assert data["username"] == "admin"
+    assert data["password"] == "secretpassword123"
+    assert "attacker_type" in data
+    assert "current_phase" in data
+    assert data["max_threat_score"] == 70
+
+    # Verify commands filtering threshold: score 70 is included, score 69 is excluded
+    cmds = data.get("commands", [])
+    flagged = [c for c in cmds if (c.get("threat_score") or 0) >= 70]
+    unflagged = [c for c in cmds if (c.get("threat_score") or 0) < 70]
+    assert len(flagged) == 1
+    assert flagged[0]["command"] == "cat /etc/shadow"
+    assert flagged[0]["threat_score"] == 70
+    assert len(unflagged) == 1
+    assert unflagged[0]["command"] == "id"
+    assert unflagged[0]["threat_score"] == 69
+
