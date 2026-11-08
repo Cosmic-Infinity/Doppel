@@ -2,7 +2,7 @@ import re
 import logging
 import threading
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
 from doppel.core import clock

@@ -256,6 +256,7 @@ async def get_session_details(session_id: str):
                         "route_decision": h.get("route_decision"),
                         "timestamp": h.get("timestamp", ""),
                         "duration_ms": h.get("duration_ms"),
+                        "response_source": h.get("response_source"),
                     }
                     for h in live.history
                 ],
@@ -285,6 +286,7 @@ async def get_session_details(session_id: str):
                     "prompt_user": h.get("user"),
                     "timestamp": h.get("timestamp", ""),
                     "duration_ms": h.get("duration_ms"),
+                    "response_source": h.get("response_source"),
                 }
                 for h in live.history
             ]

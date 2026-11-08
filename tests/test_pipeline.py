@@ -103,7 +103,7 @@ class LocalShellSandbox:
     def check_availability(self):
         return True
 
-    def create_sandbox_session(self, session_id, username="ubuntu"):
+    def create_sandbox_session(self, session_id, username="ubuntu", preset=None):
         return "local-container"
 
     def destroy_sandbox_session(self, container_id):

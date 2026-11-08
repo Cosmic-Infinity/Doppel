@@ -357,6 +357,7 @@ class SessionManager:
             decision, route_reason = self.router.classify_command(cmd_clean)
             output = ""
             reasoning = None
+            response_source = None
             piped = None
             if decision in (RouteDecision.LLM_DECEPTION, RouteDecision.GROUNDED_DECEPTION):
                 piped = await self._run_split_pipeline(session, cmd_clean, sandbox_timeout)
@@ -410,6 +411,7 @@ class SessionManager:
                         session_history=session.history,
                         fake_fs=session.fake_fs,
                     )
+                    response_source = "model"
                 except asyncio.TimeoutError:
                     logger.warning(f"Grounded command '{cmd_clean}' timed out in sandbox; falling back to LLM synthesis")
                     output, reasoning = await self.deception_engine.generate_command_output(
@@ -422,6 +424,7 @@ class SessionManager:
                         return_reasoning=True,
                         login_time=session.start_time,
                     )
+                    response_source = "model"
                 if session.fake_fs:
                     mutated = session.fake_fs.update_from_command(cmd_clean, output, cwd=session.cwd)
                     if mutated and session.container_id and self.sandbox_manager.is_available:
@@ -439,11 +442,19 @@ class SessionManager:
             else:
                 # Tier 3: Pure Simulation / Containment
                 if route_reason == "dos_containment":
-                    output = "Killed\n"
+                    output = (
+                        "-bash: fork: retry: Resource temporarily unavailable\n"
+                        "-bash: fork: retry: Resource temporarily unavailable\n"
+                        "-bash: fork: retry: Resource temporarily unavailable\n"
+                        "-bash: fork: retry: Resource temporarily unavailable\n"
+                        "-bash: fork: Resource temporarily unavailable\n"
+                    )
                     reasoning = "DoS containment: simulated process termination"
+                    response_source = "rule"
                 elif route_reason == "prompt_injection_defense":
                     output = get_posix_syntax_error(cmd_clean)
                     reasoning = "Adversarial prompt injection detected and neutralized by prompt shield"
+                    response_source = "rule"
                 else:
                     output, reasoning = await self.deception_engine.generate_command_output(
                         command=cmd_clean,
@@ -455,6 +466,7 @@ class SessionManager:
                         return_reasoning=True,
                         login_time=session.start_time,
                     )
+                    response_source = "model"
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:
                     read_tokens = cmd_clean.split()
@@ -526,6 +538,7 @@ class SessionManager:
         completed_mono = _time.monotonic()
         duration_ms = int((completed_mono - received_mono) * 1000)
         cmd_reasoning = reasoning if "reasoning" in locals() else None
+        cmd_response_source = response_source if "response_source" in locals() else None
         session.history.append({
             "command": cmd_clean,
             "cwd": prompt_cwd,
@@ -533,6 +546,7 @@ class SessionManager:
             "output": output,
             "route_decision": decision.value,
             "reasoning": cmd_reasoning,
+            "response_source": cmd_response_source,
             "ts": completed_mono,
             "timestamp": received_at,
             "duration_ms": duration_ms,
@@ -552,6 +566,7 @@ class SessionManager:
                 timestamp=received_at,
                 duration_ms=duration_ms,
                 prompt_user=prompt_user,
+                response_source=cmd_response_source,
             )
         except Exception as db_err:
             logger.error(f"Failed to log command to DB: {db_err}")
@@ -596,6 +611,7 @@ class SessionManager:
             "output": output,
             "decision": decision.value if hasattr(decision, "value") else str(decision),
             "reasoning": cmd_reasoning,
+            "response_source": cmd_response_source,
             "timestamp": received_at,
             "duration_ms": duration_ms,
             "attacker_type": _prof.attacker_type if _prof else "unknown",
@@ -831,4 +847,3 @@ class SessionManager:
             "report_path": str(report_path) if report_path else None,
         })
         return str(report_path) if report_path else None
-

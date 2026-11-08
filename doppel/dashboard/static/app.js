@@ -1206,7 +1206,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           data.decision,
           data.reasoning,
           data.prompt_user || sessionsCache[data.session_id].username,
-          data.duration_ms
+          data.duration_ms,
+          data.response_source
         );
         appendTelemetryRow(data.timestamp, data.command, data.decision, '—', '—', 0);
         detailCwd.textContent = data.cwd;
@@ -2361,7 +2362,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           cmd.route_decision,
           cmd.reasoning,
           cmd.prompt_user || session.username,
-          cmd.duration_ms
+          cmd.duration_ms,
+          cmd.response_source
         );
       });
 
@@ -2407,16 +2409,17 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
   }
 
-  function buildTerminalLine({ cwd, user, command, output = null, decision, reasoning = null, durationMs = null }) {
+  function buildTerminalLine({ cwd, user, command, output = null, decision, reasoning = null, durationMs = null, responseSource = null }) {
     const line = document.createElement('div');
     line.className = 'terminal-line';
     const route = ROUTE_TAGS[decision] || { cls: 'deception', label: 'Deception' };
 
     // Markup is built without inter-tag whitespace so layout never depends on
     // template indentation.
+    const reasoningLabel = responseSource === 'rule' ? 'Rule-based response' : 'Model Reasoning';
     const reasoningHtml = reasoning
       ? '<details class="terminal-reasoning-details">'
-        + '<summary class="terminal-reasoning-summary">Model Reasoning</summary>'
+        + `<summary class="terminal-reasoning-summary">${reasoningLabel}</summary>`
         + `<div class="terminal-reasoning-content">${escapeHtml(reasoning)}</div>`
         + '</details>'
       : '';
@@ -2444,8 +2447,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     line.appendChild(block);
   }
 
-  function appendTerminalCommand(cwd, command, output, decision, reasoning = null, user = null, durationMs = null) {
-    terminalOutput.appendChild(buildTerminalLine({ cwd, user, command, output, decision, reasoning, durationMs }));
+  function appendTerminalCommand(cwd, command, output, decision, reasoning = null, user = null, durationMs = null, responseSource = null) {
+    terminalOutput.appendChild(buildTerminalLine({ cwd, user, command, output, decision, reasoning, durationMs, responseSource }));
     terminalWindow.scrollTop = terminalWindow.scrollHeight;
   }
 

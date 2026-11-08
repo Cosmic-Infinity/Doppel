@@ -167,6 +167,7 @@ class TelemetryDB:
                     "reasoning": "TEXT",
                     "duration_ms": "INTEGER",
                     "prompt_user": "TEXT",
+                    "response_source": "TEXT",
                 }
                 for col_name, col_type in needed_cmd_cols.items():
                     if col_name not in cmd_cols:
@@ -232,6 +233,7 @@ class TelemetryDB:
         timestamp: Optional[str] = None,
         duration_ms: Optional[int] = None,
         prompt_user: Optional[str] = None,
+        response_source: Optional[str] = None,
     ) -> int:
         """
         Record one command. `timestamp` is when the command was received and
@@ -250,8 +252,8 @@ class TelemetryDB:
                 INSERT INTO commands
                 (session_id, timestamp, cwd, command, output, route_decision,
                  technique_id, technique_name, tactics, threat_score, reasoning,
-                 duration_ms, prompt_user)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 duration_ms, prompt_user, response_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -267,6 +269,7 @@ class TelemetryDB:
                     reasoning,
                     duration_ms,
                     prompt_user,
+                    response_source,
                 ),
             )
             cmd_id = cur.lastrowid
@@ -741,4 +744,3 @@ class TelemetryDB:
             cur = await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             await db.commit()
             return cur.rowcount > 0
-
