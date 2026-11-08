@@ -19,7 +19,7 @@ from doppel.analytics.reporter import IncidentReporter
 from doppel.core.session_manager import SessionManager
 from doppel.core.ssh_server import start_ssh_server
 
-app = typer.Typer(help="Doppel: AI-Augmented Hybrid Deception Honeypot System")
+app = typer.Typer(help="Doppel: AI-Augmented Hybrid Honeypot System")
 console = Console()
 
 
@@ -48,6 +48,7 @@ def build_system_stack(config: DoppelConfig) -> SessionManager:
         memory_limit=config.sandbox.memory_limit,
         enabled=config.sandbox.enabled,
         hostname=preset.get("hostname", config.honeypot.hostname),
+        cpu_quota=config.sandbox.cpu_quota,
     )
     router = HybridRouter(
         intercept_sensitive_files=config.deception.intercept_sensitive_files,

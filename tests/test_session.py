@@ -334,6 +334,27 @@ def test_docker_destroy_sandbox_session_forced_removal():
     mock_container.remove.assert_called_once_with(force=True, v=True)
 
 
+def test_sandbox_container_gets_memory_and_cpu_limits():
+    from unittest.mock import MagicMock
+    sandbox_mgr = DockerSandboxManager(enabled=False, memory_limit="256m", cpu_quota=50000)
+    sandbox_mgr.is_available = True
+    sandbox_mgr.image_ready.set()
+    mock_client = MagicMock()
+    mock_client.containers.get.side_effect = Exception("no such container")
+    mock_client.containers.run.return_value.exec_run.return_value = (0, b"")
+    sandbox_mgr.client = mock_client
+
+    sandbox_mgr.create_sandbox_session("abcdef1234567890")
+    kwargs = mock_client.containers.run.call_args.kwargs
+    assert kwargs["mem_limit"] == "256m"
+    assert kwargs["cpu_period"] == 100000 and kwargs["cpu_quota"] == 50000
+    assert kwargs["network_mode"] == "none"
+
+    sandbox_mgr.cpu_quota = 0
+    sandbox_mgr.create_sandbox_session("1234567890abcdef")
+    assert "cpu_quota" not in mock_client.containers.run.call_args.kwargs
+
+
 def test_docker_cleanup_orphans():
     from unittest.mock import MagicMock
     sandbox_mgr = DockerSandboxManager(enabled=False)

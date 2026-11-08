@@ -40,10 +40,13 @@ class DockerSandboxManager:
         memory_limit: str = "256m",
         enabled: bool = True,
         hostname: str = "prod-api-node-01",
+        cpu_quota: int = 50000,
     ):
         self.image = image
         self.network_disabled = network_disabled
         self.memory_limit = memory_limit
+        # CPU time per 100 ms scheduling period (50000 = half a core); 0 = no limit
+        self.cpu_quota = cpu_quota
         self.enabled = enabled
         # Without this, `hostname` inside the container prints the container ID
         self.hostname = hostname
@@ -170,6 +173,7 @@ class DockerSandboxManager:
             except Exception:
                 pass
 
+            limits = {"cpu_period": 100000, "cpu_quota": self.cpu_quota} if self.cpu_quota > 0 else {}
             container = self.client.containers.run(
                 image=self.image,
                 name=container_name,
@@ -181,6 +185,7 @@ class DockerSandboxManager:
                 mem_limit=self.memory_limit,
                 command="/bin/sh",
                 remove=True,
+                **limits,
             )
 
             # Bootstrap standard Linux layout, user accounts, distro release markers, aliases, and env file

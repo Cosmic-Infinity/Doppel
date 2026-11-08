@@ -1,7 +1,7 @@
 # TODO
 
 Open work for Doppel. The unfinished roadmap items that used to sit at the end
-of the README live here now; finished features are described in the README.
+of the README live here now; finished features are described in [docs/features.md](docs/features.md).
 
 ---
 

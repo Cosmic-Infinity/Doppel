@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "doppel-honeypot"
 version = "0.1.0"
-description = "AI-Augmented Hybrid Deception Honeypot System"
+description = "AI-Augmented Hybrid Honeypot System"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

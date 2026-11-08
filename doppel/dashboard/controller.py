@@ -168,6 +168,7 @@ class HoneypotController:
                 memory_limit=self.config.sandbox.memory_limit,
                 enabled=self.config.sandbox.enabled,
                 hostname=preset.get("hostname", self.config.honeypot.hostname),
+                cpu_quota=self.config.sandbox.cpu_quota,
             )
             # Leaked canary URLs point at the public HTTP decoy; tokens are
             # stored so they are still recognised after a restart

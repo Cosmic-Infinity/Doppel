@@ -22,7 +22,7 @@
   2. Doppel is running, and
   3. it runs the commit you need (ask which one).
 - Once the user confirms, you may run the tests yourself instead of asking the user to do it, to speed up bug fixes:
-  - Dashboard and control API: `http://100.100.186.40:8000`. Endpoints are in the README's "Control API" section, and the interactive reference is at `/docs`.
+  - Dashboard and control API: `http://100.100.186.40:8000`. Endpoints are in [docs/dashboard.md](docs/dashboard.md#control-api), and the interactive reference is at `/docs`.
   - SSH honeypot: port `2222`. HTTP decoy: port `8080`.
 - Note every setting you change through the API, and restore it when you finish. That includes the model, `auto_reports` and timeouts.
 - Stop and tell the user if you see sessions you did not start, or the analysis queue busy with work that is not yours. Someone else is probably testing.
