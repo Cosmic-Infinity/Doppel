@@ -3256,18 +3256,18 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Incident Report - ${escapeHtml(sessionId)}</title>
+  <title>Incident Report</title>
   <style>
     @page {
       size: A4 portrait;
-      margin: 15mm;
+      margin: 0; /* Strips browser-injected header/footer stamps (localhost, URLs, date/time) */
     }
-    * {
+    *, *::before, *::after {
       box-sizing: border-box;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    body {
+    html, body {
       margin: 0;
       padding: 0;
       background: #ffffff;
@@ -3276,136 +3276,180 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       font-size: 11pt;
       line-height: 1.6;
     }
-    /* Exact single outer frame matching the reference document */
-    .page-border-container {
+    /* Fixed 4-sided bordered page container */
+    .report-page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 12mm 15mm;
+      background: #ffffff;
+      page-break-after: always;
+      break-after: page;
+      position: relative;
+    }
+    .report-page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+    .page-border-box {
       border: 1.5px solid #000000;
-      padding: 16mm 18mm;
-      min-height: calc(297mm - 30mm);
+      width: 100%;
+      min-height: calc(297mm - 24mm);
+      padding: 14mm 16mm;
       box-sizing: border-box;
       background: #ffffff;
     }
     .doc-main-title {
       text-align: center;
-      font-size: 20pt;
+      font-size: 22pt;
       font-weight: 900;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
       margin-top: 0;
-      margin-bottom: 22pt;
+      margin-bottom: 24pt;
+      color: #000000;
+      border: none;
     }
+    /* Clear gap before new subheadings for high visual clarity */
     .doc-section-heading {
-      font-size: 13pt;
+      font-size: 13.5pt;
       font-weight: 900;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      margin-top: 24pt;
-      margin-bottom: 10pt;
+      margin-top: 36pt;
+      margin-bottom: 14pt;
+      color: #000000;
       border: none;
       text-decoration: none;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    .doc-section-heading:first-of-type {
+      margin-top: 18pt;
     }
     .doc-subheading {
       font-size: 11.5pt;
       font-weight: 700;
       font-style: italic;
-      margin-top: 14pt;
+      margin-top: 20pt;
       margin-bottom: 8pt;
+      color: #000000;
     }
     p {
       margin-top: 0;
       margin-bottom: 12pt;
       text-align: justify;
       color: #000000;
+      line-height: 1.6;
     }
     ul {
-      margin-top: 4pt;
-      margin-bottom: 14pt;
+      margin-top: 6pt;
+      margin-bottom: 16pt;
       padding-left: 24pt;
       list-style-type: disc;
     }
     li {
-      margin-bottom: 5pt;
+      margin-bottom: 6pt;
       color: #000000;
       text-align: left;
     }
     .font-mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 9.5pt;
+      color: #000000;
     }
     .font-bold {
       font-weight: 700;
+      color: #000000;
     }
     .star-highlight {
       font-weight: 900;
       color: #000000;
     }
+    /* Table with complete top border and crisp vertical and horizontal separating lines */
     .academic-table {
       width: 100%;
       border-collapse: collapse;
-      margin: 12pt 0 16pt 0;
+      margin: 14pt 0 18pt 0;
       border: 1.5px solid #000000;
       page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .academic-table thead {
+      display: table-header-group;
+    }
+    .academic-table tr {
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
     .academic-table th,
     .academic-table td {
       border: 1px solid #000000;
-      padding: 6pt 8pt;
+      padding: 7pt 9pt;
       font-size: 9pt;
       text-align: left;
       vertical-align: middle;
       color: #000000;
+      line-height: 1.4;
     }
     .academic-table th {
-      background: #f3f4f6;
+      background: #f1f5f9;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       border-bottom: 1.5px solid #000000;
+      border-top: 1.5px solid #000000;
+    }
+    .academic-table td.center {
+      text-align: center;
     }
     .academic-empty {
       font-style: italic;
-      margin: 8pt 0;
+      margin: 10pt 0;
+      color: #000000;
     }
-    /* Hide elements with no data */
     .hidden {
       display: none !important;
     }
   </style>
 </head>
 <body>
-  <div class="page-border-container">
-    <h1 class="doc-main-title">INCIDENT REPORT</h1>
+  <div class="report-page">
+    <div class="page-border-box">
+      <h1 class="doc-main-title">INCIDENT REPORT</h1>
 
-    <h2 class="doc-section-heading">1.0 EXECUTIVE SUMMARY &amp; ATTACKER PROFILE</h2>
-    <p>
-      On ${escapeHtml(generatedAt)}, an active honeypot session was captured and analyzed by the Doppel Autonomous Defense Platform.
-      The threat engine classified the intrusion attempt under the following operational telemetry:
-    </p>
-    <ul>
-      <li><strong>Session Identifier:</strong> <span class="font-mono">${escapeHtml(sessionId)}</span></li>
-      <li><strong>Target / Source IP:</strong> <span class="font-mono">${escapeHtml(fullIp)}</span></li>
-      <li><strong>Credentials Attempted:</strong> <span class="font-mono">${escapeHtml(credentials)}</span></li>
-      <li><strong>Attacker Classification:</strong> ${escapeHtml(attackerType)}</li>
-      <li><strong>Attack Phase:</strong> ${escapeHtml(attackPhase)}</li>
-      <li><strong>Campaign Association:</strong> ${escapeHtml(campaignLabel)}</li>
-      <li><strong class="star-highlight">&#9733; Threat Evaluation:</strong> Threat Score <strong>${threatScore} / 100</strong> &mdash; <strong>${threatStar}</strong></li>
-    </ul>
-
-    ${flaggedCommands.length > 0 ? `
-      <h2 class="doc-section-heading">2.0 CRITICAL SECURITY FINDINGS (&ge; 70 THREAT SCORE)</h2>
+      <h2 class="doc-section-heading">1.0 EXECUTIVE SUMMARY &amp; ATTACKER PROFILE</h2>
       <p>
-        &#9733; The following high-risk commands triggered critical heuristic detection rules and required targeted honeypot deception or sandbox containment:
+        On ${escapeHtml(generatedAt)}, an active intrusion session was detected and captured by the Doppel Autonomous Defense Platform.
+        The security engine correlated the following session telemetry and attack characteristics:
       </p>
-      ${flaggedTableHtml}
-    ` : ''}
+      <ul>
+        <li><strong>Session Identifier:</strong> <span class="font-mono">${escapeHtml(sessionId)}</span></li>
+        <li><strong>Target / Source IP:</strong> <span class="font-mono">${escapeHtml(fullIp)}</span></li>
+        <li><strong>Credentials Attempted:</strong> <span class="font-mono">${escapeHtml(credentials)}</span></li>
+        <li><strong>Attacker Classification:</strong> ${escapeHtml(attackerType)}</li>
+        <li><strong>Observed Attack Phase:</strong> ${escapeHtml(attackPhase)}</li>
+        <li><strong>Campaign Correlation:</strong> ${escapeHtml(campaignLabel)}</li>
+        <li><strong class="star-highlight">&#9733; Threat Evaluation:</strong> Threat Score <strong>${threatScore} / 100</strong> &mdash; <strong>${threatStar}</strong></li>
+      </ul>
 
-    <h2 class="doc-section-heading">3.0 MITRE ATT&amp;CK &amp; INCIDENT ANALYSIS</h2>
-    ${mdBodyHtml}
+      ${flaggedCommands.length > 0 ? `
+        <h2 class="doc-section-heading">2.0 CRITICAL SECURITY FINDINGS (&ge; 70 THREAT SCORE)</h2>
+        <p>
+          &#9733; The following high-risk commands triggered critical threat heuristics and required targeted honeypot deception or containment:
+        </p>
+        ${flaggedTableHtml}
+      ` : ''}
 
-    ${unflaggedCommands.length > 0 ? `
-      <h2 class="doc-section-heading">4.0 COMMAND EXECUTION TIMELINE</h2>
-      <p>Telemetry record of baseline shell interactions observed during this intrusion session:</p>
-      ${timelineTableHtml}
-    ` : ''}
+      <h2 class="doc-section-heading">3.0 MITRE ATT&amp;CK &amp; INCIDENT ANALYSIS</h2>
+      ${mdBodyHtml}
+
+      ${unflaggedCommands.length > 0 ? `
+        <h2 class="doc-section-heading">4.0 COMMAND EXECUTION TIMELINE</h2>
+        <p>Telemetry record of baseline shell interactions observed during this intrusion session:</p>
+        ${timelineTableHtml}
+      ` : ''}
+    </div>
   </div>
 </body>
 </html>
