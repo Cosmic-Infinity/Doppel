@@ -2383,7 +2383,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportPrintHeader) {
       const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
       reportPrintHeader.innerHTML = `
-        <div class="incident-report-print-wrapper">
+        <div class="incident-report-print-wrapper incident-report-book-frame">
           <div class="report-header-banner">
             <div class="report-classification-bar">
               <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>

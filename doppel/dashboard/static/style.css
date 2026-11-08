@@ -3274,6 +3274,10 @@ html.init-dashboard #view-dashboard {
    ========================================================================== */
 
 /* Screen Styles for Report Sections */
+.incident-report-book-frame {
+  width: 100%;
+}
+
 .report-print-header {
   margin-bottom: 24px;
 }
@@ -3454,19 +3458,20 @@ html.init-dashboard #view-dashboard {
 @media print {
   @page {
     size: A4 portrait;
-    margin: 20mm;
+    margin: 15mm;
     @bottom-right {
       content: "Page " counter(page) " of " counter(pages);
       font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
       font-size: 8.5pt;
-      color: #64748b;
+      color: #374151;
+      font-weight: 500;
     }
     @bottom-left {
       content: "DOPPEL INTELLIGENCE PLATFORM // INCIDENT AUDIT";
       font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
       font-size: 8.5pt;
-      font-weight: 600;
-      color: #64748b;
+      font-weight: 700;
+      color: #111827;
       letter-spacing: 0.05em;
     }
   }
@@ -3516,12 +3521,12 @@ html.init-dashboard #view-dashboard {
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
-    color: #0f172a !important;
+    color: #111827 !important;
     position: static !important;
     display: block !important;
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
-    font-size: 10pt !important;
-    line-height: 1.5 !important;
+    font-size: 9.5pt !important;
+    line-height: 1.45 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
@@ -3541,18 +3546,20 @@ html.init-dashboard #view-dashboard {
     max-width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
-    background: transparent !important;
-    color: inherit !important;
+    background: #ffffff !important;
+    color: #111827 !important;
     position: static !important;
     display: block !important;
     flex: none !important;
   }
 
-  /* Dedicated print wrapper for the formal document */
-  .incident-report-print-wrapper {
+  /* Formal book-like structure & framing */
+  .incident-report-print-wrapper,
+  .incident-report-book-frame {
     display: block !important;
     width: 100% !important;
     background: #ffffff !important;
+    box-sizing: border-box !important;
   }
 
   /* 3. Document sections formatting */
@@ -3562,19 +3569,19 @@ html.init-dashboard #view-dashboard {
   .report-timeline-section {
     display: block !important;
     background: transparent !important;
-    color: inherit !important;
+    color: #111827 !important;
     max-width: 100% !important;
     page-break-inside: auto;
     break-inside: auto;
   }
 
-  /* Header / Cover Block */
+  /* Header / Cover Block: Book-like Executive Banner */
   .report-header-banner {
-    background: #f8fafc !important;
-    border: 1.5px solid #0f172a !important;
-    border-radius: 4px !important;
+    background: #ffffff !important;
+    border: 1.5px solid #111827 !important;
+    border-radius: 2px !important;
     padding: 14pt 16pt !important;
-    margin-bottom: 18pt !important;
+    margin-bottom: 16pt !important;
     page-break-inside: avoid;
     break-inside: avoid;
   }
@@ -3587,17 +3594,17 @@ html.init-dashboard #view-dashboard {
     font-weight: 700 !important;
     letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
-    color: #475569 !important;
+    color: #374151 !important;
     padding-bottom: 6pt !important;
     margin-bottom: 10pt !important;
-    border-bottom: 1px dashed #94a3b8 !important;
+    border-bottom: 1px dashed #d1d5db !important;
   }
 
   .report-header-title-row {
     display: flex !important;
     align-items: baseline !important;
     justify-content: space-between !important;
-    border-bottom: 1.5px solid #0f172a !important;
+    border-bottom: 1.5px solid #111827 !important;
     padding-bottom: 8pt !important;
     margin-bottom: 12pt !important;
   }
@@ -3605,7 +3612,7 @@ html.init-dashboard #view-dashboard {
   .report-header-title {
     font-size: 20pt !important;
     font-weight: 800 !important;
-    color: #0f172a !important;
+    color: #111827 !important;
     letter-spacing: -0.02em !important;
     margin: 0 !important;
     border-bottom: none !important;
@@ -3615,12 +3622,12 @@ html.init-dashboard #view-dashboard {
   .report-session-pill {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
     font-size: 9pt !important;
-    font-weight: 600 !important;
-    background: #e2e8f0 !important;
-    border: 1px solid #64748b !important;
-    color: #0f172a !important;
+    font-weight: 700 !important;
+    background: #f3f4f6 !important;
+    border: 1px solid #9ca3af !important;
+    color: #111827 !important;
     padding: 3pt 8pt !important;
-    border-radius: 3px !important;
+    border-radius: 2px !important;
   }
 
   .report-meta-grid {
@@ -3637,7 +3644,7 @@ html.init-dashboard #view-dashboard {
 
   .report-meta-label {
     font-size: 8pt !important;
-    color: #64748b !important;
+    color: #374151 !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.06em !important;
@@ -3645,8 +3652,8 @@ html.init-dashboard #view-dashboard {
 
   .report-meta-val {
     font-size: 9.5pt !important;
-    font-weight: 500 !important;
-    color: #0f172a !important;
+    font-weight: 600 !important;
+    color: #111827 !important;
     word-break: break-word !important;
   }
 
@@ -3654,11 +3661,11 @@ html.init-dashboard #view-dashboard {
   h1,
   .report-content.markdown-body h1 {
     font-size: 15pt !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-    border-bottom: 1.5px solid #0f172a !important;
+    font-weight: 800 !important;
+    color: #111827 !important;
+    border-bottom: 1.5px solid #111827 !important;
     padding-bottom: 4pt !important;
-    margin-top: 18pt !important;
+    margin-top: 16pt !important;
     margin-bottom: 8pt !important;
     page-break-after: avoid;
     break-after: avoid;
@@ -3668,11 +3675,11 @@ html.init-dashboard #view-dashboard {
   .report-section-heading,
   .report-content.markdown-body h2 {
     font-size: 13pt !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-    border-bottom: 1px solid #cbd5e1 !important;
+    font-weight: 750 !important;
+    color: #111827 !important;
+    border-bottom: 1px solid #d1d5db !important;
     padding-bottom: 4pt !important;
-    margin-top: 16pt !important;
+    margin-top: 14pt !important;
     margin-bottom: 8pt !important;
     page-break-after: avoid;
     break-after: avoid;
@@ -3682,7 +3689,7 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body h3 {
     font-size: 11pt !important;
     font-weight: 700 !important;
-    color: #1e293b !important;
+    color: #111827 !important;
     margin-top: 12pt !important;
     margin-bottom: 6pt !important;
     border-bottom: none !important;
@@ -3695,9 +3702,9 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body,
   .report-content.markdown-body p,
   .report-content.markdown-body li {
-    font-size: 10pt !important;
-    line-height: 1.55 !important;
-    color: #1e293b !important;
+    font-size: 9.5pt !important;
+    line-height: 1.45 !important;
+    color: #1f2937 !important;
   }
 
   /* 6. Executive Callout Box for Critical Alerts */
@@ -3707,7 +3714,7 @@ html.init-dashboard #view-dashboard {
     border-top: 1px solid #fecaca !important;
     border-right: 1px solid #fecaca !important;
     border-bottom: 1px solid #fecaca !important;
-    border-radius: 3px !important;
+    border-radius: 2px !important;
     padding: 8pt 12pt !important;
     margin-bottom: 12pt !important;
     page-break-inside: avoid;
@@ -3727,17 +3734,18 @@ html.init-dashboard #view-dashboard {
     font-size: 8.5pt !important;
     color: #450a0a !important;
     line-height: 1.4 !important;
+    font-weight: 500 !important;
   }
 
-  /* 7. Tables styling */
+  /* 7. Tables styling: crisp 1px solid borders and structured padding */
   table,
   .report-table,
   .data-table,
   .report-content.markdown-body table {
     width: 100% !important;
     border-collapse: collapse !important;
-    border: 1px solid #cbd5e1 !important;
-    margin: 10pt 0 16pt 0 !important;
+    border: 1px solid #d1d5db !important;
+    margin: 10pt 0 14pt 0 !important;
     page-break-inside: auto;
     break-inside: auto;
   }
@@ -3758,9 +3766,9 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body th,
   .report-content.markdown-body td {
     padding: 6pt 8pt !important;
-    border: 1px solid #cbd5e1 !important;
-    color: #0f172a !important;
-    font-size: 8.5pt !important;
+    border: 1px solid #e5e7eb !important;
+    color: #111827 !important;
+    font-size: 9pt !important;
     line-height: 1.4 !important;
     vertical-align: middle !important;
   }
@@ -3768,17 +3776,18 @@ html.init-dashboard #view-dashboard {
   table th,
   .report-table th,
   .report-content.markdown-body th {
-    background: #f1f5f9 !important;
+    background: #f9fafb !important;
     font-weight: 700 !important;
-    color: #1e293b !important;
+    color: #111827 !important;
     text-transform: uppercase !important;
     font-size: 8pt !important;
     letter-spacing: 0.04em !important;
+    border-bottom: 1.5px solid #d1d5db !important;
   }
 
   /* Zebra striping for improved reading flow across multi-row tables */
   tbody tr:nth-child(even) td {
-    background: #f8fafc !important;
+    background: #f9fafb !important;
   }
 
   /* 8. Code blocks */
@@ -3787,10 +3796,10 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body pre,
   .report-content.markdown-body code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-    background: #f1f5f9 !important;
-    color: #0f172a !important;
-    border: 1px solid #cbd5e1 !important;
-    border-radius: 3px !important;
+    background: #f3f4f6 !important;
+    color: #111827 !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 2px !important;
     page-break-inside: avoid;
     break-inside: avoid;
     font-size: 8.5pt !important;
@@ -3811,9 +3820,9 @@ html.init-dashboard #view-dashboard {
     display: inline-block !important;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
     font-size: 8pt !important;
-    font-weight: 600 !important;
+    font-weight: 700 !important;
     padding: 2pt 5pt !important;
-    border-radius: 3px !important;
+    border-radius: 2px !important;
     line-height: 1 !important;
     white-space: nowrap !important;
     page-break-inside: avoid;
@@ -3821,42 +3830,42 @@ html.init-dashboard #view-dashboard {
   }
 
   .badge-tag {
-    background: #f1f5f9 !important;
-    color: #334155 !important;
-    border: 1px solid #cbd5e1 !important;
+    background: #f3f4f6 !important;
+    color: #1f2937 !important;
+    border: 1px solid #d1d5db !important;
   }
 
   .badge-route {
-    background: #e2e8f0 !important;
-    color: #1e293b !important;
-    border: 1px solid #94a3b8 !important;
+    background: #e5e7eb !important;
+    color: #111827 !important;
+    border: 1px solid #9ca3af !important;
     text-transform: uppercase !important;
     font-size: 7.5pt !important;
   }
 
   .stat-score-pill.threat-low {
     background: #ecfdf5 !important;
-    color: #065f46 !important;
-    border: 1px solid #a7f3d0 !important;
+    color: #064e3b !important;
+    border: 1px solid #6ee7b7 !important;
   }
 
   .stat-score-pill.threat-medium {
     background: #fffbeb !important;
-    color: #92400e !important;
-    border: 1px solid #fde68a !important;
+    color: #78350f !important;
+    border: 1px solid #fcd34d !important;
   }
 
   .stat-score-pill.threat-high {
     background: #fef2f2 !important;
-    color: #991b1b !important;
-    border: 1px solid #fecaca !important;
+    color: #7f1d1d !important;
+    border: 1px solid #fca5a5 !important;
   }
 
   blockquote,
   .report-content.markdown-body blockquote {
-    background: #f8fafc !important;
-    border-left: 3px solid #64748b !important;
-    color: #334155 !important;
+    background: #f9fafb !important;
+    border-left: 3px solid #4b5563 !important;
+    color: #1f2937 !important;
     padding: 6pt 10pt !important;
     margin: 8pt 0 !important;
     page-break-inside: avoid;
@@ -3866,7 +3875,7 @@ html.init-dashboard #view-dashboard {
   hr,
   .report-content.markdown-body hr {
     border: 0 !important;
-    border-top: 1px solid #cbd5e1 !important;
+    border-top: 1px solid #d1d5db !important;
     margin: 14pt 0 !important;
   }
 }
