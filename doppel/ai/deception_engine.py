@@ -455,6 +455,7 @@ class DeceptionEngine:
         session_id: Optional[str] = None,
         return_reasoning: bool = False,
         login_time: Optional[str] = None,
+        entity_cache: Optional[Any] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Generate authentic simulated output for a command in the current session context."""
         # Inbound prompt defense shield: injection text never reaches the model
@@ -484,6 +485,12 @@ class DeceptionEngine:
             fs_block = fake_fs.build_context_block()
             if fs_block:
                 system_prompt = system_prompt + "\n\n" + fs_block
+
+        # Inject session entity consistency cache if present
+        if entity_cache and hasattr(entity_cache, "build_context_block"):
+            ec_block = entity_cache.build_context_block()
+            if ec_block:
+                system_prompt = system_prompt + "\n\n" + ec_block
 
         # Inject dynamic canary honeytokens if accessing sensitive files or credentials
         cmd_lower = command.lower()
@@ -577,6 +584,7 @@ class DeceptionEngine:
         login_time: Optional[str] = None,
         session_history: Optional[List[Dict[str, str]]] = None,
         fake_fs: Optional["FakeFilesystem"] = None,
+        entity_cache: Optional[Any] = None,
     ) -> Union[str, Tuple[str, Optional[str]]]:
         """Tier 2: Transform real Linux sandbox output with persona camouflage and canary honeytokens."""
         from doppel.ai.prompts.deception_prompts import build_grounded_transformation_prompt
@@ -586,6 +594,7 @@ class DeceptionEngine:
             return await self.generate_command_output(
                 command=command, cwd=cwd, user=user, session_history=session_history, fake_fs=fake_fs,
                 session_id=session_id, return_reasoning=return_reasoning, login_time=login_time,
+                entity_cache=entity_cache,
             )
 
         # A plain error (nothing printed to stdout, nothing container-specific in
@@ -601,6 +610,12 @@ class DeceptionEngine:
             real_stderr=real_stderr,
             exit_code=exit_code,
         ) + "\n\n" + build_clock_context(self.persona, login_time)
+
+        # Inject session entity consistency cache if present
+        if entity_cache and hasattr(entity_cache, "build_context_block"):
+            ec_block = entity_cache.build_context_block()
+            if ec_block:
+                transformation_prompt = transformation_prompt + "\n\n" + ec_block
 
         # Inject dynamic canary honeytokens if applicable
         cmd_lower = command.lower()

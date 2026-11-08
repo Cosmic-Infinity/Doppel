@@ -16,6 +16,7 @@ from doppel.analytics.db import TelemetryDB
 from doppel.analytics.observer import ThreatObserver
 from doppel.analytics.reporter import IncidentReporter
 from doppel.core.fake_filesystem import FakeFilesystem
+from doppel.core.entity_cache import EntityConsistencyCache
 from doppel.analytics.profiler import AttackerProfiler, ProfilerState
 from doppel.alerts.email import EmailAlerter
 from doppel.ai.prompt_shield import (
@@ -42,6 +43,7 @@ class SessionState:
     is_active: bool = True
     credential_analysis: dict = field(default_factory=dict)
     fake_fs: Optional[Any] = None
+    entity_cache: Optional[Any] = None
     geoip: dict = field(default_factory=dict)
     profiler_state: object = field(default=None)  # ProfilerState, typed as object
     # Stateful Privilege Escalation
@@ -161,12 +163,14 @@ class SessionManager:
                     exit_code=res.exit_code, user=user, cwd=session.cwd, session_id=session.session_id,
                     return_reasoning=True, login_time=session.start_time,
                     session_history=session.history, fake_fs=session.fake_fs,
+                    entity_cache=session.entity_cache,
                 )
             else:
                 head_out, reasoning = await self.deception_engine.generate_command_output(
                     command=head, cwd=session.cwd, user=user, session_history=session.history,
                     fake_fs=session.fake_fs, session_id=session.session_id,
                     return_reasoning=True, login_time=session.start_time,
+                    entity_cache=session.entity_cache,
                 )
 
             stdin_text = (head_out or "").rstrip("\n")
@@ -246,6 +250,7 @@ class SessionManager:
             container_id=container_id,
             credential_analysis=credential_analysis or {},
             fake_fs=FakeFilesystem(),
+            entity_cache=EntityConsistencyCache(),
             geoip=geoip or {},
             profiler_state=ProfilerState(),
             effective_user=username,
@@ -410,6 +415,7 @@ class SessionManager:
                         login_time=session.start_time,
                         session_history=session.history,
                         fake_fs=session.fake_fs,
+                        entity_cache=session.entity_cache,
                     )
                     response_source = "model"
                 except asyncio.TimeoutError:
@@ -423,6 +429,7 @@ class SessionManager:
                         session_id=session.session_id,
                         return_reasoning=True,
                         login_time=session.start_time,
+                        entity_cache=session.entity_cache,
                     )
                     response_source = "model"
                 if session.fake_fs:
@@ -465,8 +472,13 @@ class SessionManager:
                         session_id=session.session_id,
                         return_reasoning=True,
                         login_time=session.start_time,
+                        entity_cache=session.entity_cache,
                     )
                     response_source = "model"
+                # Update entity consistency cache with newly generated environment outputs
+                if getattr(session, "entity_cache", None) and output:
+                    session.entity_cache.extract_from_output(cmd_clean, output)
+
                 # After LLM responds, update fake filesystem and sync mutations to container
                 if session.fake_fs:
                     read_tokens = cmd_clean.split()
