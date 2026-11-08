@@ -72,9 +72,11 @@ class IncidentReporter:
         tactics_count: Dict[str, int] = {}
 
         for cmd in commands:
+            tag = (f"Technique: {cmd.get('technique_id')} ({cmd.get('technique_name')})"
+                   if cmd.get("technique_id") else "No technique")
             cmd_summary_lines.append(
                 f"[{cmd.get('timestamp')}] {cmd.get('cwd')}$ {cmd.get('command')} "
-                f"-> Technique: {cmd.get('technique_id')} ({cmd.get('technique_name')}) [Score: {cmd.get('threat_score')}]"
+                f"-> {tag} [Score: {cmd.get('threat_score')}]"
             )
             raw_tactics = cmd.get("tactics")
             if raw_tactics:

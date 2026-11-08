@@ -51,6 +51,17 @@ Recent Session History:
 Analyze this command and output JSON only."""
 
 
+def _duration(start: Optional[str], end: Optional[str]) -> str:
+    """'1 min 12 s' between two ISO timestamps, or 'unknown'."""
+    from datetime import datetime
+    try:
+        seconds = int((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+    except (TypeError, ValueError):
+        return "unknown"
+    minutes, seconds = divmod(max(seconds, 0), 60)
+    return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+
+
 def build_incident_report_prompt(
     session_data: Dict[str, Any], custom_instructions: Optional[str] = None
 ) -> str:
@@ -58,12 +69,23 @@ def build_incident_report_prompt(
     if custom_instructions and custom_instructions.strip():
         analyst_section = f"\nAdditional Analyst Directives & Focus Areas:\n{custom_instructions.strip()}\n"
 
+    password = session_data.get("password")
+    location = ", ".join(str(v) for v in (session_data.get("city"), session_data.get("country_name"),
+                                          session_data.get("asn_org")) if v) or "unknown"
+    confidence = session_data.get("type_confidence")
+    attacker_type = session_data.get("attacker_type") or "unknown"
+    if isinstance(confidence, (int, float)) and confidence:
+        attacker_type += f" ({confidence:.0%} confidence)"
     return f"""Generate an incident report for the following honeypot session:
 Session ID: {session_data.get('session_id')}
-Attacker IP: {session_data.get('remote_ip')}
-Authenticated User: {session_data.get('username')}
+Attacker IP: {session_data.get('remote_ip')} (port {session_data.get('remote_port')})
+Location: {location}
+Login: user '{session_data.get('username')}', password {repr(password) if password else '(empty)'}, credential risk {session_data.get('credential_risk') or 'unknown'}
 Start Time: {session_data.get('start_time')}
-End Time: {session_data.get('end_time')}
+End Time: {session_data.get('end_time') or 'still connected'}
+Duration: {_duration(session_data.get('start_time'), session_data.get('end_time'))}
+Attacker Type: {attacker_type}
+Furthest Kill-Chain Phase: {session_data.get('current_phase') or 'Reconnaissance'}
 Max Threat Score: {session_data.get('max_threat_score')}
 Total Commands: {len(session_data.get('commands', []))}
 {analyst_section}

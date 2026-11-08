@@ -1150,13 +1150,6 @@ body {
   background-color: var(--bg-surface-elevated);
 }
 
-.session-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 8px 0;
-}
-
 .session-search {
   flex: 1;
   min-width: 0;
@@ -1174,14 +1167,50 @@ body {
   border-color: var(--border-focus);
 }
 
+/* "Live" filter: a toggle button beside the search box */
 .session-live-toggle {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-base);
   font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.session-live-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-live-toggle .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.session-live-toggle:has(input:checked) {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--accent-green);
+}
+
+.session-live-toggle:has(input:checked) .live-dot {
+  background: var(--accent-green);
+}
+
+.session-live-toggle:has(input:focus-visible) {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
 }
 
 .card-user {
@@ -3221,11 +3250,14 @@ html.init-dashboard #view-dashboard {
   border-color: var(--border-focus);
 }
 
-.session-filter-foot {
+.session-filter-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding-top: 2px;
+  gap: 6px;
+}
+
+.session-filter-top .session-search {
+  height: 28px;
 }
 
 .btn-clear-filters {
@@ -3234,7 +3266,8 @@ html.init-dashboard #view-dashboard {
   color: var(--accent-blue);
   font-size: 11px;
   cursor: pointer;
-  padding: 0;
+  padding: 0 2px;
+  flex-shrink: 0;
 }
 
 .btn-clear-filters:hover {

@@ -206,49 +206,42 @@
           <button class="sidebar-tab" data-sidebar="campaigns">Campaigns</button>
         </div>
 
-        <!-- <div class="session-filter" id="session-filter">
-          <input type="search" id="session-search" class="session-search" placeholder="Filter by IP, user or session" autocomplete="off" aria-label="Filter sessions">
-          <label class="session-live-toggle" title="Show only connected sessions">
-            <input type="checkbox" id="session-live-only">
-            <span>Live</span>
-          </label>
-        </div> -->
-
         <div class="session-filter" id="session-filter">
-          <input type="search" id="session-search" class="session-search" placeholder="Search IP, user, campaign..." autocomplete="off" aria-label="Search sessions">
+          <div class="session-filter-top">
+            <input type="search" id="session-search" class="session-search" placeholder="Search IP, user, campaign" autocomplete="off" aria-label="Search sessions">
+            <label class="session-live-toggle" title="Show only connected sessions">
+              <input type="checkbox" id="session-live-only">
+              <span class="live-dot" aria-hidden="true"></span>
+              <span>Live</span>
+            </label>
+            <button type="button" class="btn-clear-filters hidden" id="btn-clear-filters" title="Clear search and filters">Reset</button>
+          </div>
           <div class="session-filter-grid">
             <select id="filter-threat" class="filter-select" aria-label="Filter by threat level">
-              <option value="">All Threats</option>
+              <option value="">All threat levels</option>
               <option value="critical">Critical (90+)</option>
               <option value="high">High (70-89)</option>
               <option value="medium">Medium (40-69)</option>
               <option value="low">Low (0-39)</option>
             </select>
             <select id="filter-type" class="filter-select" aria-label="Filter by attacker type">
-              <option value="">All Types</option>
+              <option value="">All attacker types</option>
               <option value="bot">Bot</option>
               <option value="human">Human</option>
-              <option value="semi-automated">Semi-Auto</option>
+              <option value="semi-automated">Semi-automated</option>
               <option value="unknown">Unknown</option>
             </select>
             <select id="filter-campaign" class="filter-select" aria-label="Filter by campaign">
-              <option value="">All Campaigns</option>
-              <option value="in_campaign">In Campaign</option>
-              <option value="no_campaign">No Campaign</option>
+              <option value="">All sessions</option>
+              <option value="in_campaign">In a campaign</option>
+              <option value="no_campaign">Not in a campaign</option>
             </select>
             <select id="filter-date" class="filter-select" aria-label="Filter by date range">
-              <option value="">All Time</option>
+              <option value="">Any time</option>
               <option value="today">Today</option>
-              <option value="7d">Last 7d</option>
-              <option value="30d">Last 30d</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
             </select>
-          </div>
-          <div class="session-filter-foot">
-            <label class="session-live-toggle" title="Show only connected sessions">
-              <input type="checkbox" id="session-live-only">
-              <span>Live only</span>
-            </label>
-            <button type="button" class="btn-clear-filters hidden" id="btn-clear-filters">Reset filters</button>
           </div>
         </div>
 

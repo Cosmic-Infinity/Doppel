@@ -1720,18 +1720,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  // function applySessionFilter() {
-  //   const query = (sessionSearch ? sessionSearch.value : '').trim().toLowerCase();
-  //   const liveOnly = Boolean(sessionLiveOnly && sessionLiveOnly.checked);
-  //   let shown = 0;
-  //   sessionsContainer.querySelectorAll('.session-card').forEach(card => {
-  //     const visible = (!query || (card.dataset.search || '').includes(query)) && (!liveOnly || card.dataset.live === '1');
-  //     card.classList.toggle('hidden', !visible);
-  //     if (visible) shown += 1;
-  //   });
-  //   return shown;
-  // }
-
   // --- Multi-Facet Session Filtering ---
   function applySessionFilter() {
     const query = (sessionSearch ? sessionSearch.value : '').trim().toLowerCase();
@@ -3434,12 +3422,14 @@ document.addEventListener('DOMContentLoaded', () => {
     `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PDF_ICONS[name]}</svg>`;
 
   function exportReportPdf(sessionId) {
+    // Red starts where the high-risk table does, so the colours and the table agree
+    const pdfLevel = score => (score >= HIGH_RISK_SCORE ? 'high' : (score >= 30 ? 'medium' : 'low'));
     const session = currentSessionDetails || sessionsCache[sessionId] || {};
     const f = reportFacts(session, sessionId);
     const flagged = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) >= HIGH_RISK_SCORE);
     const others = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) < HIGH_RISK_SCORE);
     const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
-    const level = threatClass(f.threatScore);
+    const level = pdfLevel(f.threatScore);
     const levelLabel = { high: 'High', medium: 'Medium', low: 'Low' }[level];
     const phaseIdx = KILL_CHAIN.indexOf(f.phase);
     const iocs = session.iocs || {};
@@ -3462,7 +3452,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = PDF_ROUTES[route] || { label: route || '—', cls: 'r-builtin' };
       return `<span class="badge ${r.cls}">${escapeHtml(r.label)}</span>`;
     };
-    const scorePill = score => `<span class="score s-${threatClass(score)}">${score}</span>`;
+    const scorePill = score => `<span class="score s-${pdfLevel(score)}">${score}</span>`;
     const commandTable = rows => `
       <table class="cmds">
         <colgroup><col style="width:15%"><col style="width:33%"><col style="width:12%"><col><col style="width:8%"></colgroup>
