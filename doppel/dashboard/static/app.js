@@ -3155,8 +3155,285 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (!reportContent || reportContent.classList.contains('hidden') || !reportContent.textContent.trim()) {
         return;
       }
-      window.print();
+      exportDedicatedAcademicPdf(activeSessionId);
     });
+  }
+
+  function exportDedicatedAcademicPdf(sessionId) {
+    const session = currentSessionDetails || sessionsCache[sessionId] || {};
+    const remoteIp = session.remote_ip || (sessionsCache[sessionId] && sessionsCache[sessionId].remote_ip) || 'unknown';
+    const remotePort = session.remote_port !== undefined && session.remote_port !== null ? session.remote_port : 0;
+    const fullIp = `${remoteIp}:${remotePort}`;
+    const username = session.username || (sessionsCache[sessionId] && sessionsCache[sessionId].username) || 'unknown';
+    const password = (session.password !== undefined && session.password !== null && session.password !== '') ? session.password : '—';
+    const credentials = `${username}:${password}`;
+    const attackerType = session.attacker_type || (sessionsCache[sessionId] && sessionsCache[sessionId].attacker_type) || 'unknown';
+    const threatScore = Math.max(0, Math.min(100, Number(session.max_threat_score || (sessionsCache[sessionId] && sessionsCache[sessionId].max_threat_score) || 0)));
+    const attackPhase = session.current_phase || (sessionsCache[sessionId] && sessionsCache[sessionId].current_phase) || 'Reconnaissance';
+    const campaign = (typeof campaignBySession !== 'undefined' && campaignBySession[sessionId]) || null;
+    const campaignLabel = campaign ? (campaign.campaign_title || campaign.campaign_id || 'Campaign') : (session.campaign_id || session.campaign_title || 'Not linked');
+    const commands = session.commands || [];
+    const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
+    const unflaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) < 70);
+
+    const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+
+    // Build the Markdown body content into clean academic HTML
+    let mdBodyHtml = reportContent ? reportContent.innerHTML : '';
+    // Strip redundant markdown headers that repeat the main title
+    mdBodyHtml = mdBodyHtml.replace(/<h1[^>]*>[\s\S]*?Incident Response Report[\s\S]*?<\/h1>/gi, '');
+
+    // Format high-risk flagged commands table
+    let flaggedTableHtml = '';
+    if (flaggedCommands.length > 0) {
+      const rows = flaggedCommands.map(cmd => {
+        const score = Number(cmd.threat_score) || 0;
+        const tech = cmd.technique_id ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}` : '—';
+        return `
+          <tr>
+            <td class="font-mono">${escapeHtml(cmd.timestamp || '—')}</td>
+            <td class="font-mono font-bold">${escapeHtml(cmd.command || '—')}</td>
+            <td>${escapeHtml(cmd.route_decision || 'sandbox')}</td>
+            <td>${escapeHtml(tech)}</td>
+            <td class="font-bold font-mono">${score}</td>
+          </tr>
+        `;
+      }).join('');
+      flaggedTableHtml = `
+        <table class="academic-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Executed Command</th>
+              <th>Route Policy</th>
+              <th>ATT&CK Technique</th>
+              <th>Threat Score</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    } else {
+      flaggedTableHtml = `<p class="academic-empty">No commands exceeded the threat threshold (threat score &ge; 70).</p>`;
+    }
+
+    // Format remaining timeline commands table
+    let timelineTableHtml = '';
+    if (unflaggedCommands.length > 0) {
+      const rows = unflaggedCommands.slice(0, 25).map(cmd => {
+        const score = Number(cmd.threat_score) || 0;
+        const tech = cmd.technique_id ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}` : '—';
+        return `
+          <tr>
+            <td class="font-mono">${escapeHtml(cmd.timestamp || '—')}</td>
+            <td class="font-mono">${escapeHtml(cmd.command || '—')}</td>
+            <td>${escapeHtml(cmd.route_decision || 'sandbox')}</td>
+            <td>${escapeHtml(tech)}</td>
+            <td class="font-mono">${score}</td>
+          </tr>
+        `;
+      }).join('');
+      timelineTableHtml = `
+        <table class="academic-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Executed Command</th>
+              <th>Route Policy</th>
+              <th>ATT&CK Technique</th>
+              <th>Threat Score</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    const threatStar = threatScore >= 70 ? '★ CRITICAL ALERT' : 'NORMAL OBSERVATION';
+
+    const documentHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Incident Report - ${escapeHtml(sessionId)}</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #000000;
+      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif;
+      font-size: 11pt;
+      line-height: 1.6;
+    }
+    /* Exact single outer frame matching the reference document */
+    .page-border-container {
+      border: 1.5px solid #000000;
+      padding: 16mm 18mm;
+      min-height: calc(297mm - 30mm);
+      box-sizing: border-box;
+      background: #ffffff;
+    }
+    .doc-main-title {
+      text-align: center;
+      font-size: 20pt;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 0;
+      margin-bottom: 22pt;
+    }
+    .doc-section-heading {
+      font-size: 13pt;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 24pt;
+      margin-bottom: 10pt;
+      border: none;
+      text-decoration: none;
+    }
+    .doc-subheading {
+      font-size: 11.5pt;
+      font-weight: 700;
+      font-style: italic;
+      margin-top: 14pt;
+      margin-bottom: 8pt;
+    }
+    p {
+      margin-top: 0;
+      margin-bottom: 12pt;
+      text-align: justify;
+      color: #000000;
+    }
+    ul {
+      margin-top: 4pt;
+      margin-bottom: 14pt;
+      padding-left: 24pt;
+      list-style-type: disc;
+    }
+    li {
+      margin-bottom: 5pt;
+      color: #000000;
+      text-align: left;
+    }
+    .font-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 9.5pt;
+    }
+    .font-bold {
+      font-weight: 700;
+    }
+    .star-highlight {
+      font-weight: 900;
+      color: #000000;
+    }
+    .academic-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12pt 0 16pt 0;
+      border: 1.5px solid #000000;
+      page-break-inside: avoid;
+    }
+    .academic-table th,
+    .academic-table td {
+      border: 1px solid #000000;
+      padding: 6pt 8pt;
+      font-size: 9pt;
+      text-align: left;
+      vertical-align: middle;
+      color: #000000;
+    }
+    .academic-table th {
+      background: #f3f4f6;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1.5px solid #000000;
+    }
+    .academic-empty {
+      font-style: italic;
+      margin: 8pt 0;
+    }
+    /* Hide elements with no data */
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-border-container">
+    <h1 class="doc-main-title">INCIDENT REPORT</h1>
+
+    <h2 class="doc-section-heading">1.0 EXECUTIVE SUMMARY &amp; ATTACKER PROFILE</h2>
+    <p>
+      On ${escapeHtml(generatedAt)}, an active honeypot session was captured and analyzed by the Doppel Autonomous Defense Platform.
+      The threat engine classified the intrusion attempt under the following operational telemetry:
+    </p>
+    <ul>
+      <li><strong>Session Identifier:</strong> <span class="font-mono">${escapeHtml(sessionId)}</span></li>
+      <li><strong>Target / Source IP:</strong> <span class="font-mono">${escapeHtml(fullIp)}</span></li>
+      <li><strong>Credentials Attempted:</strong> <span class="font-mono">${escapeHtml(credentials)}</span></li>
+      <li><strong>Attacker Classification:</strong> ${escapeHtml(attackerType)}</li>
+      <li><strong>Attack Phase:</strong> ${escapeHtml(attackPhase)}</li>
+      <li><strong>Campaign Association:</strong> ${escapeHtml(campaignLabel)}</li>
+      <li><strong class="star-highlight">&#9733; Threat Evaluation:</strong> Threat Score <strong>${threatScore} / 100</strong> &mdash; <strong>${threatStar}</strong></li>
+    </ul>
+
+    ${flaggedCommands.length > 0 ? `
+      <h2 class="doc-section-heading">2.0 CRITICAL SECURITY FINDINGS (&ge; 70 THREAT SCORE)</h2>
+      <p>
+        &#9733; The following high-risk commands triggered critical heuristic detection rules and required targeted honeypot deception or sandbox containment:
+      </p>
+      ${flaggedTableHtml}
+    ` : ''}
+
+    <h2 class="doc-section-heading">3.0 MITRE ATT&amp;CK &amp; INCIDENT ANALYSIS</h2>
+    ${mdBodyHtml}
+
+    ${unflaggedCommands.length > 0 ? `
+      <h2 class="doc-section-heading">4.0 COMMAND EXECUTION TIMELINE</h2>
+      <p>Telemetry record of baseline shell interactions observed during this intrusion session:</p>
+      ${timelineTableHtml}
+    ` : ''}
+  </div>
+</body>
+</html>
+    `;
+
+    // Open clean, isolated print iframe to ensure ZERO web dashboard styles or headers leak
+    let printFrame = document.getElementById('doppel-pdf-print-frame');
+    if (!printFrame) {
+      printFrame = document.createElement('iframe');
+      printFrame.id = 'doppel-pdf-print-frame';
+      printFrame.style.position = 'fixed';
+      printFrame.style.right = '0';
+      printFrame.style.bottom = '0';
+      printFrame.style.width = '0';
+      printFrame.style.height = '0';
+      printFrame.style.border = 'none';
+      document.body.appendChild(printFrame);
+    }
+
+    const frameDoc = printFrame.contentWindow.document;
+    frameDoc.open();
+    frameDoc.write(documentHtml);
+    frameDoc.close();
+
+    setTimeout(() => {
+      printFrame.contentWindow.focus();
+      printFrame.contentWindow.print();
+    }, 400);
   }
 
   // --- AI Assistant & Benchmark Console Logic ---
