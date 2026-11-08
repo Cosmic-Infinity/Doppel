@@ -825,3 +825,65 @@ async def test_prompt_injection_response_source():
         if inj_cmds:
             # If the router detected it as injection, verify response_source
             assert inj_cmds[0]["response_source"] == "rule"
+
+
+@pytest.mark.asyncio
+async def test_exit_commands_preserve_attack_phase_in_session():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "test_telemetry.db")
+        reports_dir = os.path.join(tmpdir, "reports")
+
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.deception.simulate_latency = False
+        config.analytics.db_path = db_path
+        config.analytics.reports_dir = reports_dir
+
+        llm_client = LLMClient(mock_mode=True)
+        deception_engine = DeceptionEngine(llm_client)
+        sandbox_manager = DockerSandboxManager(enabled=False)
+        router = HybridRouter(sandbox_available=False)
+        db = TelemetryDB(db_path=db_path)
+        await db.initialize()
+        observer = ThreatObserver(llm_client, db)
+        reporter = IncidentReporter(llm_client, db, reports_dir=reports_dir)
+
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=deception_engine,
+            sandbox_manager=sandbox_manager,
+            router=router,
+            db=db,
+            observer=observer,
+            reporter=reporter,
+        )
+
+        session = await session_mgr.create_session(
+            remote_ip="10.0.0.3",
+            remote_port=22224,
+            username="ubuntu",
+            password="test",
+        )
+
+        assert session.profiler_state.current_phase == "Reconnaissance"
+
+        # Verify exit and logout variations do not advance attack phase
+        for cmd in ("exit", " EXIT ", "Logout", " logout "):
+            await session_mgr.process_command(session.session_id, cmd)
+            import asyncio
+            await asyncio.sleep(0.05)
+            assert session.profiler_state.current_phase == "Reconnaissance"
+
+        # Normal command advances phase
+        await session_mgr.process_command(session.session_id, "clear")
+        await asyncio.sleep(0.05)
+        assert session.profiler_state.current_phase == "Exploitation"
+
+        # Exit preserves advanced phase
+        for cmd in ("exit", "logout", " EXIT "):
+            await session_mgr.process_command(session.session_id, cmd)
+            await asyncio.sleep(0.05)
+            assert session.profiler_state.current_phase == "Exploitation"
+
+        await session_mgr.close_session(session.session_id, generate_report=False)

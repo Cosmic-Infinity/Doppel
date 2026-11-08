@@ -148,6 +148,25 @@ _BOT_TOOL_RE = re.compile(
     re.I,
 )
 
+# Commands that terminate shells or sessions and must never advance attack phases
+_EXIT_COMMANDS = {"exit", "logout"}
+
+
+def is_exit_command(command: Optional[str]) -> bool:
+    """
+    Check if a command is an exit or logout command.
+    Safely handles case and whitespace variations.
+    """
+    if not command or not isinstance(command, str):
+        return False
+    cmd_clean = command.strip().lower()
+    if cmd_clean in _EXIT_COMMANDS:
+        return True
+    parts = cmd_clean.split()
+    if len(parts) == 2 and parts[0] in _EXIT_COMMANDS and parts[1].isdigit():
+        return True
+    return False
+
 # Timing thresholds (seconds)
 _BOT_MEDIAN_THRESHOLD        = 0.5    # median inter-command gap < 0.5 s → bot
 _HUMAN_MEDIAN_THRESHOLD      = 3.0    # median inter-command gap > 3 s → human
@@ -348,6 +367,8 @@ class AttackerProfiler:
 
     # ── Phase tracking ────────────────────────────────────────────────────────
 
+    _is_exit_command = staticmethod(is_exit_command)
+
     def _update_phase(
         self,
         state: ProfilerState,
@@ -357,7 +378,11 @@ class AttackerProfiler:
         """
         Determine the phase this command belongs to and update the kill-chain.
         Returns a phase_transition dict if a forward transition occurred, else None.
+        Exit and logout commands never advance the attack phase.
         """
+        if self._is_exit_command(command):
+            return None
+
         detected_phase = self._detect_phase(command, tactics)
         if not detected_phase:
             return None
@@ -399,6 +424,9 @@ class AttackerProfiler:
         self, command: str, tactics: List[str]
     ) -> Optional[str]:
         """Return the best-fit kill-chain phase for this command."""
+        if self._is_exit_command(command):
+            return None
+
         # 1. MITRE tactics take priority (authoritative)
         for tactic in tactics:
             phase = _TACTIC_TO_PHASE.get(tactic)
