@@ -475,7 +475,7 @@ def test_pdf_export_ui(client):
     assert "printFrame.contentWindow.print()" in js
     assert "const HIGH_RISK_SCORE = 70" in js
     # The PDF states when the session started, not only when it was exported
-    assert "<dt>Started</dt>" in js
+    assert "Started ${escapeHtml(f.started)}" in js
 
 
 @pytest.mark.asyncio

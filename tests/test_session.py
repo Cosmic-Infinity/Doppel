@@ -887,3 +887,44 @@ async def test_exit_commands_preserve_attack_phase_in_session():
             assert session.profiler_state.current_phase == "Exploitation"
 
         await session_mgr.close_session(session.session_id, generate_report=False)
+
+
+@pytest.mark.asyncio
+async def test_session_end_report_streams_progress():
+    """The report written when a session ends is sent to the dashboard as it is generated."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        config = DoppelConfig()
+        config.llm.mock_mode = True
+        config.sandbox.enabled = False
+        config.deception.simulate_latency = False
+        config.analytics.db_path = os.path.join(tmpdir, "t.db")
+        config.analytics.reports_dir = os.path.join(tmpdir, "reports")
+
+        llm_client = LLMClient(mock_mode=True)
+        db = TelemetryDB(db_path=config.analytics.db_path)
+        await db.initialize()
+        session_mgr = SessionManager(
+            config=config,
+            deception_engine=DeceptionEngine(llm_client),
+            sandbox_manager=DockerSandboxManager(enabled=False),
+            router=HybridRouter(sandbox_available=False),
+            db=db,
+            observer=ThreatObserver(llm_client, db),
+            reporter=IncidentReporter(llm_client, db, reports_dir=config.analytics.reports_dir),
+        )
+        events = []
+        session_mgr.register_event_listener(lambda kind, data: events.append((kind, data)))
+
+        session = await session_mgr.create_session(remote_ip="10.0.0.9", remote_port=50000, username="ubuntu", password="x")
+        await session_mgr.process_command(session.session_id, "whoami")
+        report_path = await session_mgr.close_session(session.session_id)
+
+        progress = [d for kind, d in events if kind == "report_progress"]
+        assert progress and progress[0]["stage"] == "started"
+        streamed = "".join(d["delta"] for d in progress if d["stage"] == "compiling")
+        assert streamed.strip()
+        with open(report_path, encoding="utf-8") as fh:
+            assert fh.read().strip() == streamed.strip()
+        # Progress comes before the close event that tells the dashboard to load the saved report
+        kinds = [kind for kind, _ in events]
+        assert kinds.index("session_closed") > max(i for i, k in enumerate(kinds) if k == "report_progress")

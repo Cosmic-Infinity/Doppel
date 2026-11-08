@@ -112,9 +112,48 @@ class SessionManager:
         if terminal_client is not None and id(terminal_client) not in analysis_clients:
             terminal_client.priority_gate = self.background.terminal
 
+    # Seconds between report_progress events: batches the model's tokens so the
+    # dashboard sees the report being written without one event per token
+    REPORT_PROGRESS_INTERVAL = 0.25
+
     async def _generate_report(self, session_id: str):
+        """Write the session's incident report, sending the text to the dashboard as it is generated.
+        Cancellation (the queue giving way to the terminal) propagates so the report can be rerun."""
         async with self._report_slots:
-            return await self.reporter.generate_session_report(session_id)
+            import time as _time
+            from pathlib import Path as _Path
+
+            self._notify("report_progress", {"session_id": session_id, "stage": "started", "delta": ""})
+            pending = {"reasoning": [], "compiling": []}
+            last_sent = _time.monotonic()
+
+            def flush():
+                for stage, parts in pending.items():
+                    if parts:
+                        self._notify("report_progress", {"session_id": session_id, "stage": stage, "delta": "".join(parts)})
+                        parts.clear()
+
+            report_path = None
+            try:
+                async for event in self.reporter.generate_session_report_stream(
+                    session_id=session_id, save_partial_on_cancel=False
+                ):
+                    if event.get("done"):
+                        if event.get("report_path"):
+                            report_path = _Path(event["report_path"])
+                        continue
+                    stage = event.get("stage")
+                    if stage in pending and event.get("delta"):
+                        pending[stage].append(event["delta"])
+                    if _time.monotonic() - last_sent >= self.REPORT_PROGRESS_INTERVAL:
+                        flush()
+                        last_sent = _time.monotonic()
+                flush()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error compiling session report for {session_id}: {e}")
+            return report_path
 
     def _call_create_sandbox(
         self,
@@ -554,6 +593,12 @@ class SessionManager:
             jitter_pct = getattr(decep_cfg, "jitter_percent", 25) / 100.0
             jitter_mult = _random.uniform(1.0 - jitter_pct, 1.0 + jitter_pct)
             target_ms = base_target_ms * jitter_mult
+            # Bounds for the ordinary delay; lag spikes and the tar pit come on top
+            lo = getattr(decep_cfg, "min_latency_ms", 0) or 0
+            hi = getattr(decep_cfg, "max_latency_ms", 0) or 0
+            target_ms = max(target_ms, lo)
+            if hi:
+                target_ms = min(target_ms, hi)
 
             # 10% probability of an occasional cloud/disk lag spike (600ms - 1400ms)
             spike_prob = getattr(decep_cfg, "spike_probability", 0.10)

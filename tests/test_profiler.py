@@ -329,3 +329,12 @@ async def test_session_manager_exit_commands_integration(tmp_path):
     # Clean up session
     await session_mgr.close_session(session.session_id, generate_report=False)
 
+
+
+def test_exit_is_not_tagged_as_a_technique():
+    from doppel.analytics.observer import ThreatObserver
+    observer = ThreatObserver(llm_client=None, db=None)
+    for cmd in ("exit", " LOGOUT ", "exit 0"):
+        meta = observer.match_fast_path(cmd)
+        assert meta["technique_id"] is None and meta["threat_score"] == 0 and meta["tactics"] == []
+    assert observer.match_fast_path("exit; rm -rf /tmp/x") is None

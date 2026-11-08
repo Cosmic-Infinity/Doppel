@@ -9,6 +9,7 @@ from doppel.ai.prompts.threat_prompts import (
 )
 from doppel.analytics.db import TelemetryDB
 from doppel.ai.prompt_shield import detect_prompt_injection, prompt_injection_threat_meta
+from doppel.analytics.profiler import is_exit_command
 
 logger = logging.getLogger("doppel.analytics.observer")
 
@@ -156,6 +157,18 @@ FAST_PATH_RULES: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# exit / logout: no technique, no score
+EXIT_THREAT_META: Dict[str, Any] = {
+    "tactics": [],
+    "technique_id": None,
+    "technique_name": None,
+    "threat_score": 0,
+    "attacker_intent": "Leave the shell",
+    "is_automated": False,
+    "confidence": 1.0,
+    "iocs": [],
+}
+
 
 class ThreatObserver:
     """Monitors live honeypot sessions, mapping actions to MITRE ATT&CK techniques in real time."""
@@ -196,6 +209,9 @@ class ThreatObserver:
         if category:
             logger.warning(f"[PROMPT SHIELD] Neutralized prompt injection ({category}): {cmd_clean[:80]!r}")
             return prompt_injection_threat_meta(category)
+        # Leaving the shell is not an attack technique; the model tends to tag it as exfiltration
+        if is_exit_command(cmd_clean):
+            return dict(EXIT_THREAT_META)
         is_compound = any(sep in cmd_clean for sep in ("|", ">", "<", ";", "&&", "||", "`", "$("))
         if is_compound or cmd_clean.lower() not in FAST_PATH_RULES:
             return None

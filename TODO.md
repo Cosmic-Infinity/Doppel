@@ -52,8 +52,6 @@ of the README live here now; finished features are described in the README.
 
 ## Technical debt
 
-- **Mock mode.** Canned replies in `LLMClient._mock_response` use fixed dates
-  and fixed command outputs. Fine for development; avoid relying on mock mode
-  for demos of deception quality.
-- **Starlette startup hook.** `app.on_event("startup")` is deprecated; move to a
-  lifespan handler (`doppel/dashboard/app.py`).
+- **Mock mode.** Canned replies in `LLMClient._mock_response` follow the
+  simulated clock but are fixed command outputs. Fine for development; avoid
+  relying on mock mode for demos of deception quality.

@@ -412,58 +412,13 @@ class LLMClient:
                 "3. Revoke and rotate any decoy credentials accessed during this session.\n"
             )
 
-        # Check if Doppel Security Intelligence Assistant is being queried
-        if "security intelligence assistant" in sys_msg or "security assistant" in sys_msg:
-            if "last attack" in user_msg or ("attack" in user_msg and "like" in user_msg):
-                return (
-                    "Based on recorded honeypot telemetry, the last intrusion was initiated from remote IP 100.81.22.95 targeting SSH on port 2222 with user 'ubuntu'.\n\n"
-                    "Attacker Timeline & TTPs:\n"
-                    "- Initial Access: Automated credential probing utilizing well-known service defaults.\n"
-                    "- Reconnaissance: Enumerated system state via `whoami`, `id`, and examined `/etc/passwd`.\n"
-                    "- Privilege Escalation: Attempted interactive `sudo passwd` password override.\n\n"
-                    "Assessed Threat Level: High (Score: 85). All actions were captured and isolated within the deception boundary."
-                )
-            elif any(k in user_msg for k in ["suggestion", "recommend", "harden", "mitigat"]):
-                return (
-                    "Based on observed attacker behavior across recent honeypot sessions, here are prioritized defensive recommendations:\n\n"
-                    "1. SSH Authentication: Disable password logins (`PasswordAuthentication no`) in `/etc/ssh/sshd_config` and mandate ED25519 SSH keys.\n"
-                    "2. Sudoers Restriction: Audit `/etc/sudoers.d/` to eliminate passwordless privilege escalation paths and enforce command whitelisting.\n"
-                    "3. Rate Limiting: Deploy fail2ban or firewall rate-limiting to ban IP addresses after 3 consecutive failed authentication handshakes.\n"
-                    "4. Network Egress Filtering: Block unprompted outbound connections to external staging and C2 infrastructure."
-                )
-            elif any(k in user_msg for k in ["status", "subsystem", "software"]):
-                return (
-                    "Doppel Honeypot System Status:\n\n"
-                    "- Daemon State: Operational and actively monitoring connection attempts.\n"
-                    "- Listener: Active on port 2222 with OpenSSH 8.9p1 emulation.\n"
-                    "- Persona Profile: Ubuntu 22.04 LTS (prod-api-node-01).\n"
-                    "- Subsystems: LLM inference client is connected and isolated container sandbox is verified.\n"
-                    "- Threat Telemetry: Real-time event streaming and MITRE ATT&CK mapping active."
-                )
-            elif any(k in user_msg for k in ["speed", "benchmark", "tokens"]):
-                return (
-                    "Model throughput benchmark completed successfully. The generation pipeline processed this response through the active inference engine. "
-                    "Actual generation speed and round-trip latency are detailed in the telemetry metrics below. "
-                    "This test verifies end-to-end communications between the dashboard and the local model worker."
-                )
-            else:
-                return (
-                    f"Security Assistant response received for query: '{messages[-1]['content']}'. "
-                    "The system telemetry pipeline is active and monitoring session activity across all honeypot sensors. "
-                    "You can query recent attacker profiles, request defensive remediations, or benchmark token throughput."
-                )
-
-        # Check if threat intelligence is requested
-        if "mitre" in user_msg or "analyze command" in user_msg or ("threat" in user_msg and "score:" not in user_msg and "incident" not in user_msg):
-            return json.dumps({
-                "tactics": ["Discovery"],
-                "technique_id": "T1087",
-                "technique_name": "Account Discovery",
-                "threat_score": 45,
-                "attacker_intent": "Enumerating user accounts and credentials",
-                "is_automated": False,
-                "confidence": 0.85
-            })
+        # Assistant and ATT&CK tagging: answers come from the prompt's own data
+        from doppel.ai.mock_analysis import is_tagging_request, mock_assistant, mock_tag
+        if is_tagging_request(messages):
+            return mock_tag(messages)
+        answer = mock_assistant(messages)
+        if answer is not None:
+            return answer
 
         # --- /etc/shadow ---
         if "cat /etc/shadow" in user_msg or ("shadow" in user_msg and "cat" in user_msg):

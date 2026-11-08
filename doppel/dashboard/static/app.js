@@ -219,6 +219,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Active stream and task tracking
   let activeReportAbortController = null;
   let activeReportSessionId = null;
+  // Reports being written in the background, as streamed so far: {sessionId: {thought, content}}
+  const liveReports = {};
   let activeAssistantAbortController = null;
 
   // --- Signal Helpers: Kill-Chain, Profile, and Sensor Ticker ---
@@ -933,51 +935,62 @@ document.addEventListener('DOMContentLoaded', () => {
   const SETTINGS_GROUPS = [
     { title: 'Model', column: 0, fields: [
       { key: 'llm.timeout_seconds', label: 'Reply timeout', unit: 's', type: 'number', min: 1, step: 1,
-        hint: 'Longest wait for a terminal reply.' },
-      { key: 'llm.temperature', label: 'Temperature', type: 'number', min: 0, max: 2, step: 0.05 },
+        hint: 'How long a terminal reply may take. After that a plain fallback reply is sent.' },
+      { key: 'llm.temperature', label: 'Temperature', type: 'number', min: 0, max: 2, step: 0.05,
+        hint: 'Higher values give more varied replies. Keep it low for consistent output.' },
       { key: 'llm.analysis_model', label: 'Analysis model', type: 'model',
-        hint: 'Tags commands and writes reports.' },
-      { key: 'llm.analysis_timeout_seconds', label: 'Analysis timeout', unit: 's', type: 'number', min: 1, step: 1 },
+        hint: 'Used for ATT&CK tags and reports. Nothing waits on it, so a slower, stronger model is fine.' },
+      { key: 'llm.analysis_timeout_seconds', label: 'Analysis timeout', unit: 's', type: 'number', min: 1, step: 1,
+        hint: 'How long one tag or report may take.' },
     ] },
     { title: 'Deception', column: 1, fields: [
       { key: 'deception.intercept_sensitive_files', label: 'Decoy credential files', type: 'bool',
-        hint: 'Files such as .env and id_rsa are written by the model instead of read from the sandbox.' },
+        hint: 'The model writes files such as .env and id_rsa around this session’s honeytokens. Off: the sandbox’s planted copies are shown.' },
       { key: 'deception.intercept_missing_tools', label: 'Simulate missing tools', type: 'bool',
-        hint: 'Tools the sandbox lacks, such as nmap, get model-written output.' },
+        hint: 'Tools the sandbox does not have, such as nmap or sqlmap, still produce believable output.' },
       { key: 'deception.dynamic_honeytokens', label: 'Honeytokens', type: 'bool',
-        hint: 'Leaked keys are unique per session and raise an alert when used.' },
+        hint: 'Each session leaks its own keys and URLs. Using one anywhere it is checked raises an alert.' },
       { key: 'deception.canary_base_url', label: 'Canary URL base', type: 'text', stack: true, placeholder: 'http://203.0.113.10:8080',
-        hint: 'Public address of the HTTP decoy, used in leaked URLs. Leave empty to derive it.' },
+        hint: 'The HTTP decoy’s public address, used in leaked URLs. Empty: built from this host’s name and the decoy port.' },
       { key: 'http_sensor_port', label: 'HTTP decoy port', type: 'number', min: 0, max: 65535, step: 1,
-        hint: '0 turns the decoy off.' },
-      { key: 'honeypot.accept_any_password', label: 'Accept any password', type: 'bool' },
+        hint: 'Fake web server for scanners. 0 turns it off.' },
+      { key: 'honeypot.accept_any_password', label: 'Accept any password', type: 'bool',
+        hint: 'Off: every login fails, so only the attempted credentials are recorded.' },
     ] },
     { title: 'Response timing', column: 2, fields: [
       { key: 'deception.simulate_latency', label: 'Match real command timing', type: 'bool',
-        hint: 'Pads fast replies so response time does not give the model away.' },
-      { key: 'deception.jitter_percent', label: 'Jitter', unit: '%', type: 'number', min: 0, max: 100, step: 1 },
+        hint: 'Delays quick replies to the time a real server would take, so speed does not give the honeypot away.' },
+      { key: 'deception.min_latency_ms', label: 'Shortest reply', unit: 'ms', type: 'number', min: 0, step: 10 },
+      { key: 'deception.max_latency_ms', label: 'Longest padded reply', unit: 'ms', type: 'number', min: 0, step: 100,
+        hint: 'Padding never goes past this. Slower model replies are not cut short.' },
+      { key: 'deception.jitter_percent', label: 'Jitter', unit: '%', type: 'number', min: 0, max: 100, step: 1,
+        hint: 'Random variation in each delay.' },
       { key: 'deception.spike_probability', label: 'Lag spike chance', type: 'number', min: 0, max: 1, step: 0.01,
-        hint: '0.1 is one reply in ten.' },
-      { key: 'deception.spike_min_ms', label: 'Lag spike from', unit: 'ms', type: 'number', min: 0, step: 50 },
-      { key: 'deception.spike_max_ms', label: 'Lag spike to', unit: 'ms', type: 'number', min: 0, step: 50 },
+        hint: 'Share of replies that get an extra pause, as from a busy disk. 0.1 is one in ten.' },
+      { key: 'deception.spike_min_ms', label: 'Shortest lag spike', unit: 'ms', type: 'number', min: 0, step: 50 },
+      { key: 'deception.spike_max_ms', label: 'Longest lag spike', unit: 'ms', type: 'number', min: 0, step: 50 },
       { key: 'deception.tar_pit_delay_ms', label: 'Tar pit', unit: 'ms', type: 'number', min: 0, step: 100,
-        hint: 'Extra delay per command, tripled for bots.' },
-    ] },
-    { title: 'Sandbox', column: 1, fields: [
-      { key: 'sandbox.timeout_seconds', label: 'Command timeout', unit: 's', type: 'number', min: 1, step: 1,
-        hint: 'Longest a command may run in the container.' },
-      { key: 'sandbox.memory_limit', label: 'Memory per container', type: 'text', short: true, placeholder: '256m' },
+        hint: 'Slows every command to waste an attacker’s time: three times as long for bots, a third for people.' },
     ] },
     { title: 'Analysis', column: 0, fields: [
-      { key: 'analytics.enable_mitre_tagging', label: 'ATT&CK tagging', type: 'bool' },
-      { key: 'analytics.auto_reports', label: 'Report when a session ends', type: 'bool' },
-      { key: 'analytics.max_concurrent_reports', label: 'Reports at once', type: 'number', min: 1, step: 1 },
+      { key: 'analytics.enable_mitre_tagging', label: 'ATT&CK tagging', type: 'bool',
+        hint: 'Off: commands get no technique or threat score.' },
+      { key: 'analytics.auto_reports', label: 'Report when a session ends', type: 'bool',
+        hint: 'Off: write reports from the Report tab when needed.' },
+      { key: 'analytics.max_concurrent_reports', label: 'Reports at once', type: 'number', min: 1, step: 1,
+        hint: 'Reports beyond this wait their turn.' },
       { key: 'analytics.background_idle_seconds', label: 'Wait for idle terminal', unit: 's', type: 'number', min: 0, step: 1,
-        hint: 'Tagging and reports start once no reply has been requested for this long.' },
+        hint: 'Tagging and reports wait until the terminal has been quiet this long, so replies stay fast.' },
     ] },
-    { title: 'Email alerts', column: 2, fields: [
+    { title: 'Sandbox', column: 0, fields: [
+      { key: 'sandbox.timeout_seconds', label: 'Command timeout', unit: 's', type: 'number', min: 1, step: 1,
+        hint: 'How long a command may run in the container before the model answers instead.' },
+      { key: 'sandbox.memory_limit', label: 'Memory per container', type: 'text', short: true, placeholder: '256m',
+        hint: 'Docker size, such as 256m or 1g.' },
+    ] },
+    { title: 'Email alerts', column: 1, fields: [
       { key: 'alerts.email.enabled', label: 'Send alerts', type: 'bool',
-        hint: 'The mail server is set in config.yaml.' },
+        hint: 'Emails the recipient when a session reaches the score below, and again if it rises 25 more. Mail server settings are in config.yaml.' },
       { key: 'alerts.email.min_threat_score', label: 'From threat score', type: 'number', min: 0, max: 100, step: 1 },
       { key: 'alerts.email.receiver_email', label: 'Recipient', type: 'text', stack: true, inputType: 'email' },
     ] },
@@ -1501,6 +1514,15 @@ document.addEventListener('DOMContentLoaded', () => {
         setThreatDisplay(Math.max(score, Number(detailThreatScore.textContent) || 0));
         updateLastTelemetryRow(data.threat);
       }
+    } else if (msg.type === 'report_progress') {
+      const data = msg.data || {};
+      if (data.stage === 'started' || !liveReports[data.session_id]) {
+        liveReports[data.session_id] = { thought: '', content: '' };
+      }
+      const live = liveReports[data.session_id];
+      if (data.stage === 'reasoning') live.thought += data.delta || '';
+      if (data.stage === 'compiling') live.content += data.delta || '';
+      renderLiveReport(data.session_id);
     } else if (msg.type === 'session_closing') {
       const data = msg.data;
       if (sessionsCache[data.session_id]) {
@@ -1536,6 +1558,7 @@ document.addEventListener('DOMContentLoaded', () => {
           applySessionFilter();
         }
       }
+      delete liveReports[data.session_id];
       if (activeSessionId === data.session_id) {
         detailLivePill.textContent = 'ENDED';
         detailLivePill.classList.add('ended');
@@ -2340,7 +2363,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Show a report the background queue is writing, as far as it has got
+  function renderLiveReport(sessionId) {
+    const live = liveReports[sessionId];
+    if (!live || sessionId !== activeSessionId) return;
+    if (activeReportAbortController && activeReportSessionId === sessionId) return;  // Regenerate is streaming
+    if (reportEmpty) reportEmpty.classList.add('hidden');
+    [reportPrintHeader, reportFlaggedSection, reportTimelineSection].forEach(el => el && el.classList.add('hidden'));
+    if (reportContent) {
+      reportContent.classList.remove('hidden');
+      reportContent.innerHTML = live.content
+        ? renderMarkdown(live.content, true) + '<span class="assistant-streaming-cursor"></span>'
+        : `<div class="assistant-loading-indicator"><span class="assistant-spinner"></span><span>${live.thought ? 'Reasoning...' : 'Starting...'}</span></div>`;
+    }
+    if (reportThoughtWrapper) reportThoughtWrapper.classList.toggle('hidden', !live.thought);
+    if (reportThoughtBody && live.thought) {
+      reportThoughtBody.innerHTML = renderMarkdown(live.thought, !live.content) + (live.content ? '' : '<span class="assistant-streaming-cursor"></span>');
+    }
+    setReportStatus(live.content ? 'compiling' : 'reasoning', live.content ? 'Writing' : (live.thought ? 'Reasoning' : 'Starting'));
+  }
+
   function showReportEmptyState(sessionId) {
+    if (liveReports[sessionId]) {
+      renderLiveReport(sessionId);
+      return;
+    }
     if (reportEmpty) reportEmpty.classList.remove('hidden');
     if (reportContent) reportContent.classList.add('hidden');
     if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
@@ -3363,12 +3410,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Print the report from a standalone document in a hidden frame, so none of the
   // dashboard's layout or colours reach the PDF
+  const KILL_CHAIN = ['Reconnaissance', 'Weaponization', 'Delivery', 'Exploitation', 'Credential Access',
+    'Installation', 'Command and Control', 'Lateral Movement', 'Exfiltration', 'Impact'];
+  const PDF_ROUTES = {
+    sandbox: { label: 'Sandbox', cls: 'r-sandbox' },
+    grounded_deception: { label: 'Grounded', cls: 'r-grounded' },
+    llm_deception: { label: 'Deception', cls: 'r-deception' },
+    builtin: { label: 'Built-in', cls: 'r-builtin' },
+  };
+  // Feather-style line icons, drawn inline so the document needs no external files
+  const PDF_ICONS = {
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>',
+    user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  };
+  const pdfIcon = (name, size = 12) =>
+    `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PDF_ICONS[name]}</svg>`;
+
   function exportReportPdf(sessionId) {
     const session = currentSessionDetails || sessionsCache[sessionId] || {};
     const f = reportFacts(session, sessionId);
     const flagged = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) >= HIGH_RISK_SCORE);
     const others = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) < HIGH_RISK_SCORE);
     const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+    const level = threatClass(f.threatScore);
+    const levelLabel = { high: 'High', medium: 'Medium', low: 'Low' }[level];
+    const phaseIdx = KILL_CHAIN.indexOf(f.phase);
+    const iocs = session.iocs || {};
+    const iocItems = [
+      ...(iocs.urls || []).map(x => ['link', 'URL', x.value]),
+      ...(iocs.ips || []).map(x => ['globe', 'IP address', x.value]),
+      ...(iocs.domains || []).map(x => ['globe', 'Domain', x.value]),
+    ];
 
     // The written report goes under "Analysis": its title is dropped (the document
     // has one), its headings move down a level, and reasoning and status notes stay on screen
@@ -3377,21 +3456,36 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/<details class="thought-process"[\s\S]*?<\/details>/gi, '')
       .replace(/<span class="assistant-streaming-cursor"><\/span>/g, '')
       .replace(/<div style="color: var\(--accent-orange\)[^>]*>[\s\S]*?<\/div>/g, '')
-      .replace(/<(\/?)h([2-5])\b/gi, (m, slash, level) => `<${slash}h${Number(level) + 1}`);
+      .replace(/<(\/?)h([2-5])\b/gi, (m, slash, lvl) => `<${slash}h${Number(lvl) + 1}`);
 
-    const commandTable = (rows, bold) => `
-      <table>
-        <thead><tr><th>Time</th><th>Command</th><th>Route</th><th>ATT&amp;CK technique</th><th>Score</th></tr></thead>
-        <tbody>${rows.map(cmd => `
+    const routeBadge = route => {
+      const r = PDF_ROUTES[route] || { label: route || '—', cls: 'r-builtin' };
+      return `<span class="badge ${r.cls}">${escapeHtml(r.label)}</span>`;
+    };
+    const scorePill = score => `<span class="score s-${threatClass(score)}">${score}</span>`;
+    const commandTable = rows => `
+      <table class="cmds">
+        <colgroup><col style="width:15%"><col style="width:33%"><col style="width:12%"><col><col style="width:8%"></colgroup>
+        <thead><tr><th>Time (UTC)</th><th>Command</th><th>Route</th><th>ATT&amp;CK technique</th><th class="num">Score</th></tr></thead>
+        <tbody>${rows.map(cmd => {
+          const score = Number(cmd.threat_score) || 0;
+          const [day, time] = reportTime(cmd.timestamp).split(' ');
+          return `
           <tr>
-            <td class="mono">${escapeHtml(reportTime(cmd.timestamp))}</td>
-            <td class="mono${bold ? ' strong' : ''}">${escapeHtml(cmd.command || '—')}</td>
-            <td>${escapeHtml(cmd.route_decision || '—')}</td>
-            <td>${escapeHtml(techniqueLabel(cmd))}</td>
-            <td class="mono">${Number(cmd.threat_score) || 0}</td>
-          </tr>`).join('')}
+            <td class="mono muted">${escapeHtml(time || day)}</td>
+            <td class="mono cmd">${escapeHtml(cmd.command || '—')}</td>
+            <td>${routeBadge(cmd.route_decision)}</td>
+            <td>${cmd.technique_id
+              ? `<span class="tid">${escapeHtml(cmd.technique_id)}</span> ${escapeHtml(cmd.technique_name || '')}`
+              : '<span class="muted">—</span>'}</td>
+            <td class="num">${scorePill(score)}</td>
+          </tr>`;
+        }).join('')}
         </tbody>
       </table>`;
+
+    const fact = (icon, label, value, mono) =>
+      `<div class="fact"><div class="fact-label">${pdfIcon(icon, 11)}${label}</div><div class="fact-value${mono ? ' mono' : ''}">${escapeHtml(value)}</div></div>`;
 
     const documentHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -3399,55 +3493,144 @@ document.addEventListener('DOMContentLoaded', () => {
   <meta charset="UTF-8">
   <title>Incident report ${escapeHtml(sessionId)}</title>
   <style>
-    @page { size: A4 portrait; margin: 18mm 16mm; }
+    @page { size: A4 portrait; margin: 14mm 14mm 16mm; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    html, body { margin: 0; padding: 0; background: #fff; color: #000; }
-    body { font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 11pt; line-height: 1.5; }
-    h1 { font-size: 20pt; margin: 0 0 4pt; }
-    .byline { font-size: 9.5pt; color: #444; margin-bottom: 18pt; }
-    h2 { font-size: 13pt; margin: 22pt 0 8pt; break-after: avoid; page-break-after: avoid; }
-    h3 { font-size: 11.5pt; margin: 14pt 0 6pt; break-after: avoid; }
-    h4, h5, h6 { font-size: 11pt; margin: 10pt 0 4pt; break-after: avoid; }
-    p { margin: 0 0 9pt; text-align: justify; }
-    ul { margin: 4pt 0 10pt; padding-left: 20pt; }
-    li { margin-bottom: 3pt; }
-    dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 3pt 14pt; margin: 0; }
-    dl.facts dt { font-weight: 700; }
-    dl.facts dd { margin: 0; }
-    .mono, code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 9pt; }
-    pre { white-space: pre-wrap; border: 1px solid #999; padding: 6pt; }
-    .strong { font-weight: 700; }
-    table { width: 100%; border-collapse: collapse; margin: 6pt 0 12pt; }
-    thead { display: table-header-group; }
-    tr { break-inside: avoid; page-break-inside: avoid; }
-    th, td { border: 1px solid #000; padding: 4pt 6pt; font-size: 9pt; text-align: left; vertical-align: top; }
-    th { background: #eceff3; }
-    .empty { font-style: italic; }
+    :root {
+      --ink: #0f172a; --ink-2: #334155; --muted: #64748b; --rule: #e2e8f0; --tint: #f8fafc;
+      --high: #dc2626; --high-bg: #fee2e2; --med: #b45309; --med-bg: #fef3c7; --low: #047857; --low-bg: #d1fae5;
+      --accent: #1d4ed8;
+    }
+    html, body { margin: 0; padding: 0; background: #fff; color: var(--ink); }
+    body { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; font-size: 10pt; line-height: 1.5; }
+    .ic { vertical-align: -1px; margin-right: 5px; flex-shrink: 0; }
+    .mono, code, pre { font-family: Consolas, "JetBrains Mono", "DejaVu Sans Mono", monospace; }
+    .muted { color: var(--muted); }
+
+    .masthead { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+      padding: 14px 18px; border-radius: 8px; background: #0f172a; color: #f8fafc; }
+    .masthead h1 { margin: 0; font-size: 18pt; letter-spacing: -0.01em; display: flex; align-items: center; }
+    .masthead h1 .ic { margin-right: 9px; color: #93c5fd; }
+    .masthead .sub { margin-top: 3px; font-size: 8.5pt; color: #cbd5e1; }
+    .masthead .sub .mono { color: #e2e8f0; }
+    .level { text-align: right; white-space: nowrap; }
+    .level .big { font-size: 24pt; font-weight: 700; line-height: 1; }
+    .level .big small { font-size: 10pt; font-weight: 500; color: #cbd5e1; }
+    .level .tag { display: inline-block; margin-top: 5px; padding: 2px 9px; border-radius: 999px; font-size: 8pt;
+      font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+    .level.high .big { color: #fca5a5; } .level.high .tag { background: var(--high); color: #fff; }
+    .level.medium .big { color: #fcd34d; } .level.medium .tag { background: #d97706; color: #fff; }
+    .level.low .big { color: #6ee7b7; } .level.low .tag { background: #059669; color: #fff; }
+
+    .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 12px;
+      border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+    .fact { padding: 8px 12px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .fact:nth-child(4n) { border-right: none; }
+    .fact:nth-last-child(-n+4) { border-bottom: none; }
+    .fact-label { display: flex; align-items: center; font-size: 7.5pt; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--muted); }
+    .fact-value { margin-top: 2px; font-size: 10pt; font-weight: 600; overflow-wrap: anywhere; }
+    .fact-value.mono { font-size: 9pt; }
+
+    .chain { margin-top: 12px; }
+    .chain-label { font-size: 7.5pt; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+    .chain-steps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+    .step { padding: 5px 4px 4px; border-radius: 4px; background: var(--tint); border: 1px solid var(--rule);
+      font-size: 6.8pt; line-height: 1.2; text-align: center; color: var(--muted); min-height: 30px;
+      display: flex; align-items: center; justify-content: center; }
+    .step.done { background: #dbeafe; border-color: #bfdbfe; color: #1e3a8a; }
+    .step.here { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+
+    h2 { display: flex; align-items: center; font-size: 12pt; margin: 20px 0 8px; padding-bottom: 5px;
+      border-bottom: 2px solid var(--ink); break-after: avoid; page-break-after: avoid; }
+    h2 .ic { color: var(--accent); }
+    h2 .count { margin-left: 8px; font-size: 8.5pt; font-weight: 600; color: var(--muted); }
+    h2.risk .ic { color: var(--high); }
+    h3 { font-size: 11pt; margin: 16px 0 6px; color: var(--ink); break-after: avoid; }
+    h4, h5, h6 { font-size: 10pt; margin: 12px 0 4px; color: var(--ink-2); break-after: avoid; }
+    p { margin: 0 0 8px; text-align: justify; }
+    ul, ol { margin: 4px 0 10px; padding-left: 18px; }
+    li { margin-bottom: 3px; }
+    li::marker { color: var(--accent); }
+    code { font-size: 8.5pt; background: #f1f5f9; padding: 0 3px; border-radius: 3px; }
+    pre { font-size: 8.5pt; white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--rule);
+      border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 10px; }
+    pre code { background: none; padding: 0; }
+    hr { border: none; border-top: 1px solid var(--rule); margin: 12px 0; }
+    .analysis strong { color: var(--ink); }
+
+    table.cmds { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 4px 0 8px; font-size: 8.5pt; }
+    table.cmds thead { display: table-header-group; }
+    table.cmds tr { break-inside: avoid; page-break-inside: avoid; }
+    table.cmds th { text-align: left; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--muted); padding: 5px 6px; border-bottom: 1.5px solid var(--ink-2); }
+    table.cmds td { padding: 5px 6px; border-bottom: 1px solid var(--rule); vertical-align: top; overflow-wrap: anywhere; }
+    table.cmds tbody tr:nth-child(even) td { background: var(--tint); }
+    .num { text-align: right; }
+    td.cmd { font-weight: 600; color: var(--ink); }
+    .tid { font-family: Consolas, "JetBrains Mono", monospace; font-weight: 700; color: var(--accent); }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 7.5pt; font-weight: 600; white-space: nowrap; }
+    .r-sandbox { background: #dbeafe; color: #1e40af; }
+    .r-grounded { background: #ccfbf1; color: #115e59; }
+    .r-deception { background: #ede9fe; color: #5b21b6; }
+    .r-builtin { background: #f1f5f9; color: #475569; }
+    .score { display: inline-block; min-width: 26px; text-align: center; padding: 1px 5px; border-radius: 999px;
+      font-family: Consolas, monospace; font-weight: 700; font-size: 8pt; }
+    .s-high { background: var(--high-bg); color: var(--high); }
+    .s-medium { background: var(--med-bg); color: var(--med); }
+    .s-low { background: var(--low-bg); color: var(--low); }
+    .empty { display: flex; align-items: center; padding: 8px 12px; border-radius: 6px; background: var(--low-bg);
+      color: var(--low); font-size: 9pt; }
+
+    .iocs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+    .ioc { display: flex; align-items: baseline; gap: 6px; font-size: 9pt; padding: 3px 0; border-bottom: 1px dotted var(--rule); }
+    .ioc .kind { font-size: 7.5pt; font-weight: 600; text-transform: uppercase; color: var(--muted); min-width: 64px; display: flex; align-items: center; }
+    .ioc .val { font-family: Consolas, monospace; overflow-wrap: anywhere; }
+
+    .footer { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--rule); font-size: 7.5pt; color: var(--muted);
+      display: flex; justify-content: space-between; }
   </style>
 </head>
 <body>
-  <h1>Incident report</h1>
-  <div class="byline">Session ${escapeHtml(sessionId)} &middot; generated ${escapeHtml(generatedAt)}</div>
+  <div class="masthead">
+    <div>
+      <h1>${pdfIcon('shield', 20)}Incident report</h1>
+      <div class="sub">Session <span class="mono">${escapeHtml(sessionId)}</span></div>
+      <div class="sub">Started ${escapeHtml(f.started)} &middot; ${f.commands.length} command${f.commands.length === 1 ? '' : 's'}</div>
+    </div>
+    <div class="level ${level}">
+      <div class="big">${f.threatScore}<small> / 100</small></div>
+      <div class="tag">${levelLabel} threat</div>
+    </div>
+  </div>
 
-  <h2>Session</h2>
-  <dl class="facts">
-    <dt>Source</dt><dd class="mono">${escapeHtml(f.source)}</dd>
-    <dt>Started</dt><dd>${escapeHtml(f.started)}</dd>
-    <dt>Credentials</dt><dd class="mono">${escapeHtml(f.credentials)}</dd>
-    <dt>Attacker type</dt><dd>${escapeHtml(f.attackerType)}</dd>
-    <dt>Phase reached</dt><dd>${escapeHtml(f.phase)}</dd>
-    <dt>Threat score</dt><dd>${f.threatScore} / 100</dd>
-    <dt>Campaign</dt><dd>${escapeHtml(f.campaign)}</dd>
-    <dt>Commands</dt><dd>${f.commands.length}</dd>
-  </dl>
+  <div class="facts">
+    ${fact('globe', 'Source', f.source, true)}
+    ${fact('key', 'Credentials', f.credentials, true)}
+    ${fact('user', 'Attacker type', f.attackerType.charAt(0).toUpperCase() + f.attackerType.slice(1))}
+    ${fact('link', 'Campaign', f.campaign)}
+  </div>
 
-  <h2>High-risk commands (score ${HIGH_RISK_SCORE}+)</h2>
-  ${flagged.length ? commandTable(flagged, true) : `<p class="empty">No command scored ${HIGH_RISK_SCORE} or more.</p>`}
+  <div class="chain">
+    <div class="chain-label">Furthest kill-chain phase: ${escapeHtml(f.phase)}</div>
+    <div class="chain-steps">${KILL_CHAIN.map((p, i) =>
+      `<div class="step${i === phaseIdx ? ' here' : (i < phaseIdx ? ' done' : '')}">${escapeHtml(p)}</div>`).join('')}</div>
+  </div>
 
-  <h2>Analysis</h2>
-  ${analysisHtml}
+  <h2 class="risk">${pdfIcon('alert', 14)}High-risk commands<span class="count">${flagged.length ? `${flagged.length} scored ${HIGH_RISK_SCORE} or more` : ''}</span></h2>
+  ${flagged.length ? commandTable(flagged)
+    : `<div class="empty">${pdfIcon('shield', 12)}No command scored ${HIGH_RISK_SCORE} or more.</div>`}
 
-  ${others.length ? `<h2>Other commands</h2>${commandTable(others, false)}` : ''}
+  ${iocItems.length ? `
+  <h2>${pdfIcon('link', 14)}Indicators<span class="count">${iocItems.length}</span></h2>
+  <div class="iocs">${iocItems.map(([icon, kind, value]) =>
+    `<div class="ioc"><span class="kind">${pdfIcon(icon, 10)}${kind}</span><span class="val">${escapeHtml(value)}</span></div>`).join('')}</div>` : ''}
+
+  <h2>${pdfIcon('file', 14)}Analysis</h2>
+  <div class="analysis">${analysisHtml}</div>
+
+  ${others.length ? `<h2>${pdfIcon('terminal', 14)}Other commands<span class="count">${others.length}</span></h2>${commandTable(others)}` : ''}
+
+  <div class="footer"><span>Doppel incident report</span><span>Generated ${escapeHtml(generatedAt)}</span></div>
 </body>
 </html>`;
 

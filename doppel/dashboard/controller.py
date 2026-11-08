@@ -638,10 +638,13 @@ class HoneypotController:
         try:
             if not self.session_manager or not self.session_manager.sandbox_manager:
                 return
+            # Same persona and honeytokens as a container created at login
             container_id = await asyncio.to_thread(
-                self.session_manager.sandbox_manager.create_sandbox_session,
+                self.session_manager._call_create_sandbox,
                 session.session_id,
-                username=session.username,
+                session.username,
+                get_active_preset(self.config),
+                get_honeytoken_manager().session_honeytokens(session.session_id),
             )
             if container_id:
                 session.container_id = container_id

@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -16,7 +17,14 @@ from doppel.analytics.ioc import extract_session_iocs
 
 logger = logging.getLogger("doppel.dashboard.api")
 
-app = FastAPI(title="Doppel Control Center", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Open the telemetry database so history is readable before the honeypot starts
+    await controller.initialize()
+    yield
+
+
+app = FastAPI(title="Doppel Control Center", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,11 +70,6 @@ class AssistantChatRequest(BaseModel):
 class ReportStreamRequest(BaseModel):
     custom_instructions: Optional[str] = None
     model: Optional[str] = None
-
-
-@app.on_event("startup")
-async def startup_event():
-    await controller.initialize()
 
 
 @app.get("/api/diagnostics")
