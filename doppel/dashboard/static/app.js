@@ -2383,39 +2383,41 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportPrintHeader) {
       const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
       reportPrintHeader.innerHTML = `
-        <div class="report-header-banner">
-          <div class="report-classification-bar">
-            <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
-            <span>Generated: ${escapeHtml(generatedAt)}</span>
-          </div>
-          <div class="report-header-title-row">
-            <h2 class="report-header-title">Incident Response Report</h2>
-            <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
-          </div>
-          <div class="report-meta-grid">
-            <div class="report-meta-item">
-              <span class="report-meta-label">Target / Source IP</span>
-              <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
+        <div class="incident-report-print-wrapper">
+          <div class="report-header-banner">
+            <div class="report-classification-bar">
+              <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
+              <span>Generated: ${escapeHtml(generatedAt)}</span>
             </div>
-            <div class="report-meta-item">
-              <span class="report-meta-label">Credentials Used</span>
-              <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
+            <div class="report-header-title-row">
+              <h2 class="report-header-title">Incident Response Report</h2>
+              <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
             </div>
-            <div class="report-meta-item">
-              <span class="report-meta-label">Attacker Classification</span>
-              <span class="report-meta-val">${escapeHtml(attackerType)}</span>
-            </div>
-            <div class="report-meta-item">
-              <span class="report-meta-label">Overall Threat Score</span>
-              <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
-            </div>
-            <div class="report-meta-item">
-              <span class="report-meta-label">Current Attack Phase</span>
-              <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
-            </div>
-            <div class="report-meta-item">
-              <span class="report-meta-label">Correlated Campaign</span>
-              <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
+            <div class="report-meta-grid">
+              <div class="report-meta-item">
+                <span class="report-meta-label">Target / Source IP</span>
+                <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
+              </div>
+              <div class="report-meta-item">
+                <span class="report-meta-label">Credentials Used</span>
+                <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
+              </div>
+              <div class="report-meta-item">
+                <span class="report-meta-label">Attacker Classification</span>
+                <span class="report-meta-val">${escapeHtml(attackerType)}</span>
+              </div>
+              <div class="report-meta-item">
+                <span class="report-meta-label">Overall Threat Score</span>
+                <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
+              </div>
+              <div class="report-meta-item">
+                <span class="report-meta-label">Current Attack Phase</span>
+                <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
+              </div>
+              <div class="report-meta-item">
+                <span class="report-meta-label">Correlated Campaign</span>
+                <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -2477,11 +2479,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       reportFlaggedSection.classList.remove('hidden');
     }
 
-    // 3. Complete Command Execution Timeline
+    // 3. Command Execution Timeline (Executive print format: capped to most significant events to prevent bloated multi-page dumps)
     if (reportTimelineSection) {
       let timelineTableHtml = '';
       if (commands.length > 0) {
-        const rows = commands.map(cmd => {
+        // Display up to 15 key commands in the print view with a concise summary indicator if more exist
+        const maxPrintCmds = 15;
+        const displayCommands = commands.slice(0, maxPrintCmds);
+        const rows = displayCommands.map(cmd => {
           const score = Number(cmd.threat_score) || 0;
           const tech = cmd.technique_id
             ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}`
@@ -2498,6 +2503,10 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           `;
         }).join('');
 
+        const overflowNotice = commands.length > maxPrintCmds
+          ? `<div class="report-timeline-overflow">Showing first ${maxPrintCmds} of ${commands.length} total commands. Full telemetry log available in interactive session inspector.</div>`
+          : '';
+
         timelineTableHtml = `
           <table class="data-table report-table">
             <thead>
@@ -2512,6 +2521,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
             </thead>
             <tbody>${rows}</tbody>
           </table>
+          ${overflowNotice}
         `;
       } else {
         timelineTableHtml = `<p class="report-section-empty">No commands recorded in this session.</p>`;
@@ -2519,7 +2529,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
       reportTimelineSection.innerHTML = `
         <div class="report-section-block">
-          <h3 class="report-section-heading">Complete Command Execution Timeline</h3>
+          <h3 class="report-section-heading">Command Execution Timeline</h3>
           ${timelineTableHtml}
         </div>
       `;

@@ -3396,6 +3396,14 @@ html.init-dashboard #view-dashboard {
   line-height: 1.4;
 }
 
+.report-timeline-overflow {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+  margin-top: 6px;
+  margin-bottom: 12px;
+}
+
 .report-table {
   width: 100%;
   border-collapse: collapse;
@@ -3445,8 +3453,8 @@ html.init-dashboard #view-dashboard {
    ========================================================================== */
 @media print {
   @page {
-    margin: 1.2cm 1.4cm 1.4cm 1.4cm;
-    size: letter portrait;
+    size: A4 portrait;
+    margin: 20mm;
     @bottom-right {
       content: "Page " counter(page) " of " counter(pages);
       font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -3463,9 +3471,16 @@ html.init-dashboard #view-dashboard {
     }
   }
 
-  /* 1. Hide interactive web UI chrome and modals */
+  /* 1. Strictly hide interactive web UI chrome, sidebar, filters, drawers, and buttons */
   .top-nav,
   .sidebar,
+  .sidebar-panel,
+  .sidebar-tabs,
+  .session-filter,
+  .sessions-list,
+  #session-filter,
+  #sessions-container,
+  #campaigns-container,
   .tabs-bar,
   .report-toolbar,
   .report-regen-card,
@@ -3481,9 +3496,15 @@ html.init-dashboard #view-dashboard {
   .report-empty,
   .assistant-modal {
     display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    visibility: hidden !important;
   }
 
-  /* 2. Reset layout containers to allow unclipped multi-page printing */
+  /* 2. Reset layout containers to allow unclipped multi-page printing on clean white background */
   html,
   body {
     height: auto !important;
@@ -3506,6 +3527,7 @@ html.init-dashboard #view-dashboard {
   }
 
   .app-shell,
+  .workspace,
   .main-workspace,
   .inspector-panel,
   .session-detail,
@@ -3523,6 +3545,14 @@ html.init-dashboard #view-dashboard {
     color: inherit !important;
     position: static !important;
     display: block !important;
+    flex: none !important;
+  }
+
+  /* Dedicated print wrapper for the formal document */
+  .incident-report-print-wrapper {
+    display: block !important;
+    width: 100% !important;
+    background: #ffffff !important;
   }
 
   /* 3. Document sections formatting */
