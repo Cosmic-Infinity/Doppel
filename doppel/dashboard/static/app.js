@@ -2383,41 +2383,39 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportPrintHeader) {
       const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
       reportPrintHeader.innerHTML = `
-        <div class="incident-report-print-wrapper incident-report-book-frame">
-          <div class="report-header-banner">
-            <div class="report-classification-bar">
-              <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
-              <span>Generated: ${escapeHtml(generatedAt)}</span>
+        <div class="report-header-banner">
+          <div class="report-classification-bar">
+            <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
+            <span>Generated: ${escapeHtml(generatedAt)}</span>
+          </div>
+          <div class="report-header-title-row">
+            <h2 class="report-header-title">Incident Response Report</h2>
+            <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
+          </div>
+          <div class="report-meta-grid">
+            <div class="report-meta-item">
+              <span class="report-meta-label">Target / Source IP</span>
+              <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
             </div>
-            <div class="report-header-title-row">
-              <h2 class="report-header-title">Incident Response Report</h2>
-              <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Credentials Used</span>
+              <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
             </div>
-            <div class="report-meta-grid">
-              <div class="report-meta-item">
-                <span class="report-meta-label">Target / Source IP</span>
-                <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
-              </div>
-              <div class="report-meta-item">
-                <span class="report-meta-label">Credentials Used</span>
-                <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
-              </div>
-              <div class="report-meta-item">
-                <span class="report-meta-label">Attacker Classification</span>
-                <span class="report-meta-val">${escapeHtml(attackerType)}</span>
-              </div>
-              <div class="report-meta-item">
-                <span class="report-meta-label">Overall Threat Score</span>
-                <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
-              </div>
-              <div class="report-meta-item">
-                <span class="report-meta-label">Current Attack Phase</span>
-                <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
-              </div>
-              <div class="report-meta-item">
-                <span class="report-meta-label">Correlated Campaign</span>
-                <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
-              </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Attacker Classification</span>
+              <span class="report-meta-val">${escapeHtml(attackerType)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Overall Threat Score</span>
+              <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Current Attack Phase</span>
+              <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="report-meta-label">Correlated Campaign</span>
+              <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
             </div>
           </div>
         </div>
