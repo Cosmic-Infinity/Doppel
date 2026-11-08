@@ -135,7 +135,13 @@ class DockerSandboxManager:
         self._image_thread = threading.Thread(target=self.ensure_image, name="sandbox-image", daemon=True)
         self._image_thread.start()
 
-    def create_sandbox_session(self, session_id: str, username: str = "ubuntu", preset: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    def create_sandbox_session(
+        self,
+        session_id: str,
+        username: str = "ubuntu",
+        preset: Optional[Dict[str, Any]] = None,
+        honeytokens: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Spawn a new isolated container for an attacker session."""
         if not self.is_available:
             self.check_availability()
@@ -226,17 +232,22 @@ class DockerSandboxManager:
                     # Standard Ubuntu 22.04 LTS layout
                     os_release = "printf 'PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\\nNAME=\"Ubuntu\"\\nVERSION_ID=\"22.04\"\\nVERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\\nID=ubuntu\\nID_LIKE=debian\\n' > /etc/os-release 2>/dev/null || true; "
                     issue_text = "echo 'Ubuntu 22.04.4 LTS \\n \\l' > /etc/issue 2>/dev/null || true; "
+                    aws_id = honeytokens.get("aws").identifier if honeytokens and "aws" in honeytokens else "AKIA5WQZT3LRXN7KHB2D"
+                    aws_sec = honeytokens.get("aws").secret if honeytokens and "aws" in honeytokens else "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"
+                    api_key = honeytokens.get("api_key").identifier if honeytokens and "api_key" in honeytokens else "live_sec_1aLCYE0reqDz9Xik"
+                    canary_url = honeytokens.get("canary").canary_url if honeytokens and "canary" in honeytokens else f"http://{container_hostname}:8080/auth/v1/verify"
                     decoy_seed = (
                         "mkdir -p /var/www/html/app /var/www/html/config /var/www/html/routes /var/www/html/public /var/www/html/storage && "
                         f"mkdir -p {home_dir}/.ssh && "
-                        "printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://prod-api-node-01.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID=AKIA5WQZT3LRXN7KHB2D\\nAWS_SECRET_ACCESS_KEY=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\\nAWS_DEFAULT_REGION=us-east-1\\n' > /var/www/html/.env && "
+                        f"printf 'APP_NAME=Laravel\\nAPP_ENV=production\\nAPP_KEY=base64:1+gXW62vAIAHAOTr6pYCvZvHuLp14YQdD3OPrj8iOPE=\\nAPP_DEBUG=false\\nAPP_URL=http://{container_hostname}.internal\\n\\nDB_CONNECTION=mysql\\nDB_HOST=127.0.0.1\\nDB_PORT=3306\\nDB_DATABASE=app_production\\nDB_USERNAME=app_user\\nDB_PASSWORD=P@ssw0rd_ProdDb_2026!\\n\\nREDIS_HOST=127.0.0.1\\nREDIS_PASSWORD=null\\nREDIS_PORT=6379\\n\\nAWS_ACCESS_KEY_ID={aws_id}\\nAWS_SECRET_ACCESS_KEY={aws_sec}\\nAWS_DEFAULT_REGION=us-east-1\\nAPI_GATEWAY_KEY={api_key}\\nAUTH_VERIFICATION_ENDPOINT={canary_url}\\n' > /var/www/html/.env && "
                         "printf \"{\\n    \\\"name\\\": \\\"laravel/laravel\\\",\\n    \\\"type\\\": \\\"project\\\",\\n    \\\"require\\\": {\\n        \\\"php\\\": \\\"^8.2\\\",\\n        \\\"laravel/framework\\\": \\\"^10.10\\\"\\n    }\\n}\\n\" > /var/www/html/composer.json && "
                         f"printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1b9xP0L9Q8uN7Y2K3vW4rZ1mXo5P6qRsTuVwXyZaBc deploy-key-2026\\n' > {home_dir}/.ssh/authorized_keys && "
+                        f"mkdir -p {home_dir}/.aws && printf '[default]\\naws_access_key_id = {aws_id}\\naws_secret_access_key = {aws_sec}\\nregion = us-east-1\\n' > {home_dir}/.aws/credentials && "
                         f"printf 'SELECT user, host FROM mysql.user;\\nGRANT ALL PRIVILEGES ON app_production.* TO '\''api_prod'\''@'\''10.0.4.%%'\'' IDENTIFIED BY '\''P@ssw0rdProd2026!'\'';\\nFLUSH PRIVILEGES;\\n' > {home_dir}/.mysql_history && "
                         f"printf 'git status\\ngit pull origin main\\nphp artisan migrate --force\\nsystemctl restart php8.2-fpm\\nsudo systemctl reload nginx\\n' > {home_dir}/.bash_history && "
                         "chmod 644 /var/www/html/.env /var/www/html/composer.json 2>/dev/null || true; "
                         f"chmod 700 {home_dir}/.ssh 2>/dev/null || true; "
-                        f"chmod 600 {home_dir}/.ssh/authorized_keys {home_dir}/.mysql_history {home_dir}/.bash_history 2>/dev/null || true; "
+                        f"chmod 600 {home_dir}/.ssh/authorized_keys {home_dir}/.aws/credentials {home_dir}/.mysql_history {home_dir}/.bash_history 2>/dev/null || true; "
                         f"chown -R {user_uid}:{user_uid} /var/www/html {home_dir} 2>/dev/null || true; "
                     )
 

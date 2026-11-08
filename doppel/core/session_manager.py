@@ -116,6 +116,26 @@ class SessionManager:
         async with self._report_slots:
             return await self.reporter.generate_session_report(session_id)
 
+    def _call_create_sandbox(
+        self,
+        session_id: str,
+        username: str,
+        preset: Optional[Dict[str, Any]],
+        honeytokens: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Safely invoke create_sandbox_session supporting both full and simplified mock signatures."""
+        import inspect
+        fn = getattr(self.sandbox_manager, "create_sandbox_session", None)
+        if not fn:
+            return None
+        sig = inspect.signature(fn)
+        kwargs: Dict[str, Any] = {"username": username}
+        if "preset" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            kwargs["preset"] = preset
+        if "honeytokens" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            kwargs["honeytokens"] = honeytokens
+        return fn(session_id, **kwargs)
+
     @staticmethod
     def can_drop_privileges(session: "SessionState") -> bool:
         """True inside a `sudo su`-style root shell opened by a non-root login."""
@@ -236,8 +256,15 @@ class SessionManager:
                 await asyncio.to_thread(self.sandbox_manager.check_availability)
             if self.sandbox_manager.is_available:
                 from doppel.config import get_active_preset
+                from doppel.deception.honeytokens import get_honeytoken_manager
+                ht_mgr = get_honeytoken_manager()
+                session_ht = ht_mgr.generate_session_honeytokens(sess_id)
                 container_id = await asyncio.to_thread(
-                    self.sandbox_manager.create_sandbox_session, sess_id, username=username, preset=get_active_preset(self.config)
+                    self._call_create_sandbox,
+                    sess_id,
+                    username,
+                    get_active_preset(self.config),
+                    session_ht,
                 )
 
         session = SessionState(
@@ -312,11 +339,15 @@ class SessionManager:
                 await asyncio.to_thread(self.sandbox_manager.check_availability)
             if self.sandbox_manager.is_available:
                 from doppel.config import get_active_preset
+                from doppel.deception.honeytokens import get_honeytoken_manager
+                ht_mgr = get_honeytoken_manager()
+                session_ht = ht_mgr.generate_session_honeytokens(session.session_id)
                 session.container_id = await asyncio.to_thread(
-                    self.sandbox_manager.create_sandbox_session,
+                    self._call_create_sandbox,
                     session.session_id,
-                    username=session.username,
-                    preset=get_active_preset(self.config),
+                    session.username,
+                    get_active_preset(self.config),
+                    session_ht,
                 )
 
         # Update router sandbox availability status
