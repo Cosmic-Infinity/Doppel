@@ -3285,6 +3285,20 @@ html.init-dashboard #view-dashboard {
   padding: 18px 20px;
 }
 
+.report-classification-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px dashed var(--border-subtle);
+}
+
 .report-header-title-row {
   display: flex;
   align-items: center;
@@ -3359,6 +3373,29 @@ html.init-dashboard #view-dashboard {
   margin: 8px 0;
 }
 
+.report-callout-critical {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 4px solid var(--accent-red);
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.report-callout-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-red);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.report-callout-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 .report-table {
   width: 100%;
   border-collapse: collapse;
@@ -3408,8 +3445,22 @@ html.init-dashboard #view-dashboard {
    ========================================================================== */
 @media print {
   @page {
-    margin: 1.5cm;
-    size: auto;
+    margin: 1.2cm 1.4cm 1.4cm 1.4cm;
+    size: letter portrait;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 8.5pt;
+      color: #64748b;
+    }
+    @bottom-left {
+      content: "DOPPEL INTELLIGENCE PLATFORM // INCIDENT AUDIT";
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 8.5pt;
+      font-weight: 600;
+      color: #64748b;
+      letter-spacing: 0.05em;
+    }
   }
 
   /* 1. Hide interactive web UI chrome and modals */
@@ -3434,7 +3485,26 @@ html.init-dashboard #view-dashboard {
 
   /* 2. Reset layout containers to allow unclipped multi-page printing */
   html,
-  body,
+  body {
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    position: static !important;
+    display: block !important;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.5 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
   .app-shell,
   .main-workspace,
   .inspector-panel,
@@ -3449,8 +3519,8 @@ html.init-dashboard #view-dashboard {
     max-width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
-    background: #fff !important;
-    color: #000 !important;
+    background: transparent !important;
+    color: inherit !important;
     position: static !important;
     display: block !important;
   }
@@ -3462,77 +3532,193 @@ html.init-dashboard #view-dashboard {
   .report-timeline-section {
     display: block !important;
     background: transparent !important;
-    color: #000 !important;
+    color: inherit !important;
     max-width: 100% !important;
     page-break-inside: auto;
+    break-inside: auto;
   }
 
+  /* Header / Cover Block */
   .report-header-banner {
-    background: #fff !important;
-    border: 1px solid #000 !important;
+    background: #f8fafc !important;
+    border: 1.5px solid #0f172a !important;
     border-radius: 4px !important;
-    padding: 12px 14px !important;
-    margin-bottom: 20px !important;
+    padding: 14pt 16pt !important;
+    margin-bottom: 18pt !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .report-classification-bar {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    font-size: 8pt !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    color: #475569 !important;
+    padding-bottom: 6pt !important;
+    margin-bottom: 10pt !important;
+    border-bottom: 1px dashed #94a3b8 !important;
   }
 
   .report-header-title-row {
-    border-bottom: 1px solid #000 !important;
-    padding-bottom: 8px !important;
-    margin-bottom: 10px !important;
+    display: flex !important;
+    align-items: baseline !important;
+    justify-content: space-between !important;
+    border-bottom: 1.5px solid #0f172a !important;
+    padding-bottom: 8pt !important;
+    margin-bottom: 12pt !important;
   }
 
   .report-header-title {
-    font-size: 18px !important;
-    color: #000 !important;
+    font-size: 20pt !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+    letter-spacing: -0.02em !important;
+    margin: 0 !important;
+    border-bottom: none !important;
+    padding-bottom: 0 !important;
   }
 
   .report-session-pill {
-    background: #f1f5f9 !important;
-    border: 1px solid #000 !important;
-    color: #000 !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-size: 9pt !important;
+    font-weight: 600 !important;
+    background: #e2e8f0 !important;
+    border: 1px solid #64748b !important;
+    color: #0f172a !important;
+    padding: 3pt 8pt !important;
+    border-radius: 3px !important;
+  }
+
+  .report-meta-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 10pt 16pt !important;
+  }
+
+  .report-meta-item {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2pt !important;
   }
 
   .report-meta-label {
-    color: #475569 !important;
+    font-size: 8pt !important;
+    color: #64748b !important;
     font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
   }
 
   .report-meta-val {
-    color: #000 !important;
+    font-size: 9.5pt !important;
+    font-weight: 500 !important;
+    color: #0f172a !important;
+    word-break: break-word !important;
   }
 
-  /* 4. Headings styling for crisp B&W print */
-  h1, h2, h3, h4,
-  .report-section-heading,
-  .report-content.markdown-body h1,
-  .report-content.markdown-body h2,
-  .report-content.markdown-body h3,
-  .report-content.markdown-body h4 {
-    color: #000 !important;
-    border-bottom: 1px solid #94a3b8 !important;
+  /* 4. Headings styling for crisp executive typography */
+  h1,
+  .report-content.markdown-body h1 {
+    font-size: 15pt !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    border-bottom: 1.5px solid #0f172a !important;
+    padding-bottom: 4pt !important;
+    margin-top: 18pt !important;
+    margin-bottom: 8pt !important;
     page-break-after: avoid;
     break-after: avoid;
   }
 
-  /* 5. Body copy */
+  h2,
+  .report-section-heading,
+  .report-content.markdown-body h2 {
+    font-size: 13pt !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    padding-bottom: 4pt !important;
+    margin-top: 16pt !important;
+    margin-bottom: 8pt !important;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  h3,
+  .report-content.markdown-body h3 {
+    font-size: 11pt !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    margin-top: 12pt !important;
+    margin-bottom: 6pt !important;
+    border-bottom: none !important;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* 5. Body copy and lists */
   p, li, span, td, th,
   .report-content.markdown-body,
   .report-content.markdown-body p,
   .report-content.markdown-body li {
-    color: #000 !important;
+    font-size: 10pt !important;
+    line-height: 1.55 !important;
+    color: #1e293b !important;
   }
 
-  /* 6. Tables styling */
+  /* 6. Executive Callout Box for Critical Alerts */
+  .report-callout-critical {
+    background: #fef2f2 !important;
+    border-left: 4px solid #b91c1c !important;
+    border-top: 1px solid #fecaca !important;
+    border-right: 1px solid #fecaca !important;
+    border-bottom: 1px solid #fecaca !important;
+    border-radius: 3px !important;
+    padding: 8pt 12pt !important;
+    margin-bottom: 12pt !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .report-callout-title {
+    font-size: 9pt !important;
+    font-weight: 800 !important;
+    color: #991b1b !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase !important;
+    margin-bottom: 3pt !important;
+  }
+
+  .report-callout-desc {
+    font-size: 8.5pt !important;
+    color: #450a0a !important;
+    line-height: 1.4 !important;
+  }
+
+  /* 7. Tables styling */
   table,
   .report-table,
   .data-table,
   .report-content.markdown-body table {
     width: 100% !important;
     border-collapse: collapse !important;
-    border: 1px solid #000 !important;
-    margin: 12px 0 20px 0 !important;
-    page-break-inside: avoid;
-    break-inside: avoid;
+    border: 1px solid #cbd5e1 !important;
+    margin: 10pt 0 16pt 0 !important;
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 
   table th,
@@ -3541,11 +3727,12 @@ html.init-dashboard #view-dashboard {
   .report-table td,
   .report-content.markdown-body th,
   .report-content.markdown-body td {
-    padding: 6px 8px !important;
-    border: 1px solid #000 !important;
-    color: #000 !important;
-    background: transparent !important;
-    font-size: 11px !important;
+    padding: 6pt 8pt !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #0f172a !important;
+    font-size: 8.5pt !important;
+    line-height: 1.4 !important;
+    vertical-align: middle !important;
   }
 
   table th,
@@ -3553,46 +3740,103 @@ html.init-dashboard #view-dashboard {
   .report-content.markdown-body th {
     background: #f1f5f9 !important;
     font-weight: 700 !important;
+    color: #1e293b !important;
+    text-transform: uppercase !important;
+    font-size: 8pt !important;
+    letter-spacing: 0.04em !important;
   }
 
-  /* 7. Code blocks */
+  /* Zebra striping for improved reading flow across multi-row tables */
+  tbody tr:nth-child(even) td {
+    background: #f8fafc !important;
+  }
+
+  /* 8. Code blocks */
   pre,
   code,
   .report-content.markdown-body pre,
   .report-content.markdown-body code {
-    background: #f8fafc !important;
-    color: #000 !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
     border: 1px solid #cbd5e1 !important;
+    border-radius: 3px !important;
     page-break-inside: avoid;
     break-inside: avoid;
+    font-size: 8.5pt !important;
+    word-break: break-all !important;
+    white-space: pre-wrap !important;
   }
 
   .report-content.markdown-body pre code {
     border: none !important;
     background: transparent !important;
+    padding: 0 !important;
   }
 
-  /* 8. Badges and tags */
+  /* 9. Badges and Threat Status Tints */
   .badge-tag,
   .badge-route,
   .stat-score-pill {
-    background: #fff !important;
-    color: #000 !important;
-    border: 1px solid #000 !important;
-    font-size: 10px !important;
-    padding: 1px 4px !important;
+    display: inline-block !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-size: 8pt !important;
+    font-weight: 600 !important;
+    padding: 2pt 5pt !important;
+    border-radius: 3px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .badge-tag {
+    background: #f1f5f9 !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  .badge-route {
+    background: #e2e8f0 !important;
+    color: #1e293b !important;
+    border: 1px solid #94a3b8 !important;
+    text-transform: uppercase !important;
+    font-size: 7.5pt !important;
+  }
+
+  .stat-score-pill.threat-low {
+    background: #ecfdf5 !important;
+    color: #065f46 !important;
+    border: 1px solid #a7f3d0 !important;
+  }
+
+  .stat-score-pill.threat-medium {
+    background: #fffbeb !important;
+    color: #92400e !important;
+    border: 1px solid #fde68a !important;
+  }
+
+  .stat-score-pill.threat-high {
+    background: #fef2f2 !important;
+    color: #991b1b !important;
+    border: 1px solid #fecaca !important;
   }
 
   blockquote,
   .report-content.markdown-body blockquote {
     background: #f8fafc !important;
-    border-left: 3px solid #000 !important;
-    color: #000 !important;
+    border-left: 3px solid #64748b !important;
+    color: #334155 !important;
+    padding: 6pt 10pt !important;
+    margin: 8pt 0 !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 
   hr,
   .report-content.markdown-body hr {
     border: 0 !important;
-    border-top: 1px solid #000 !important;
+    border-top: 1px solid #cbd5e1 !important;
+    margin: 14pt 0 !important;
   }
 }

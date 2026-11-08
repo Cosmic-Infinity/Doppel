@@ -2381,35 +2381,40 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     // 1. Session Facts Print Header
     if (reportPrintHeader) {
+      const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
       reportPrintHeader.innerHTML = `
         <div class="report-header-banner">
+          <div class="report-classification-bar">
+            <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
+            <span>Generated: ${escapeHtml(generatedAt)}</span>
+          </div>
           <div class="report-header-title-row">
             <h2 class="report-header-title">Incident Response Report</h2>
-            <span class="report-session-pill">${escapeHtml(sessId)}</span>
+            <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
           </div>
           <div class="report-meta-grid">
             <div class="report-meta-item">
-              <span class="report-meta-label">IP Address</span>
+              <span class="report-meta-label">Target / Source IP</span>
               <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Credentials</span>
+              <span class="report-meta-label">Credentials Used</span>
               <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Attacker Type</span>
+              <span class="report-meta-label">Attacker Classification</span>
               <span class="report-meta-val">${escapeHtml(attackerType)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Threat Score</span>
-              <span class="report-meta-val"><strong class="threat-${threatClass(threatScore)}">${threatScore}</strong> / 100</span>
+              <span class="report-meta-label">Overall Threat Score</span>
+              <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Attack Phase</span>
+              <span class="report-meta-label">Current Attack Phase</span>
               <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Campaign</span>
+              <span class="report-meta-label">Correlated Campaign</span>
               <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
             </div>
           </div>
@@ -2442,21 +2447,25 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         }).join('');
 
         flaggedTableHtml = `
+          <div class="report-callout-critical">
+            <div class="report-callout-title">CRITICAL SECURITY ALERT: High-Risk Activity Detected</div>
+            <div class="report-callout-desc">The following commands triggered critical threat heuristics (score &ge; 70) and required containment or deep session observation.</div>
+          </div>
           <table class="data-table report-table">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Command</th>
-                <th>Route</th>
+                <th>Timestamp</th>
+                <th>Executed Command</th>
+                <th>Route Policy</th>
                 <th>ATT&CK Technique</th>
-                <th>Score</th>
+                <th>Threat Score</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
         `;
       } else {
-        flaggedTableHtml = `<p class="report-section-empty">No commands exceeded the threat threshold (threat score &ge; 70).</p>`;
+        flaggedTableHtml = `<p class="report-section-empty">No commands exceeded the high-risk threshold (threat score &ge; 70).</p>`;
       }
 
       reportFlaggedSection.innerHTML = `
