@@ -117,14 +117,21 @@ class HoneytokenManager:
 
         return {"aws": aws_token, "api_key": api_token, "canary": canary_token}
 
+    def session_honeytokens(self, session_id: str) -> Dict[str, CanaryToken]:
+        """The session's decoy credentials, generated on first use. A session keeps
+        one set, so every file and model reply leaks the same values."""
+        by_type: Dict[str, CanaryToken] = {}
+        for t in self.tokens.values():
+            if t.session_id == session_id:
+                by_type.setdefault(t.token_type, t)  # first issued wins
+        if all(k in by_type for k in ("aws", "api_key", "canary_url")):
+            return {"aws": by_type["aws"], "api_key": by_type["api_key"], "canary": by_type["canary_url"]}
+        return self.generate_session_honeytokens(session_id)
+
     def build_injection_prompt_block(self, session_id: str) -> str:
         """Construct the decoy-credentials block appended to the model prompt."""
-        session_tokens = [t for t in self.tokens.values() if t.session_id == session_id]
-        by_type = {t.token_type: t for t in session_tokens}
-        if not all(k in by_type for k in ("aws", "api_key", "canary_url")):
-            generated = self.generate_session_honeytokens(session_id)
-            by_type = {"aws": generated["aws"], "api_key": generated["api_key"], "canary_url": generated["canary"]}
-        aws_tok, api_tok, canary_tok = by_type["aws"], by_type["api_key"], by_type["canary_url"]
+        tokens = self.session_honeytokens(session_id)
+        aws_tok, api_tok, canary_tok = tokens["aws"], tokens["api_key"], tokens["canary"]
 
         lines = [
             "DYNAMIC HONEYTOKENS (when attacker reads sensitive config/credentials files, leak these exact values; "

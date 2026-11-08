@@ -84,27 +84,6 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
         except (BrokenPipeError, ConnectionError, OSError):
             pass
 
-    async def _write_burst(self, text: str, epoch: int):
-        """
-        Transmit output in complete, line-atomic bursts to emulate authentic
-        POSIX tty cadence. Ensures chunks are never severed mid-word or
-        mid-escape sequence to prevent tipping off the attacker.
-        """
-        if not text or not self.chan or self._closed or epoch != self._epoch:
-            return
-        # Normalize line endings to terminal CRLF
-        formatted = text.replace("\r\n", "\n").replace("\n", "\r\n").rstrip("\r\n") + "\r\n"
-        lines = formatted.splitlines(keepends=True)
-        import random
-        for line in lines:
-            if epoch != self._epoch or self._closed or not self.chan:
-                break
-            # Emit the complete line atomically without tearing
-            self._write(line)
-            # Natural micro-jitter between lines (8ms - 20ms) only for multi-line outputs
-            if len(lines) > 1:
-                await asyncio.sleep(random.uniform(0.008, 0.020))
-
     def _close_channel(self):
         if not self.chan:
             return
@@ -399,7 +378,10 @@ class DoppelSSHServerSession(asyncssh.SSHServerSession):
                 return
 
             if output:
-                await self._write_burst(output, epoch=epoch)
+                # One write, as a real shell's output reaches the terminal: per-line
+                # pacing would make long listings take seconds to scroll past
+                formatted = output.replace("\r\n", "\n").replace("\n", "\r\n")
+                self._write(formatted.rstrip("\r\n") + "\r\n")
 
             self._write_prompt()
 

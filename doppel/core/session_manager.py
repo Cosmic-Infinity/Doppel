@@ -258,7 +258,7 @@ class SessionManager:
                 from doppel.config import get_active_preset
                 from doppel.deception.honeytokens import get_honeytoken_manager
                 ht_mgr = get_honeytoken_manager()
-                session_ht = ht_mgr.generate_session_honeytokens(sess_id)
+                session_ht = ht_mgr.session_honeytokens(sess_id)
                 container_id = await asyncio.to_thread(
                     self._call_create_sandbox,
                     sess_id,
@@ -341,7 +341,7 @@ class SessionManager:
                 from doppel.config import get_active_preset
                 from doppel.deception.honeytokens import get_honeytoken_manager
                 ht_mgr = get_honeytoken_manager()
-                session_ht = ht_mgr.generate_session_honeytokens(session.session_id)
+                session_ht = ht_mgr.session_honeytokens(session.session_id)
                 session.container_id = await asyncio.to_thread(
                     self._call_create_sandbox,
                     session.session_id,

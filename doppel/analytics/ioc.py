@@ -1,8 +1,9 @@
 """
 Indicator of Compromise (IOC) Extractor
 ========================================
-Extracts and normalizes URLs, external IP addresses, and hostnames/domains
-from session commands for analyst triage and threat intelligence.
+Extracts and normalizes URLs, IP addresses (public and private, since private
+ones point at lateral movement targets) and hostnames/domains from session
+commands for analyst triage and threat intelligence.
 """
 
 import re
@@ -31,7 +32,22 @@ _FILE_EXTENSIONS = frozenset([
     "sh", "py", "pl", "rb", "php", "js", "ts", "json", "yaml", "yml",
     "conf", "config", "txt", "log", "md", "tar", "gz", "zip", "bz2",
     "bak", "old", "swp", "lock", "env", "local", "internal",
+    "tgz", "xz", "rar", "7z", "sql", "db", "sqlite", "csv", "xml", "html", "htm",
+    "ini", "cfg", "pem", "key", "crt", "pub", "so", "deb", "rpm", "jar", "war",
+    "bin", "exe", "dll", "service", "socket", "timer", "mount", "target", "pid",
+    "tmp", "orig", "dist", "list", "gpg", "asc", "c", "h", "go", "java", "rs",
 ])
+
+# Characters around a bare host name when it is a whole shell argument, e.g.
+# `ping evil.com`, `ssh user@evil.com`, `nc evil.com 4444`, `curl evil.com/x`
+_ARG_BEFORE = " \t@=;|&('\""
+_ARG_AFTER = " \t:/;|&)'\""
+
+# Code passed inline to an interpreter (python -c, perl -e, ...)
+_INLINE_CODE_RE = re.compile(
+    r"""\b(?:python[\d.]*|perl|ruby|php|node)\s+-[ce]\s+(?:"[^"]*"|'[^']*'|\S+)""",
+    re.I,
+)
 
 # Common benign system domains to suppress from malware IOC panels
 _BENIGN_DOMAINS = frozenset([
@@ -103,8 +119,13 @@ def extract_domains(text: str) -> List[str]:
         except Exception:
             continue
 
-    # 2. Extract domain patterns from command text (e.g. curl evil.com/x)
-    for match in _DOMAIN_RE.finditer(text):
+    # 2. Extract bare host names given as arguments (e.g. curl evil.com/x).
+    # Inline interpreter code is skipped: `os.path` in `python3 -c "..."` is not a host.
+    bare = _INLINE_CODE_RE.sub(" ", text)
+    for match in _DOMAIN_RE.finditer(bare):
+        start, end = match.span()
+        if (start > 0 and bare[start - 1] not in _ARG_BEFORE) or (end < len(bare) and bare[end] not in _ARG_AFTER):
+            continue
         raw_domain = _strip_trailing_punct(match.group(0)).lower()
         parts = raw_domain.split(".")
         tld = parts[-1]

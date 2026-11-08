@@ -351,3 +351,18 @@ async def test_exit_from_root_shell_is_logged_and_restores_cwd(tmp_path):
     cmds = (await db.get_session_details(s.session_id))["commands"]
     assert [(c["command"], c["prompt_user"]) for c in cmds][-1] == ("exit", "root")
     await mgr.close_session(s.session_id)
+
+
+def test_session_keeps_one_honeytoken_set():
+    """Repeated requests for a session's decoy credentials return the same tokens,
+    so a sandbox retry or a later model reply never leaks a second set."""
+    manager = HoneytokenManager(base_url="http://203.0.113.10:8080")
+    first = manager.session_honeytokens("sess-a")
+    again = manager.session_honeytokens("sess-a")
+    assert {k: t.identifier for k, t in first.items()} == {k: t.identifier for k, t in again.items()}
+    assert len(manager.tokens) == 3
+    block = manager.build_injection_prompt_block("sess-a")
+    assert first["aws"].identifier in block and first["api_key"].identifier in block
+    assert len(manager.tokens) == 3
+    other = manager.session_honeytokens("sess-b")
+    assert other["aws"].identifier != first["aws"].identifier

@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, Set, Tuple, List, AsyncGenerator
 from datetime import datetime, timezone
 from fastapi import WebSocket
 
-from doppel.config import DoppelConfig, get_config, get_active_preset
+from doppel.config import DoppelConfig, get_config, get_active_preset, get_presets_dict, resolve_persona_key
 from doppel.deception.honeytokens import derive_canary_base_url, get_honeytoken_manager
 from doppel.ai.llm_client import LLMClient, clients_from_config
 from doppel.ai.deception_engine import DeceptionEngine
@@ -37,7 +37,9 @@ API_SETTINGS: Dict[str, Set[str]] = {
 }
 # These are read when the honeypot starts; the rest apply immediately
 SETTINGS_APPLIED_ON_START = {"honeypot.port", "honeypot.server_banner", "http_sensor_port", "sandbox.memory_limit",
-                             "analytics.max_concurrent_reports", "deception.canary_base_url"}
+                             "analytics.max_concurrent_reports", "deception.canary_base_url",
+                             # The email alerter is built when the honeypot starts
+                             "alerts.email.enabled", "alerts.email.min_threat_score", "alerts.email.receiver_email"}
 
 
 class HoneypotController:
@@ -765,12 +767,12 @@ class HoneypotController:
             "available": False,
             "version": None,
             "enabled": self.config.sandbox.enabled,
-            "detail": "Docker is not running. Honeypot will run in zero-risk LLM simulation mode.",
-            "info": "Docker Sandbox executes safe bash commands (like 'ls' or 'id') in an isolated, disposable container without network egress. If unavailable, Doppel seamlessly uses AI to simulate the bash terminal.",
+            "detail": "Docker is not running. The model will answer every command.",
+            "info": "Runs ordinary commands such as ls or id in a disposable container with no network. Without it, the model answers every command.",
         }
         if not self.config.sandbox.enabled:
             docker_diag["status"] = "disabled"
-            docker_diag["detail"] = "Docker sandbox is disabled in configuration. Using pure LLM simulation."
+            docker_diag["detail"] = "The sandbox is off. The model answers every command."
             if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
                 self.session_manager.sandbox_manager.is_available = False
         else:
@@ -782,7 +784,7 @@ class HoneypotController:
                 docker_diag["status"] = "ready"
                 docker_diag["available"] = True
                 docker_diag["version"] = ver
-                docker_diag["detail"] = f"Docker Desktop is active (Engine v{ver}). Containers are isolated."
+                docker_diag["detail"] = f"Docker {ver} is running."
 
                 if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
                     sm = self.session_manager.sandbox_manager
@@ -794,7 +796,7 @@ class HoneypotController:
             except Exception:
                 docker_diag["status"] = "unavailable"
                 docker_diag["available"] = False
-                docker_diag["detail"] = "Docker Desktop is not running. Safe simulation mode will be used automatically (whitelisted commands will not execute in container isolation)."
+                docker_diag["detail"] = "Docker is not running. The model will answer every command."
                 if self.session_manager and hasattr(self.session_manager, "sandbox_manager"):
                     self.session_manager.sandbox_manager.is_available = False
 
@@ -816,7 +818,7 @@ class HoneypotController:
             "reasoning_models": [],
             "detail": "",
             "suggestion": None,
-            "info": "The LLM powers dynamic terminal simulation, fake honeytoken credentials, and real-time MITRE ATT&CK analysis. Mock Mode runs locally using built-in simulated responses without requiring an AI model or GPU.",
+            "info": "Writes terminal replies and decoy credentials, and tags commands with ATT&CK techniques. Mock mode uses built-in replies and needs no model.",
         }
 
         # Probe LLM backend (even if currently in mock mode, to detect when Ollama comes online)
@@ -873,16 +875,16 @@ class HoneypotController:
                     llm_diag["status"] = "mock_mode"
                     llm_diag["reachable"] = True
                     llm_diag["can_switch_live"] = True
-                    llm_diag["detail"] = f"Mock Mode active. Ollama backend is online ({elapsed_ms}ms) with model '{self.config.llm.model}'."
+                    llm_diag["detail"] = f"Mock mode is on. The model server at {self.config.llm.base_url} is reachable."
                 elif models and not model_found:
                     llm_diag["status"] = "model_missing"
                     llm_diag["reachable"] = True
-                    llm_diag["detail"] = f"Connected to Ollama ({elapsed_ms}ms), but model '{self.config.llm.model}' is not pulled yet."
-                    llm_diag["suggestion"] = f"Run 'ollama pull {self.config.llm.model}' or choose from installed models."
+                    llm_diag["detail"] = f"{self.config.llm.model} is not installed on the model server."
+                    llm_diag["suggestion"] = f"Run 'ollama pull {self.config.llm.model}' or pick an installed model."
                 else:
                     llm_diag["status"] = "ready"
                     llm_diag["reachable"] = True
-                    llm_diag["detail"] = f"Connected to LLM backend ({elapsed_ms}ms). Model '{self.config.llm.model}' is ready."
+                    llm_diag["detail"] = f"Using {self.config.llm.model} at {self.config.llm.base_url}."
 
                 if models and model_found:
                     llm_diag["supports_reasoning"] = await self._model_supports_reasoning(client, base, self.config.llm.model)
@@ -896,20 +898,20 @@ class HoneypotController:
             if self.config.llm.mock_mode:
                 llm_diag["status"] = "mock_mode"
                 llm_diag["reachable"] = False
-                llm_diag["detail"] = "Mock Mode is enabled. Built-in simulated responses will be used (no GPU/model required)."
+                llm_diag["detail"] = "Mock mode is on. Replies come from built-in responses."
             else:
                 llm_diag["status"] = "unreachable"
                 llm_diag["reachable"] = False
-                llm_diag["detail"] = f"Cannot reach endpoint at {self.config.llm.base_url}."
-                llm_diag["suggestion"] = "Start Ollama with 'ollama serve' in PowerShell, or switch to Mock Mode."
+                llm_diag["detail"] = f"Cannot reach {self.config.llm.base_url}."
+                llm_diag["suggestion"] = "Start Ollama (ollama serve) or switch to mock mode."
 
         # 3. Port conflict check
         port_diag = {
             "port": self.config.honeypot.port,
             "available": True,
-            "detail": f"Port {self.config.honeypot.port} is available for SSH listener.",
+            "detail": f"Port {self.config.honeypot.port} is free.",
             "suggested_alternatives": [],
-            "info": "The network port where the honeypot listens for incoming attacker connections. Default is 2222 so it doesn't conflict with your standard SSH port (22).",
+            "info": "The port attackers connect to over SSH. The default, 2222, avoids the host's own SSH server on port 22.",
         }
         # If honeypot is already running, port is occupied by ourselves
         if self.status != "RUNNING":
@@ -920,7 +922,7 @@ class HoneypotController:
                 test_sock.close()
             except Exception:
                 port_diag["available"] = False
-                port_diag["detail"] = f"Port {self.config.honeypot.port} is already in use by another service."
+                port_diag["detail"] = f"Port {self.config.honeypot.port} is in use by another program."
                 # Find available alternatives
                 for alt_port in [2223, 22222, 2022, 2200]:
                     try:
@@ -938,8 +940,8 @@ class HoneypotController:
             "port": http_sensor_port,
             "available": True,
             "enabled": bool(http_sensor_port and http_sensor_port > 0),
-            "detail": f"HTTP sensor port {http_sensor_port} is available." if http_sensor_port > 0 else "HTTP sensor is disabled (port 0).",
-            "info": "Listens for malicious web scanner probes (e.g. requests for /.env, /wp-admin, SQL injection).",
+            "detail": f"Port {http_sensor_port} is free." if http_sensor_port > 0 else "The HTTP decoy is off (port 0).",
+            "info": "Answers web scanners probing for files such as /.env and /wp-admin.",
         }
         if self.status != "RUNNING" and http_sensor_port and http_sensor_port > 0:
             try:
@@ -949,7 +951,7 @@ class HoneypotController:
                 test_h_sock.close()
             except Exception:
                 http_port_diag["available"] = False
-                http_port_diag["detail"] = f"Port {http_sensor_port} is currently in use by another service. HTTP sensor will be disabled automatically or can be configured to an alternate port."
+                http_port_diag["detail"] = f"Port {http_sensor_port} is in use by another program. Pick another port for the HTTP decoy."
 
         return {
             "docker": docker_diag,
@@ -957,8 +959,11 @@ class HoneypotController:
             "port": port_diag,
             "http_port": http_port_diag,
             "persona": {
-                "current": self.config.deception.persona,
-                "info": "Deception Persona defines the system identity, installed fake services, and honeytokens that the attacker discovers during reconnaissance.",
+                "current": resolve_persona_key(self.config),
+                "options": [
+                    {"key": key, "name": p.get("name", key), "summary": p.get("summary", "")}
+                    for key, p in get_presets_dict().items()
+                ],
             },
         }
 

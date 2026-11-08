@@ -49,25 +49,23 @@ document.addEventListener('DOMContentLoaded', () => {
     loadToken: 0,
   };
 
-  // Plain-English Explanations for Info Buttons
+  // Info pop-ups on the setup screen
   const INFO_DEFINITIONS = {
-    llm: `<strong>AI Deception Model</strong><br><br>
-The AI engine dynamically synthesizes authentic Linux terminal outputs, fake system files, and realistic honeytokens (like database passwords and API keys) on the fly. It also acts as your automated SOC analyst, tagging every attacker command with MITRE ATT&CK techniques.<br><br>
-<strong>What is Mock Mode?</strong><br>
-Mock Mode runs Doppel using built-in, realistic pre-programmed responses without connecting to an actual AI model. This is useful for offline testing, code review, or when your GPU / Ollama server is offline.`,
-
-    docker: `<strong>Execution Sandbox (Docker)</strong><br><br>
-Runs standard, safe Linux commands (such as <code>ls</code>, <code>pwd</code>, <code>id</code>) inside an isolated, disposable micro-container with zero network egress (<code>--network none</code>).<br><br>
-<strong>Do I need Docker?</strong><br>
-No! Docker is completely optional. If Docker Desktop is closed, Doppel automatically operates in pure AI simulation mode—the LLM simulates the entire bash environment with zero risk to your host machine.`,
-
-    port: `<strong>SSH Listener Port</strong><br><br>
-The TCP network port where Doppel waits for incoming attacker SSH connections. The default is <code>2222</code> so it does not conflict with your host machine's standard SSH daemon (port 22).<br><br>
-<strong>Port Conflicts:</strong><br>
-If port 2222 is already in use by another program, click one of our 1-click alternative buttons (like 2223 or 22222) to switch ports instantly.`,
-
-    persona: `<strong>Deception Persona</strong><br><br>
-Controls the honeypot's camouflage identity. When an attacker probes with <code>uname</code>, inspects <code>/etc/os-release</code>, or searches for configurations, all responses authentically match this persona (e.g. an Ubuntu 22.04 Web Server vs. an AWS EC2 Worker Node).`
+    llm: {
+      title: 'Model',
+      body: `<p>The model writes replies to commands the sandbox cannot or should not run, fills decoy files with credentials, tags commands with ATT&amp;CK techniques and writes incident reports.</p>
+<p><strong>Mock mode</strong> answers with built-in replies instead. Use it when no model server is available, for example when testing the dashboard.</p>`,
+    },
+    docker: {
+      title: 'Sandbox',
+      body: `<p>Ordinary commands such as <code>ls</code> or <code>id</code> run in a disposable Docker container with no network access, so their output is real.</p>
+<p>The sandbox is optional. Without Docker, or with the sandbox off, the model answers every command.</p>`,
+    },
+    host: {
+      title: 'Host',
+      body: `<p><strong>SSH port</strong> is where attackers connect. The default, 2222, keeps clear of the host's own SSH server on port 22. If the port is taken, pick one of the suggested free ports.</p>
+<p><strong>Persona</strong> is the machine attackers see: its operating system, hostname, login banner, services, files and decoy credentials. Changing it affects new sessions.</p>`,
+    },
   };
 
   // DOM Elements - Views
@@ -115,8 +113,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   const inputCustomPort = document.getElementById('input-custom-port');
   const btnApplyCustomPort = document.getElementById('btn-apply-custom-port');
 
-  const pillPersona = document.getElementById('pill-persona');
-  const personaRadios = document.querySelectorAll('input[name="persona-select"]');
+  const selectPersona = document.getElementById('select-persona');
+  const hintPersona = document.getElementById('hint-persona');
+  let personaName = '';
+  let personaOptions = [];
+  let personaPending = null;  // chosen in the dropdown, not yet confirmed by diagnostics
 
   const launchSummaryDot = document.getElementById('launch-summary-dot');
   const launchSummaryText = document.getElementById('launch-summary-text');
@@ -322,8 +323,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const idx = thinkBlocks.length;
       const isUnclosed = !match.toLowerCase().includes('</think>');
       const summaryLabel = isUnclosed
-        ? (isStreaming ? 'Thought Process' : 'Thought Process (Incomplete)')
-        : 'Thought Process';
+        ? (isStreaming ? 'Reasoning' : 'Reasoning (incomplete)')
+        : 'Reasoning';
       const cursorInside = (isStreaming && isUnclosed) ? '<span class="assistant-streaming-cursor"></span>' : '';
       thinkBlocks.push(
         `<details class="thought-process"${isUnclosed ? ' open' : ''}>` +
@@ -438,6 +439,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   // --- Initialize Telemetry ---
   fetchStatus();
   fetchDiagnostics();
+  fetchSettings();
   fetchSessions();
   fetchCampaigns();
   connectStream();
@@ -519,11 +521,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       } else if (docker.status === 'disabled') {
         dotNavDocker.className = 'subsystem-dot neutral';
         textNavDocker.textContent = 'Sandbox off';
-        navBadgeDocker.title = 'Sandbox disabled in configuration: every command is simulated';
+        navBadgeDocker.title = 'Sandbox off: the model answers every command';
       } else {
         dotNavDocker.className = 'subsystem-dot warning';
         textNavDocker.textContent = 'Sandbox offline';
-        navBadgeDocker.title = 'Docker is not running: every command is simulated';
+        navBadgeDocker.title = 'Docker is not running: the model answers every command';
       }
     }
 
@@ -535,23 +537,23 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       hasCriticalError = true;
       warningItems.push({
         type: 'error',
-        tag: 'LLM Offline',
-        html: `Ollama is unreachable at <code>${escapeHtml(llm.endpoint || 'http://127.0.0.1:11434')}</code>. Start Ollama with <code>ollama serve</code> or switch to Mock Mode.`
+        tag: 'Model offline',
+        html: `Cannot reach the model server at <code>${escapeHtml(llm.endpoint || 'http://127.0.0.1:11434')}</code>. Start it with <code>ollama serve</code> or use mock mode.`
       });
     } else if (llm.status === 'model_missing') {
       hasCriticalError = true;
       warningItems.push({
         type: 'warning',
-        tag: 'Model Missing',
-        html: `Configured model <code>${escapeHtml(llm.configured_model || '')}</code> is not pulled. Run <code>ollama pull ${escapeHtml(llm.configured_model || '')}</code> or switch to Mock Mode.`
+        tag: 'Model not installed',
+        html: `<code>${escapeHtml(llm.configured_model || '')}</code> is not installed. Run <code>ollama pull ${escapeHtml(llm.configured_model || '')}</code> or use mock mode.`
       });
     }
 
     if (docker.status === 'unavailable' && docker.enabled !== false) {
       warningItems.push({
         type: 'warning',
-        tag: 'Docker Offline',
-        html: `Docker Engine is not running. Commands will execute in simulated mode without container isolation.`
+        tag: 'Docker offline',
+        html: `Docker is not running. The model will answer every command.`
       });
     }
 
@@ -560,8 +562,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (!port.available && !listening) {
       warningItems.push({
         type: 'warning',
-        tag: 'Port Busy',
-        html: `SSH port <code>${port.port}</code> is occupied by another service.`
+        tag: 'Port in use',
+        html: `SSH port <code>${port.port}</code> is in use by another program.`
       });
     }
 
@@ -607,26 +609,26 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     // 3. Card 1: LLM Diagnostics
     if (llm.status === 'ready') {
       pillLlm.className = 'diag-pill ready';
-      pillLlm.textContent = `Ready (${llm.latency_ms}ms)`;
+      pillLlm.textContent = `Ready · ${llm.latency_ms} ms`;
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = '';
     } else if (llm.status === 'mock_mode') {
       pillLlm.className = llm.backend_available ? 'diag-pill ready' : 'diag-pill neutral';
-      pillLlm.textContent = llm.backend_available ? 'Mock Mode (Backend Online)' : 'Mock Mode';
+      pillLlm.textContent = 'Mock mode';
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-disable-mock">${llm.backend_available ? 'Connect to Live LLM' : 'Switch to Live LLM'}</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-mock">Use the model</button>
       `;
       document.getElementById('btn-fix-disable-mock')?.addEventListener('click', () => {
         applyQuickFix('toggle_mock', false);
       });
     } else if (llm.status === 'model_missing') {
       pillLlm.className = 'diag-pill warning';
-      pillLlm.textContent = 'Model Missing';
+      pillLlm.textContent = 'Not installed';
       descLlm.textContent = llm.detail;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck Models</button>
-        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Switch to Mock Mode</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Use mock mode</button>
       `;
       document.getElementById('btn-fix-recheck-llm')?.addEventListener('click', () => {
         applyQuickFix('recheck');
@@ -639,8 +641,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       pillLlm.textContent = 'Offline';
       descLlm.textContent = `${llm.detail} ${llm.suggestion || ''}`;
       actionBarLlm.innerHTML = `
-        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck Ollama</button>
-        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Switch to Mock Mode</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-recheck-llm">Recheck</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-enable-mock">Use mock mode</button>
       `;
       document.getElementById('btn-fix-recheck-llm')?.addEventListener('click', () => {
         applyQuickFix('recheck');
@@ -658,6 +660,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       selectLlmModel.appendChild(opt);
     }
     if (llm.models_available && llm.models_available.length > 0) {
+      const modelsKey = llm.models_available.join('|');
+      if (modelsKey !== settingsModels.join('|')) {
+        settingsModels = llm.models_available.slice();
+        if (!Object.keys(changedSettings()).length) renderSettingsPanel();
+      }
       selectLlmModel.innerHTML = '';
       llm.models_available.forEach(m => {
         const opt = document.createElement('option');
@@ -679,7 +686,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         assistantModelSelect.innerHTML = '';
         const defOpt = document.createElement('option');
         defOpt.value = '';
-        defOpt.textContent = `Default (${llm.configured_model || 'System'})`;
+        defOpt.textContent = `Default (${llm.configured_model || 'terminal model'})`;
         if (!currentSelected) {
           defOpt.selected = true;
         }
@@ -706,7 +713,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (docker.status === 'ready' || docker.status === 'disabled') {
       const enabled = docker.status === 'ready';
       pillDocker.className = enabled ? 'diag-pill ready' : 'diag-pill neutral';
-      pillDocker.textContent = enabled ? 'Sandbox On' : 'Sandbox Off';
+      pillDocker.textContent = enabled ? 'On' : 'Off';
       descDocker.textContent = docker.detail;
       actionBarDocker.innerHTML = `
         <label class="switch-row">
@@ -725,11 +732,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       });
     } else {
       pillDocker.className = 'diag-pill warning';
-      pillDocker.textContent = 'Engine Offline';
+      pillDocker.textContent = 'Docker offline';
       descDocker.textContent = docker.detail;
       actionBarDocker.innerHTML = `
         <button type="button" class="btn-quick-fix" id="btn-fix-recheck-docker">Recheck Docker</button>
-        <button type="button" class="btn-quick-fix" id="btn-fix-disable-sandbox">Disable Sandbox (Pure AI Mode)</button>
+        <button type="button" class="btn-quick-fix" id="btn-fix-disable-sandbox">Turn off sandbox</button>
       `;
       document.getElementById('btn-fix-recheck-docker')?.addEventListener('click', () => {
         applyQuickFix('recheck');
@@ -747,21 +754,21 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (listening) {
       pillPort.className = 'diag-pill ready';
       pillPort.textContent = `Listening on ${port.port}`;
-      descPort.textContent = `The SSH listener is accepting connections on port ${port.port}.`;
+      descPort.textContent = `Accepting SSH connections on port ${port.port}.`;
       actionBarPort.innerHTML = '';
     } else if (port.available) {
       pillPort.className = 'diag-pill ready';
-      pillPort.textContent = `Port ${port.port} Free`;
+      pillPort.textContent = 'Free';
       descPort.textContent = port.detail;
       actionBarPort.innerHTML = '';
     } else {
       pillPort.className = 'diag-pill error';
-      pillPort.textContent = `Port ${port.port} Busy!`;
+      pillPort.textContent = 'In use';
       descPort.textContent = port.detail;
 
-      let alternativesHtml = '<span style="font-size:11px;margin-right:4px;">Quick-switch:</span>';
+      let alternativesHtml = '<span class="control-hint">Free ports:</span>';
       (port.suggested_alternatives || [2223, 22222]).forEach(alt => {
-        alternativesHtml += `<button type="button" class="btn-quick-fix btn-alt-port" data-port="${alt}">Use Port ${alt}</button> `;
+        alternativesHtml += `<button type="button" class="btn-quick-fix btn-alt-port" data-port="${alt}">${alt}</button> `;
       });
       actionBarPort.innerHTML = alternativesHtml;
 
@@ -772,39 +779,38 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       });
     }
 
-    // 6. Card 4: Persona
-    if (diag.persona) {
-      const currentPersona = diag.persona.current || 'ubuntu_web_server';
-      personaRadios.forEach(radio => {
-        radio.checked = (radio.value === currentPersona);
-      });
-      const names = {
-        ubuntu_web_server: 'Ubuntu Web Server',
-        cloud_worker: 'AWS Cloud Worker',
-        fintech_api: 'Fintech Gateway'
-      };
-      pillPersona.textContent = names[currentPersona] || currentPersona;
+    // 6. Persona
+    if (diag.persona && selectPersona) {
+      personaOptions = diag.persona.options || [];
+      // A check started before a persona change can still report the old one
+      if (personaPending && diag.persona.current !== personaPending) {
+        showPersona(personaPending);
+      } else {
+        personaPending = null;
+        showPersona(diag.persona.current);
+      }
     }
 
-    // 7. Launch Summary Strip
+    // 7. Summary next to the start button
+    const personaSuffix = personaName ? ` as ${personaName}` : '';
     if (listening) {
       launchSummaryDot.className = 'summary-dot ready';
-      launchSummaryText.textContent = `Running on port ${port.port} with persona: ${pillPersona.textContent}. Changes above apply immediately.`;
+      launchSummaryText.textContent = `Running on port ${port.port}${personaSuffix}.`;
     } else if (!port.available) {
       launchSummaryDot.className = 'summary-dot error';
-      launchSummaryText.textContent = `Port conflict: port ${port.port} is busy. Use a quick-switch alternative above or change ports.`;
+      launchSummaryText.textContent = `Port ${port.port} is in use. Pick another port to start.`;
     } else if (llm.status === 'unreachable') {
       launchSummaryDot.className = 'summary-dot error';
-      launchSummaryText.textContent = `Warning: LLM backend is offline. Start Ollama or switch to Mock Mode before launching.`;
+      launchSummaryText.textContent = 'The model server is unreachable. Start it or use mock mode.';
     } else if (llm.status === 'model_missing') {
       launchSummaryDot.className = 'summary-dot warning';
-      launchSummaryText.textContent = `Warning: Model '${llm.configured_model}' is not pulled. Pull model or switch to Mock Mode.`;
+      launchSummaryText.textContent = `${llm.configured_model} is not installed. Pull it or pick another model.`;
     } else if (docker.status === 'unavailable' && docker.enabled !== false) {
       launchSummaryDot.className = 'summary-dot warning';
-      launchSummaryText.textContent = `Warning: Docker Engine is offline. Honeypot will launch in simulated mode without container isolation.`;
+      launchSummaryText.textContent = 'Docker is not running. The model will answer every command.';
     } else {
       launchSummaryDot.className = 'summary-dot ready';
-      launchSummaryText.textContent = `All subsystems ready. Listening on port ${port.port} with persona: ${pillPersona.textContent}.`;
+      launchSummaryText.textContent = `Ready to start on port ${port.port}${personaSuffix}.`;
     }
   }
 
@@ -822,17 +828,32 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   });
 
-  personaRadios.forEach(radio => {
-    radio.addEventListener('change', async (e) => {
-      await fetch('/api/config', {
-        method: 'POST',
+  function showPersona(key) {
+    const signature = personaOptions.map(o => o.key).join('|');
+    if (selectPersona.dataset.signature !== signature) {
+      selectPersona.innerHTML = personaOptions.map(o =>
+        `<option value="${escapeHtml(o.key)}">${escapeHtml(o.name)}</option>`).join('');
+      selectPersona.dataset.signature = signature;
+    }
+    selectPersona.value = key;
+    const chosen = personaOptions.find(o => o.key === key);
+    personaName = chosen ? chosen.name : key;
+    if (hintPersona) hintPersona.textContent = chosen ? chosen.summary || '' : '';
+  }
+
+  if (selectPersona) {
+    selectPersona.addEventListener('change', async (e) => {
+      personaPending = e.target.value;
+      showPersona(personaPending);
+      await fetch('/api/settings', {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persona: e.target.value, active_preset: e.target.value })
+        body: JSON.stringify({ active_preset: e.target.value, deception: { persona: e.target.value } })
       });
       fetchDiagnostics();
       fetchStatus();
     });
-  });
+  }
 
   // Global Warning Banner Action Listeners
   if (btnBannerRecheck) {
@@ -906,6 +927,240 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   });
 
+  // --- Settings panel: the runtime settings behind GET/PATCH /api/settings ---
+  // Persona, model, sandbox switch and SSH port live in the cards above.
+  // Saved values last until the dashboard restarts; config.yaml holds the defaults.
+  const SETTINGS_GROUPS = [
+    { title: 'Model', fields: [
+      { key: 'llm.timeout_seconds', label: 'Reply timeout', unit: 's', type: 'number', min: 1, step: 1,
+        hint: 'Longest wait for a terminal reply.' },
+      { key: 'llm.temperature', label: 'Temperature', type: 'number', min: 0, max: 2, step: 0.05 },
+      { key: 'llm.analysis_model', label: 'Analysis model', type: 'model',
+        hint: 'Tags commands and writes reports.' },
+      { key: 'llm.analysis_timeout_seconds', label: 'Analysis timeout', unit: 's', type: 'number', min: 1, step: 1 },
+    ] },
+    { title: 'Deception', fields: [
+      { key: 'deception.intercept_sensitive_files', label: 'Decoy credential files', type: 'bool',
+        hint: 'Files such as .env and id_rsa are written by the model instead of read from the sandbox.' },
+      { key: 'deception.intercept_missing_tools', label: 'Simulate missing tools', type: 'bool',
+        hint: 'Tools the sandbox lacks, such as nmap, get model-written output.' },
+      { key: 'deception.dynamic_honeytokens', label: 'Honeytokens', type: 'bool',
+        hint: 'Leaked keys are unique per session and raise an alert when used.' },
+      { key: 'deception.canary_base_url', label: 'Canary URL base', type: 'text', stack: true, placeholder: 'http://203.0.113.10:8080',
+        hint: 'Public address of the HTTP decoy, used in leaked URLs. Leave empty to derive it.' },
+      { key: 'http_sensor_port', label: 'HTTP decoy port', type: 'number', min: 0, max: 65535, step: 1,
+        hint: '0 turns the decoy off.' },
+      { key: 'honeypot.accept_any_password', label: 'Accept any password', type: 'bool' },
+    ] },
+    { title: 'Response timing', fields: [
+      { key: 'deception.simulate_latency', label: 'Match real command timing', type: 'bool',
+        hint: 'Pads fast replies so response time does not give the model away.' },
+      { key: 'deception.jitter_percent', label: 'Jitter', unit: '%', type: 'number', min: 0, max: 100, step: 1 },
+      { key: 'deception.spike_probability', label: 'Lag spike chance', type: 'number', min: 0, max: 1, step: 0.01,
+        hint: '0.1 is one reply in ten.' },
+      { key: 'deception.spike_min_ms', label: 'Lag spike from', unit: 'ms', type: 'number', min: 0, step: 50 },
+      { key: 'deception.spike_max_ms', label: 'Lag spike to', unit: 'ms', type: 'number', min: 0, step: 50 },
+      { key: 'deception.tar_pit_delay_ms', label: 'Tar pit', unit: 'ms', type: 'number', min: 0, step: 100,
+        hint: 'Extra delay per command, tripled for bots.' },
+    ] },
+    { title: 'Sandbox', fields: [
+      { key: 'sandbox.timeout_seconds', label: 'Command timeout', unit: 's', type: 'number', min: 1, step: 1,
+        hint: 'Longest a command may run in the container.' },
+      { key: 'sandbox.memory_limit', label: 'Memory per container', type: 'text', short: true, placeholder: '256m' },
+    ] },
+    { title: 'Analysis', fields: [
+      { key: 'analytics.enable_mitre_tagging', label: 'ATT&CK tagging', type: 'bool' },
+      { key: 'analytics.auto_reports', label: 'Report when a session ends', type: 'bool' },
+      { key: 'analytics.max_concurrent_reports', label: 'Reports at once', type: 'number', min: 1, step: 1 },
+      { key: 'analytics.background_idle_seconds', label: 'Wait for idle terminal', unit: 's', type: 'number', min: 0, step: 1,
+        hint: 'Tagging and reports start once no reply has been requested for this long.' },
+    ] },
+    { title: 'Email alerts', fields: [
+      { key: 'alerts.email.enabled', label: 'Send alerts', type: 'bool',
+        hint: 'The mail server is set in config.yaml.' },
+      { key: 'alerts.email.min_threat_score', label: 'From threat score', type: 'number', min: 0, max: 100, step: 1 },
+      { key: 'alerts.email.receiver_email', label: 'Recipient', type: 'text', stack: true, inputType: 'email' },
+    ] },
+  ];
+  // Read when the honeypot starts (mirrors SETTINGS_APPLIED_ON_START in controller.py)
+  const SETTINGS_ON_START = new Set(['http_sensor_port', 'sandbox.memory_limit', 'analytics.max_concurrent_reports',
+    'deception.canary_base_url', 'alerts.email.enabled', 'alerts.email.min_threat_score', 'alerts.email.receiver_email']);
+
+  const settingsPanel = document.getElementById('settings-panel');
+  const settingsGrid = document.getElementById('settings-grid');
+  const settingsStatus = document.getElementById('settings-status');
+  const btnSettingsSave = document.getElementById('btn-settings-save');
+  const btnSettingsReset = document.getElementById('btn-settings-reset');
+  let currentSettings = null;   // last values from the server, nested
+  let settingsModels = [];      // installed models, for the analysis model list
+
+  const settingsFields = SETTINGS_GROUPS.flatMap(g => g.fields);
+  const settingsFieldByKey = Object.fromEntries(settingsFields.map(f => [f.key, f]));
+
+  function settingValue(obj, key) {
+    return key.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+
+  function settingInputId(key) {
+    return `setting-${key.replace(/\./g, '-')}`;
+  }
+
+  function renderSettingsPanel() {
+    if (!settingsGrid || !currentSettings) return;
+    const running = honeypotStatus === 'RUNNING';
+    settingsGrid.innerHTML = SETTINGS_GROUPS.map(group => `
+      <fieldset class="settings-group">
+        <legend>${escapeHtml(group.title)}</legend>
+        ${group.fields.map(f => {
+          const id = settingInputId(f.key);
+          const value = settingValue(currentSettings, f.key);
+          const onStart = running && SETTINGS_ON_START.has(f.key)
+            ? '<span class="setting-tag" title="Takes effect the next time the honeypot starts">after restart</span>' : '';
+          const hint = f.hint ? `<span class="setting-hint">${escapeHtml(f.hint)}</span>` : '';
+          if (f.type === 'bool') {
+            return `
+              <label class="setting-row setting-bool" for="${id}">
+                <span class="setting-text"><span class="setting-label">${escapeHtml(f.label)}${onStart}</span>${hint}</span>
+                <input type="checkbox" class="switch-input" id="${id}" data-key="${f.key}" ${value ? 'checked' : ''}>
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>`;
+          }
+          let control;
+          if (f.type === 'model') {
+            const models = [...new Set([...(settingsModels || []), value].filter(Boolean))];
+            control = `<select class="select-input" id="${id}" data-key="${f.key}">
+                <option value="">Same as terminal</option>
+                ${models.map(m => `<option value="${escapeHtml(m)}" ${m === value ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')}
+              </select>`;
+          } else {
+            const attrs = f.type === 'number'
+              ? `type="number" inputmode="decimal"${f.min !== undefined ? ` min="${f.min}"` : ''}${f.max !== undefined ? ` max="${f.max}"` : ''}${f.step !== undefined ? ` step="${f.step}"` : ''}`
+              : `type="${f.inputType || 'text'}" spellcheck="false"`;
+            control = `<span class="setting-input-wrap">
+                <input class="text-input-sm setting-input${f.type === 'number' ? ' is-number' : ''}${f.short ? ' is-short' : ''}" id="${id}" data-key="${f.key}" ${attrs}
+                  value="${escapeHtml(value === undefined || value === null ? '' : String(value))}"${f.placeholder ? ` placeholder="${escapeHtml(f.placeholder)}"` : ''}>
+                ${f.stack ? '' : `<span class="setting-unit">${escapeHtml(f.unit || '')}</span>`}
+              </span>`;
+          }
+          return `
+            <div class="setting-row${f.stack ? ' setting-stack' : ''}">
+              <label class="setting-text" for="${id}"><span class="setting-label">${escapeHtml(f.label)}${onStart}</span>${hint}</label>
+              ${control}
+            </div>`;
+        }).join('')}
+      </fieldset>
+    `).join('');
+    updateSettingsDirty();
+  }
+
+  function readSettingInput(el) {
+    const f = settingsFieldByKey[el.dataset.key];
+    if (f.type === 'bool') return el.checked;
+    if (f.type === 'number') return el.value.trim() === '' ? null : Number(el.value);
+    return el.value.trim();
+  }
+
+  function changedSettings() {
+    const changed = {};
+    if (!settingsGrid || !currentSettings) return changed;
+    settingsGrid.querySelectorAll('[data-key]').forEach(el => {
+      const value = readSettingInput(el);
+      if (value !== settingValue(currentSettings, el.dataset.key)) changed[el.dataset.key] = value;
+    });
+    return changed;
+  }
+
+  function updateSettingsDirty() {
+    const dirty = Object.keys(changedSettings()).length > 0;
+    if (btnSettingsSave) btnSettingsSave.disabled = !dirty;
+    if (btnSettingsReset) btnSettingsReset.disabled = !dirty;
+    if (dirty && settingsStatus && settingsStatus.dataset.kind !== 'error') {
+      settingsStatus.textContent = 'Unsaved changes';
+      settingsStatus.dataset.kind = 'pending';
+    } else if (!dirty && settingsStatus && settingsStatus.dataset.kind === 'pending') {
+      settingsStatus.textContent = '';
+      settingsStatus.dataset.kind = '';
+    }
+  }
+
+  function setSettingsStatus(text, kind) {
+    if (!settingsStatus) return;
+    settingsStatus.textContent = text;
+    settingsStatus.dataset.kind = kind || '';
+  }
+
+  async function fetchSettings() {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      currentSettings = await res.json();
+      renderSettingsPanel();
+    } catch (e) {
+      console.error('Error loading settings:', e);
+    }
+  }
+
+  async function saveSettings() {
+    const changed = changedSettings();
+    const keys = Object.keys(changed);
+    if (!keys.length) return;
+    const bad = keys.find(k => changed[k] === null || Number.isNaN(changed[k]));
+    if (bad) {
+      setSettingsStatus(`${settingsFieldByKey[bad].label}: enter a number.`, 'error');
+      return;
+    }
+    // Nest {"llm.timeout_seconds": 60} as {"llm": {"timeout_seconds": 60}}
+    const patch = {};
+    keys.forEach(key => {
+      const parts = key.split('.');
+      let target = patch;
+      parts.slice(0, -1).forEach(p => { target = target[p] = target[p] || {}; });
+      target[parts[parts.length - 1]] = changed[key];
+    });
+    btnSettingsSave.disabled = true;
+    setSettingsStatus('Saving...', 'pending');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // "llm.timeout_seconds: must be greater than zero" -> "Reply timeout: must be greater than zero"
+        let msg = String(data.detail || 'Could not save.');
+        Object.values(settingsFieldByKey).forEach(f => { msg = msg.split(f.key).join(f.label); });
+        setSettingsStatus(msg, 'error');
+        btnSettingsSave.disabled = false;
+        return;
+      }
+      currentSettings = data.settings || currentSettings;
+      renderSettingsPanel();
+      const later = (data.applies_on_next_start || []).length;
+      setSettingsStatus(later ? 'Saved. Some changes apply after a restart.' : 'Saved', 'ok');
+      fetchStatus();
+    } catch (e) {
+      setSettingsStatus('Could not reach the server.', 'error');
+      btnSettingsSave.disabled = false;
+    }
+  }
+
+  if (settingsPanel) {
+    settingsPanel.addEventListener('input', () => {
+      if (settingsStatus && settingsStatus.dataset.kind === 'error') setSettingsStatus('', '');
+      updateSettingsDirty();
+    });
+    settingsPanel.addEventListener('change', updateSettingsDirty);
+    settingsPanel.addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveSettings();
+    });
+    btnSettingsReset?.addEventListener('click', () => {
+      setSettingsStatus('', '');
+      renderSettingsPanel();
+    });
+  }
+
   // --- Info Tooltips Handler ---
   document.querySelectorAll('.info-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -913,14 +1168,8 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       const topic = btn.dataset.info;
       const content = INFO_DEFINITIONS[topic];
       if (content) {
-        const titles = {
-          llm: 'AI Deception Model & Mock Mode',
-          docker: 'Docker Sandbox vs AI Simulation',
-          port: 'SSH Listener Port & Conflicts',
-          persona: 'Deception Personas'
-        };
-        infoModalTitle.textContent = titles[topic] || 'Explanation';
-        infoModalBody.innerHTML = content;
+        infoModalTitle.textContent = content.title;
+        infoModalBody.innerHTML = content.body;
         infoModal.classList.remove('hidden');
       }
     });
@@ -1034,10 +1283,12 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
   }
 
   function updateStatusUI(status, config) {
+    const statusChanged = honeypotStatus !== status;
     honeypotStatus = status;
+    if (statusChanged && currentSettings && !Object.keys(changedSettings()).length) renderSettingsPanel();
     localStorage.setItem('doppel_last_status', status);
     statusDot.className = 'status-dot ' + status.toLowerCase();
-    statusText.textContent = status === 'RUNNING' ? 'Active' : status;
+    statusText.textContent = { RUNNING: 'Running', STOPPED: 'Stopped', STARTING: 'Starting', STOPPING: 'Stopping', ERROR: 'Error' }[status] || status;
 
     if (config) {
       metaPort.textContent = `:${config.honeypot_port}`;
@@ -1049,7 +1300,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
 
     if (btnLaunchPrimaryLabel) {
-      btnLaunchPrimaryLabel.textContent = status === 'RUNNING' ? 'Open Live Dashboard' : 'Start Honeypot';
+      btnLaunchPrimaryLabel.textContent = status === 'RUNNING' ? 'Open dashboard' : 'Start honeypot';
     }
 
     if (status === 'RUNNING') {
@@ -1265,7 +1516,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (activeSessionId === data.session_id) {
         detailLivePill.textContent = 'ENDED';
         detailLivePill.classList.add('ended');
-        setReportStatus(data.stage === 'queued' ? 'queued' : 'compiling', data.message || 'Session closed. Compiling incident report...');
+        setReportStatus(data.stage === 'queued' ? 'queued' : 'compiling', data.message || 'Session ended. Writing the report.');
       }
     } else if (msg.type === 'session_closed') {
       const data = msg.data;
@@ -1557,7 +1808,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (!iocs || !iocs.has_iocs) {
       if (tabBtn) {
         tabBtn.classList.add('disabled');
-        tabBtn.setAttribute('title', 'No links or network IOCs observed in commands');
+        tabBtn.setAttribute('title', 'No indicators in this session');
       }
       if (emptyCard) emptyCard.classList.remove('hidden');
       if (container) container.classList.add('hidden');
@@ -1572,7 +1823,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (container) container.classList.remove('hidden');
 
     if (summaryText) {
-      summaryText.textContent = `${total} Indicator${total !== 1 ? 's' : ''} observed`;
+      summaryText.textContent = `${total} indicator${total !== 1 ? 's' : ''}`;
     }
 
     function renderGroup(groupId, listId, countId, items) {
@@ -1628,7 +1879,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         ];
         navigator.clipboard.writeText(all.join('\n')).then(() => {
           const orig = copyAllBtn.textContent;
-          copyAllBtn.textContent = 'Copied All!';
+          copyAllBtn.textContent = 'Copied';
           setTimeout(() => { copyAllBtn.textContent = orig; }, 1500);
         });
       };
@@ -2037,7 +2288,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     if (reportContent && !reportContent.classList.contains('hidden')) return;
     const state = queuedReportState(activeSessionId);
     if (state === 'running') {
-      setReportStatus('compiling', 'Compiling incident report...');
+      setReportStatus('compiling', 'Writing the report');
     } else if (state === 'queued') {
       setReportStatus('queued', lastBackground.forced
         ? 'Report queued. Starting shortly.'
@@ -2097,11 +2348,13 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     const isLive = sessionsCache[sessionId] && Boolean(sessionsCache[sessionId].is_active);
     const queued = queuedReportState(sessionId);
     if (reportEmpty) {
+      const auto = !currentSettings || !currentSettings.analytics || currentSettings.analytics.auto_reports !== false;
       reportEmpty.textContent = queued
-        ? 'The incident report is queued and will appear here when it is ready.'
+        ? 'The report is queued and appears here when it is ready.'
         : isLive
-          ? 'Report will be compiled automatically when the session terminates. You can also generate now using the Regenerate button.'
-          : 'No report has been compiled for this session yet. Click Regenerate to compile an incident report.';
+          ? (auto ? 'The report is written when the session ends. Select Regenerate to write one now.'
+                  : 'Automatic reports are off. Select Regenerate to write one.')
+          : 'No report yet. Select Regenerate to write one.';
     }
     renderQueuedReportStatus();
   }
@@ -2124,19 +2377,19 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       reportContent.innerHTML = `
         <div class="assistant-loading-indicator">
           <span class="assistant-spinner"></span>
-          <span>Initiating report generation stream...</span>
+          <span>Starting...</span>
         </div>
       `;
     }
     if (reportThoughtBody) reportThoughtBody.innerHTML = '';
     if (reportThoughtWrapper) reportThoughtWrapper.classList.add('hidden');
     if (reportThoughtDetails) reportThoughtDetails.open = true;
-    if (reportThoughtSummary) reportThoughtSummary.textContent = 'Model Reasoning';
+    if (reportThoughtSummary) reportThoughtSummary.textContent = 'Model reasoning';
 
     if (btnStopReport) btnStopReport.classList.remove('hidden');
     if (btnToggleRegenReport) btnToggleRegenReport.classList.add('hidden');
     if (reportRegenCard) reportRegenCard.classList.add('hidden');
-    setReportStatus('reasoning', 'Initiating analysis...');
+    setReportStatus('reasoning', 'Starting');
 
     let accumulatedThought = '';
     let accumulatedContent = '';
@@ -2183,7 +2436,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           try {
             const chunk = JSON.parse(dataStr);
             if (chunk.stage === 'reasoning') {
-              setReportStatus('reasoning', 'Model is reasoning...');
+              setReportStatus('reasoning', 'Reasoning');
               const piece = chunk.thought || chunk.delta || '';
               if (piece) {
                 accumulatedThought += piece;
@@ -2193,7 +2446,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
                 }
               }
             } else if (chunk.stage === 'compiling') {
-              setReportStatus('compiling', 'Compiling markdown report...');
+              setReportStatus('compiling', 'Writing');
               const piece = chunk.content || chunk.delta || '';
               if (piece) {
                 accumulatedContent += piece;
@@ -2208,7 +2461,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
               }
               setReportStatus('ready', 'Completed');
               if (reportContent) {
-                reportContent.innerHTML = renderMarkdown(accumulatedContent || 'Incident report completed.', false);
+                reportContent.innerHTML = renderMarkdown(accumulatedContent || 'The model returned an empty report.', false);
               }
               if (reportThoughtBody && accumulatedThought) {
                 reportThoughtBody.innerHTML = renderMarkdown(accumulatedThought, false);
@@ -2218,15 +2471,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
                 fetchSessionDetails(sessionId);
               }
             } else if (chunk.stage === 'stopped' || chunk.stopped) {
-              setReportStatus('stopped', chunk.message || 'Generation stopped');
+              setReportStatus('stopped', chunk.message || 'Stopped');
               if (reportContent && accumulatedContent) {
                 reportContent.innerHTML = renderMarkdown(accumulatedContent, false) +
-                  '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">[Generation stopped by user]</div>';
+                  '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">Stopped before the report was finished.</div>';
               }
             } else if (chunk.stage === 'error' || chunk.error) {
-              setReportStatus('error', chunk.error || 'Generation failed');
+              setReportStatus('error', chunk.error || 'Failed');
               if (reportContent) {
-                reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Failed to generate report: ${escapeHtml(chunk.error || 'Unknown error')}</div>`;
+                reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Could not write the report: ${escapeHtml(chunk.error || 'unknown error')}</div>`;
               }
             }
           } catch (jsonErr) {
@@ -2251,15 +2504,15 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       }
     } catch (err) {
       if (err.name === 'AbortError') {
-        setReportStatus('stopped', 'Generation stopped by user');
+        setReportStatus('stopped', 'Stopped');
         if (reportContent && accumulatedContent) {
           reportContent.innerHTML = renderMarkdown(accumulatedContent, false) +
-            '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">[Generation stopped by user]</div>';
+            '<div style="color: var(--accent-orange); margin-top: 12px; font-size: 11px;">Stopped before the report was finished.</div>';
         }
       } else {
-        setReportStatus('error', err.message || 'Error streaming report');
+        setReportStatus('error', err.message || 'Could not write the report');
         if (reportContent) {
-          reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Report generation failed: ${escapeHtml(err.message)}</div>`;
+          reportContent.innerHTML = `<div style="color: var(--accent-red); padding: 12px;">Could not write the report: ${escapeHtml(err.message)}</div>`;
         }
       }
     } finally {
@@ -2277,14 +2530,14 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     try {
       const res = await fetch(`/api/sessions/${sessionId}/report`);
       if (res.status === 202) {
-        setReportStatus('compiling', 'Compiling incident report...');
+        setReportStatus('compiling', 'Writing the report');
         if (reportEmpty) reportEmpty.classList.add('hidden');
         if (reportContent) {
           reportContent.classList.remove('hidden');
           reportContent.innerHTML = `
             <div class="assistant-loading-indicator">
               <span class="assistant-spinner"></span>
-              <span>Compiling incident report in background...</span>
+              <span>Writing the report...</span>
             </div>
           `;
         }
@@ -2344,6 +2597,41 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
     }
   }
 
+  // Session facts and command tables shown above and below the written report
+  function reportFacts(session, sessId) {
+    const cached = sessionsCache[sessId] || {};
+    const remoteIp = session.remote_ip || cached.remote_ip || 'unknown';
+    const remotePort = session.remote_port !== undefined && session.remote_port !== null ? session.remote_port : null;
+    const username = session.username || cached.username || 'unknown';
+    const password = (session.password !== undefined && session.password !== null && session.password !== '') ? session.password : '(empty)';
+    const campaign = campaignBySession[sessId] || null;
+    const startIso = session.start_time || cached.start_time || '';
+    const start = startIso ? parseServerTime(startIso) : null;
+    return {
+      source: remotePort !== null ? `${remoteIp}:${remotePort}` : remoteIp,
+      credentials: `${username} / ${password}`,
+      attackerType: session.attacker_type || cached.attacker_type || 'unknown',
+      threatScore: Math.max(0, Math.min(100, Number(session.max_threat_score || cached.max_threat_score || 0))),
+      phase: session.current_phase || cached.current_phase || 'Reconnaissance',
+      // Same source as the campaign card above the tabs
+      campaign: campaign ? (campaign.campaign_title || campaign.campaign_id || 'Campaign') : 'Not linked',
+      started: start && !isNaN(start) ? start.toISOString().replace('T', ' ').substring(0, 19) + ' UTC' : '—',
+      commands: session.commands || [],
+    };
+  }
+
+  const HIGH_RISK_SCORE = 70;
+
+  // "2026-11-07T17:05:40.091245+00:00" -> "2026-11-07 17:05:40" (UTC)
+  function reportTime(value) {
+    const d = parseServerTime(value);
+    return d ? d.toISOString().replace('T', ' ').substring(0, 19) : (value || '—');
+  }
+
+  function techniqueLabel(cmd) {
+    return cmd.technique_id ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}` : '—';
+  }
+
   function updateReportSections(session) {
     if (!session || !activeSessionId) return;
     const sessId = session.session_id || activeSessionId;
@@ -2356,195 +2644,106 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       return;
     }
 
-    const campaign = (typeof campaignBySession !== 'undefined' && campaignBySession[activeSessionId]) || null;
-    const campaignLabel = campaign
-      ? (campaign.campaign_title || campaign.campaign_id || 'Campaign')
-      : (session.campaign_id || session.campaign_title || 'Not linked');
+    const f = reportFacts(session, sessId);
 
-    const remoteIp = session.remote_ip || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].remote_ip) || 'unknown';
-    const remotePort = session.remote_port !== undefined && session.remote_port !== null ? session.remote_port : 0;
-    const fullIp = `${remoteIp}:${remotePort}`;
-
-    const username = session.username || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].username) || 'unknown';
-    const password = (session.password !== undefined && session.password !== null && session.password !== '')
-      ? session.password
-      : '—';
-    const credentials = `${username}:${password}`;
-
-    const attackerType = session.attacker_type
-      || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].attacker_type)
-      || 'unknown';
-    const threatScore = Math.max(0, Math.min(100, Number(session.max_threat_score || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].max_threat_score) || 0)));
-    const attackPhase = session.current_phase
-      || (sessionsCache[activeSessionId] && sessionsCache[activeSessionId].current_phase)
-      || 'Reconnaissance';
-
-    // 1. Session Facts Print Header
     if (reportPrintHeader) {
-      const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
-      const threatScoreNum = threatScore;
-      const threatBadge = threatScoreNum >= 70
-        ? `[★ CRITICAL - THREAT SCORE ${threatScoreNum}/100]`
-        : `[THREAT SCORE ${threatScoreNum}/100]`;
-
       reportPrintHeader.innerHTML = `
         <div class="report-header-banner">
-          <div class="report-classification-bar">
-            <span>OFFICIAL INCIDENT REPORT &bull; STRICTLY CONFIDENTIAL</span>
-            <span>Generated: ${escapeHtml(generatedAt)}</span>
-          </div>
           <div class="report-header-title-row">
-            <h2 class="report-header-title">Incident Response Report</h2>
-            <span class="report-session-pill">Session: ${escapeHtml(sessId)}</span>
+            <h2 class="report-header-title">Incident report</h2>
+            <span class="report-session-pill">${escapeHtml(sessId)}</span>
           </div>
           <div class="report-meta-grid">
             <div class="report-meta-item">
-              <span class="report-meta-label">Target / Source IP</span>
-              <span class="report-meta-val font-mono">${escapeHtml(fullIp)}</span>
+              <span class="report-meta-label">Source</span>
+              <span class="report-meta-val font-mono">${escapeHtml(f.source)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Credentials Used</span>
-              <span class="report-meta-val font-mono">${escapeHtml(credentials)}</span>
+              <span class="report-meta-label">Started</span>
+              <span class="report-meta-val font-mono">${escapeHtml(f.started)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Attacker Classification</span>
-              <span class="report-meta-val">${escapeHtml(attackerType)}</span>
+              <span class="report-meta-label">Credentials</span>
+              <span class="report-meta-val font-mono">${escapeHtml(f.credentials)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Overall Threat Score</span>
-              <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(threatScore)}">${threatScore} / 100</span></span>
+              <span class="report-meta-label">Attacker type</span>
+              <span class="report-meta-val">${escapeHtml(f.attackerType)}</span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Current Attack Phase</span>
-              <span class="report-meta-val">${escapeHtml(attackPhase)}</span>
+              <span class="report-meta-label">Threat score</span>
+              <span class="report-meta-val"><span class="stat-score-pill threat-${threatClass(f.threatScore)}">${f.threatScore} / 100</span></span>
             </div>
             <div class="report-meta-item">
-              <span class="report-meta-label">Correlated Campaign</span>
-              <span class="report-meta-val">${escapeHtml(campaignLabel)}</span>
+              <span class="report-meta-label">Phase</span>
+              <span class="report-meta-val">${escapeHtml(f.phase)}</span>
             </div>
-          </div>
-        </div>
-
-        <div class="print-academic-title-block">
-          <h1 class="print-doc-main-title">INCIDENT REPORT</h1>
-          <div class="print-doc-meta-byline">
-            Session Reference: ${escapeHtml(sessId)} &bull; Target: ${escapeHtml(fullIp)} &bull; ${escapeHtml(threatBadge)}
+            <div class="report-meta-item">
+              <span class="report-meta-label">Campaign</span>
+              <span class="report-meta-val">${escapeHtml(f.campaign)}</span>
+            </div>
           </div>
         </div>
       `;
       reportPrintHeader.classList.remove('hidden');
     }
 
-    const commands = session.commands || [];
-    const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
-    const flaggedKeys = new Set(flaggedCommands.map(c => `${c.timestamp || ''}|${c.command || ''}`));
+    const flagged = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) >= HIGH_RISK_SCORE);
+    const others = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) < HIGH_RISK_SCORE);
 
-    // 2. Flagged Commands (threatScore >= 70)
     if (reportFlaggedSection) {
-      let flaggedTableHtml = '';
-      if (flaggedCommands.length > 0) {
-        const rows = flaggedCommands.map(cmd => {
-          const score = Number(cmd.threat_score) || 0;
-          const tech = cmd.technique_id
-            ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}`
-            : '—';
-          return `
-            <tr>
-              <td class="font-mono text-muted">${escapeHtml(cmd.timestamp || '—')}</td>
-              <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
-              <td><span class="badge-route ${escapeHtml(cmd.route_decision || 'sandbox')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
-              <td><span class="badge-tag">${escapeHtml(tech)}</span></td>
-              <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
-            </tr>
-          `;
-        }).join('');
-
-        flaggedTableHtml = `
-          <div class="report-callout-critical">
-            <div class="report-callout-title">CRITICAL SECURITY ALERT: High-Risk Activity Detected</div>
-            <div class="report-callout-desc">The following commands triggered critical threat heuristics (score &ge; 70) and required containment or deep session observation.</div>
-          </div>
-          <table class="data-table report-table">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Executed Command</th>
-                <th>Route Policy</th>
-                <th>ATT&CK Technique</th>
-                <th>Threat Score</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        `;
-      } else {
-        flaggedTableHtml = `<p class="report-section-empty">No commands exceeded the high-risk threshold (threat score &ge; 70).</p>`;
-      }
-
+      const body = flagged.length
+        ? `<table class="data-table report-table">
+            <thead><tr><th>Time</th><th>Command</th><th>Route</th><th>ATT&amp;CK technique</th><th>Score</th></tr></thead>
+            <tbody>${flagged.map(cmd => {
+              const score = Number(cmd.threat_score) || 0;
+              return `<tr>
+                <td class="font-mono text-muted">${escapeHtml(reportTime(cmd.timestamp))}</td>
+                <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
+                <td><span class="badge-route ${escapeHtml(cmd.route_decision || '')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
+                <td><span class="badge-tag">${escapeHtml(techniqueLabel(cmd))}</span></td>
+                <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`
+        : `<p class="report-section-empty">No command scored ${HIGH_RISK_SCORE} or more.</p>`;
       reportFlaggedSection.innerHTML = `
         <div class="report-section-block">
-          <h3 class="report-section-heading">&bull; Flagged High-Risk Commands (Score &ge; 70)</h3>
-          ${flaggedTableHtml}
+          <h3 class="report-section-heading">High-risk commands (score ${HIGH_RISK_SCORE}+)</h3>
+          ${body}
         </div>
       `;
       reportFlaggedSection.classList.remove('hidden');
     }
 
-    // 3. Command Execution Timeline (Deduplicated: excludes already-flagged commands)
     if (reportTimelineSection) {
-      // Deduplicate: exclude commands already rendered in the Flagged High-Risk table
-      const remainingCommands = commands.filter(c => !flaggedKeys.has(`${c.timestamp || ''}|${c.command || ''}`));
-      let timelineTableHtml = '';
-      if (remainingCommands.length > 0) {
-        const maxPrintCmds = 15;
-        const displayCommands = remainingCommands.slice(0, maxPrintCmds);
-        const rows = displayCommands.map(cmd => {
-          const score = Number(cmd.threat_score) || 0;
-          const tech = cmd.technique_id
-            ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}`
-            : '—';
-          return `
-            <tr>
-              <td class="font-mono text-muted">${escapeHtml(cmd.timestamp || '—')}</td>
-              <td class="font-mono text-muted">${escapeHtml(cmd.cwd || session.cwd || '/home/ubuntu')}</td>
-              <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
-              <td><span class="badge-route ${escapeHtml(cmd.route_decision || 'sandbox')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
-              <td><span class="badge-tag">${escapeHtml(tech)}</span></td>
-              <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
-            </tr>
-          `;
-        }).join('');
-
-        const overflowNotice = remainingCommands.length > maxPrintCmds
-          ? `<div class="report-timeline-overflow">Showing first ${maxPrintCmds} of ${remainingCommands.length} standard commands (high-risk events listed above).</div>`
-          : '';
-
-        timelineTableHtml = `
-          <table class="data-table report-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>CWD</th>
-                <th>Command</th>
-                <th>Route</th>
-                <th>ATT&CK Technique</th>
-                <th>Score</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
+      const shown = 15;
+      let body;
+      if (others.length) {
+        body = `<table class="data-table report-table">
+            <thead><tr><th>Time</th><th>Directory</th><th>Command</th><th>Route</th><th>ATT&amp;CK technique</th><th>Score</th></tr></thead>
+            <tbody>${others.slice(0, shown).map(cmd => {
+              const score = Number(cmd.threat_score) || 0;
+              return `<tr>
+                <td class="font-mono text-muted">${escapeHtml(reportTime(cmd.timestamp))}</td>
+                <td class="font-mono text-muted">${escapeHtml(cmd.cwd || '—')}</td>
+                <td class="font-mono font-semibold">${escapeHtml(cmd.command || '—')}</td>
+                <td><span class="badge-route ${escapeHtml(cmd.route_decision || '')}">${escapeHtml(cmd.route_decision || '—')}</span></td>
+                <td><span class="badge-tag">${escapeHtml(techniqueLabel(cmd))}</span></td>
+                <td><span class="stat-score-pill threat-${threatClass(score)}">${score}</span></td>
+              </tr>`;
+            }).join('')}</tbody>
           </table>
-          ${overflowNotice}
-        `;
-      } else if (commands.length > 0) {
-        timelineTableHtml = `<p class="report-section-empty">All commands recorded in this session exceeded the threat threshold and are detailed in the Flagged section above.</p>`;
+          ${others.length > shown ? `<div class="report-timeline-overflow">First ${shown} of ${others.length}. The Terminal tab has the full session.</div>` : ''}`;
+      } else if (f.commands.length) {
+        body = `<p class="report-section-empty">Every command is listed above.</p>`;
       } else {
-        timelineTableHtml = `<p class="report-section-empty">No commands recorded in this session.</p>`;
+        body = `<p class="report-section-empty">No commands recorded.</p>`;
       }
-
       reportTimelineSection.innerHTML = `
         <div class="report-section-block">
-          <h3 class="report-section-heading">&bull; Additional Command Execution Timeline</h3>
-          ${timelineTableHtml}
+          <h3 class="report-section-heading">Other commands</h3>
+          ${body}
         </div>
       `;
       reportTimelineSection.classList.remove('hidden');
@@ -2652,7 +2851,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
 
     // Markup is built without inter-tag whitespace so layout never depends on
     // template indentation.
-    const reasoningLabel = responseSource === 'rule' ? 'Rule-based response' : 'Model Reasoning';
+    const reasoningLabel = responseSource === 'rule' ? 'Rule-based reply' : 'Model reasoning';
     const reasoningHtml = reasoning
       ? '<details class="terminal-reasoning-details">'
         + `<summary class="terminal-reasoning-summary">${reasoningLabel}</summary>`
@@ -3088,7 +3287,7 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
           console.warn('Error stopping server report task:', e);
         }
       }
-      setReportStatus('stopped', 'Generation stopped by user');
+      setReportStatus('stopped', 'Stopped');
       if (btnStopReport) btnStopReport.classList.add('hidden');
       if (btnToggleRegenReport) btnToggleRegenReport.classList.remove('hidden');
     });
@@ -3132,11 +3331,11 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
         if (textToCopy) {
           await navigator.clipboard.writeText(textToCopy);
           const originalTitle = btnCopyReport.getAttribute('title') || 'Copy report markdown';
-          btnCopyReport.setAttribute('title', 'Copied to clipboard!');
+          btnCopyReport.setAttribute('title', 'Copied');
           const labelSpan = btnCopyReport.querySelector('span');
           if (labelSpan) {
             const originalText = labelSpan.textContent;
-            labelSpan.textContent = 'Copied!';
+            labelSpan.textContent = 'Copied';
             setTimeout(() => {
               labelSpan.textContent = originalText;
               btnCopyReport.setAttribute('title', originalTitle);
@@ -3155,329 +3354,116 @@ Controls the honeypot's camouflage identity. When an attacker probes with <code>
       if (!reportContent || reportContent.classList.contains('hidden') || !reportContent.textContent.trim()) {
         return;
       }
-      exportDedicatedAcademicPdf(activeSessionId);
+      exportReportPdf(activeSessionId);
     });
   }
 
-  function exportDedicatedAcademicPdf(sessionId) {
+  // Print the report from a standalone document in a hidden frame, so none of the
+  // dashboard's layout or colours reach the PDF
+  function exportReportPdf(sessionId) {
     const session = currentSessionDetails || sessionsCache[sessionId] || {};
-    const remoteIp = session.remote_ip || (sessionsCache[sessionId] && sessionsCache[sessionId].remote_ip) || 'unknown';
-    const remotePort = session.remote_port !== undefined && session.remote_port !== null ? session.remote_port : 0;
-    const fullIp = `${remoteIp}:${remotePort}`;
-    const username = session.username || (sessionsCache[sessionId] && sessionsCache[sessionId].username) || 'unknown';
-    const password = (session.password !== undefined && session.password !== null && session.password !== '') ? session.password : '—';
-    const credentials = `${username}:${password}`;
-    const attackerType = session.attacker_type || (sessionsCache[sessionId] && sessionsCache[sessionId].attacker_type) || 'unknown';
-    const threatScore = Math.max(0, Math.min(100, Number(session.max_threat_score || (sessionsCache[sessionId] && sessionsCache[sessionId].max_threat_score) || 0)));
-    const attackPhase = session.current_phase || (sessionsCache[sessionId] && sessionsCache[sessionId].current_phase) || 'Reconnaissance';
-    const campaign = (typeof campaignBySession !== 'undefined' && campaignBySession[sessionId]) || null;
-    const campaignLabel = campaign ? (campaign.campaign_title || campaign.campaign_id || 'Campaign') : (session.campaign_id || session.campaign_title || 'Not linked');
-    const commands = session.commands || [];
-    const flaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) >= 70);
-    const unflaggedCommands = commands.filter(cmd => (Number(cmd.threat_score) || 0) < 70);
-
+    const f = reportFacts(session, sessionId);
+    const flagged = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) >= HIGH_RISK_SCORE);
+    const others = f.commands.filter(cmd => (Number(cmd.threat_score) || 0) < HIGH_RISK_SCORE);
     const generatedAt = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
 
-    // Build the Markdown body content into clean academic HTML
-    let mdBodyHtml = reportContent ? reportContent.innerHTML : '';
-    // Strip redundant markdown headers that repeat the main title
-    mdBodyHtml = mdBodyHtml.replace(/<h1[^>]*>[\s\S]*?Incident Response Report[\s\S]*?<\/h1>/gi, '');
+    // The written report goes under "Analysis": its title is dropped (the document
+    // has one), its headings move down a level, and reasoning and status notes stay on screen
+    const analysisHtml = (reportContent ? reportContent.innerHTML : '')
+      .replace(/<h1[^>]*>[\s\S]*?<\/h1>/i, '')
+      .replace(/<details class="thought-process"[\s\S]*?<\/details>/gi, '')
+      .replace(/<span class="assistant-streaming-cursor"><\/span>/g, '')
+      .replace(/<div style="color: var\(--accent-orange\)[^>]*>[\s\S]*?<\/div>/g, '')
+      .replace(/<(\/?)h([2-5])\b/gi, (m, slash, level) => `<${slash}h${Number(level) + 1}`);
 
-    // Format high-risk flagged commands table
-    let flaggedTableHtml = '';
-    if (flaggedCommands.length > 0) {
-      const rows = flaggedCommands.map(cmd => {
-        const score = Number(cmd.threat_score) || 0;
-        const tech = cmd.technique_id ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}` : '—';
-        return `
+    const commandTable = (rows, bold) => `
+      <table>
+        <thead><tr><th>Time</th><th>Command</th><th>Route</th><th>ATT&amp;CK technique</th><th>Score</th></tr></thead>
+        <tbody>${rows.map(cmd => `
           <tr>
-            <td class="font-mono">${escapeHtml(cmd.timestamp || '—')}</td>
-            <td class="font-mono font-bold">${escapeHtml(cmd.command || '—')}</td>
-            <td>${escapeHtml(cmd.route_decision || 'sandbox')}</td>
-            <td>${escapeHtml(tech)}</td>
-            <td class="font-bold font-mono">${score}</td>
-          </tr>
-        `;
-      }).join('');
-      flaggedTableHtml = `
-        <table class="academic-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Executed Command</th>
-              <th>Route Policy</th>
-              <th>ATT&CK Technique</th>
-              <th>Threat Score</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-    } else {
-      flaggedTableHtml = `<p class="academic-empty">No commands exceeded the threat threshold (threat score &ge; 70).</p>`;
-    }
+            <td class="mono">${escapeHtml(reportTime(cmd.timestamp))}</td>
+            <td class="mono${bold ? ' strong' : ''}">${escapeHtml(cmd.command || '—')}</td>
+            <td>${escapeHtml(cmd.route_decision || '—')}</td>
+            <td>${escapeHtml(techniqueLabel(cmd))}</td>
+            <td class="mono">${Number(cmd.threat_score) || 0}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
 
-    // Format remaining timeline commands table
-    let timelineTableHtml = '';
-    if (unflaggedCommands.length > 0) {
-      const rows = unflaggedCommands.slice(0, 25).map(cmd => {
-        const score = Number(cmd.threat_score) || 0;
-        const tech = cmd.technique_id ? `${cmd.technique_id}${cmd.technique_name ? ` · ${cmd.technique_name}` : ''}` : '—';
-        return `
-          <tr>
-            <td class="font-mono">${escapeHtml(cmd.timestamp || '—')}</td>
-            <td class="font-mono">${escapeHtml(cmd.command || '—')}</td>
-            <td>${escapeHtml(cmd.route_decision || 'sandbox')}</td>
-            <td>${escapeHtml(tech)}</td>
-            <td class="font-mono">${score}</td>
-          </tr>
-        `;
-      }).join('');
-      timelineTableHtml = `
-        <table class="academic-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Executed Command</th>
-              <th>Route Policy</th>
-              <th>ATT&CK Technique</th>
-              <th>Threat Score</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-    }
-
-    const threatStar = threatScore >= 70 ? '★ CRITICAL ALERT' : 'NORMAL OBSERVATION';
-
-    const documentHtml = `
-<!DOCTYPE html>
+    const documentHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Incident Report</title>
+  <title>Incident report ${escapeHtml(sessionId)}</title>
   <style>
-    @page {
-      size: A4 portrait;
-      margin: 0; /* Strips browser-injected header/footer stamps (localhost, URLs, date/time) */
-    }
-    *, *::before, *::after {
-      box-sizing: border-box;
-      -webkit-print-color-adjust: exact !important;
-      print-color-adjust: exact !important;
-    }
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #ffffff;
-      color: #000000;
-      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif;
-      font-size: 11pt;
-      line-height: 1.6;
-    }
-    /* Fixed 4-sided bordered page container */
-    .report-page {
-      width: 210mm;
-      min-height: 297mm;
-      margin: 0 auto;
-      padding: 12mm 15mm;
-      background: #ffffff;
-      page-break-after: always;
-      break-after: page;
-      position: relative;
-    }
-    .report-page:last-child {
-      page-break-after: auto;
-      break-after: auto;
-    }
-    .page-border-box {
-      border: 1.5px solid #000000;
-      width: 100%;
-      min-height: calc(297mm - 24mm);
-      padding: 14mm 16mm;
-      box-sizing: border-box;
-      background: #ffffff;
-    }
-    .doc-main-title {
-      text-align: center;
-      font-size: 22pt;
-      font-weight: 900;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      margin-top: 0;
-      margin-bottom: 24pt;
-      color: #000000;
-      border: none;
-    }
-    /* Clear gap before new subheadings for high visual clarity */
-    .doc-section-heading {
-      font-size: 13.5pt;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-top: 36pt;
-      margin-bottom: 14pt;
-      color: #000000;
-      border: none;
-      text-decoration: none;
-      page-break-after: avoid;
-      break-after: avoid;
-    }
-    .doc-section-heading:first-of-type {
-      margin-top: 18pt;
-    }
-    .doc-subheading {
-      font-size: 11.5pt;
-      font-weight: 700;
-      font-style: italic;
-      margin-top: 20pt;
-      margin-bottom: 8pt;
-      color: #000000;
-    }
-    p {
-      margin-top: 0;
-      margin-bottom: 12pt;
-      text-align: justify;
-      color: #000000;
-      line-height: 1.6;
-    }
-    ul {
-      margin-top: 6pt;
-      margin-bottom: 16pt;
-      padding-left: 24pt;
-      list-style-type: disc;
-    }
-    li {
-      margin-bottom: 6pt;
-      color: #000000;
-      text-align: left;
-    }
-    .font-mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 9.5pt;
-      color: #000000;
-    }
-    .font-bold {
-      font-weight: 700;
-      color: #000000;
-    }
-    .star-highlight {
-      font-weight: 900;
-      color: #000000;
-    }
-    /* Table with complete top border and crisp vertical and horizontal separating lines */
-    .academic-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 14pt 0 18pt 0;
-      border: 1.5px solid #000000;
-      page-break-inside: avoid;
-      break-inside: avoid;
-    }
-    .academic-table thead {
-      display: table-header-group;
-    }
-    .academic-table tr {
-      page-break-inside: avoid;
-      break-inside: avoid;
-    }
-    .academic-table th,
-    .academic-table td {
-      border: 1px solid #000000;
-      padding: 7pt 9pt;
-      font-size: 9pt;
-      text-align: left;
-      vertical-align: middle;
-      color: #000000;
-      line-height: 1.4;
-    }
-    .academic-table th {
-      background: #f1f5f9;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      border-bottom: 1.5px solid #000000;
-      border-top: 1.5px solid #000000;
-    }
-    .academic-table td.center {
-      text-align: center;
-    }
-    .academic-empty {
-      font-style: italic;
-      margin: 10pt 0;
-      color: #000000;
-    }
-    .hidden {
-      display: none !important;
-    }
+    @page { size: A4 portrait; margin: 18mm 16mm; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; background: #fff; color: #000; }
+    body { font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 11pt; line-height: 1.5; }
+    h1 { font-size: 20pt; margin: 0 0 4pt; }
+    .byline { font-size: 9.5pt; color: #444; margin-bottom: 18pt; }
+    h2 { font-size: 13pt; margin: 22pt 0 8pt; break-after: avoid; page-break-after: avoid; }
+    h3 { font-size: 11.5pt; margin: 14pt 0 6pt; break-after: avoid; }
+    h4, h5, h6 { font-size: 11pt; margin: 10pt 0 4pt; break-after: avoid; }
+    p { margin: 0 0 9pt; text-align: justify; }
+    ul { margin: 4pt 0 10pt; padding-left: 20pt; }
+    li { margin-bottom: 3pt; }
+    dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 3pt 14pt; margin: 0; }
+    dl.facts dt { font-weight: 700; }
+    dl.facts dd { margin: 0; }
+    .mono, code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 9pt; }
+    pre { white-space: pre-wrap; border: 1px solid #999; padding: 6pt; }
+    .strong { font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; margin: 6pt 0 12pt; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    th, td { border: 1px solid #000; padding: 4pt 6pt; font-size: 9pt; text-align: left; vertical-align: top; }
+    th { background: #eceff3; }
+    .empty { font-style: italic; }
   </style>
 </head>
 <body>
-  <div class="report-page">
-    <div class="page-border-box">
-      <h1 class="doc-main-title">INCIDENT REPORT</h1>
+  <h1>Incident report</h1>
+  <div class="byline">Session ${escapeHtml(sessionId)} &middot; generated ${escapeHtml(generatedAt)}</div>
 
-      <h2 class="doc-section-heading">1.0 EXECUTIVE SUMMARY &amp; ATTACKER PROFILE</h2>
-      <p>
-        On ${escapeHtml(generatedAt)}, an active intrusion session was detected and captured by the Doppel Autonomous Defense Platform.
-        The security engine correlated the following session telemetry and attack characteristics:
-      </p>
-      <ul>
-        <li><strong>Session Identifier:</strong> <span class="font-mono">${escapeHtml(sessionId)}</span></li>
-        <li><strong>Target / Source IP:</strong> <span class="font-mono">${escapeHtml(fullIp)}</span></li>
-        <li><strong>Credentials Attempted:</strong> <span class="font-mono">${escapeHtml(credentials)}</span></li>
-        <li><strong>Attacker Classification:</strong> ${escapeHtml(attackerType)}</li>
-        <li><strong>Observed Attack Phase:</strong> ${escapeHtml(attackPhase)}</li>
-        <li><strong>Campaign Correlation:</strong> ${escapeHtml(campaignLabel)}</li>
-        <li><strong class="star-highlight">&#9733; Threat Evaluation:</strong> Threat Score <strong>${threatScore} / 100</strong> &mdash; <strong>${threatStar}</strong></li>
-      </ul>
+  <h2>Session</h2>
+  <dl class="facts">
+    <dt>Source</dt><dd class="mono">${escapeHtml(f.source)}</dd>
+    <dt>Started</dt><dd>${escapeHtml(f.started)}</dd>
+    <dt>Credentials</dt><dd class="mono">${escapeHtml(f.credentials)}</dd>
+    <dt>Attacker type</dt><dd>${escapeHtml(f.attackerType)}</dd>
+    <dt>Phase reached</dt><dd>${escapeHtml(f.phase)}</dd>
+    <dt>Threat score</dt><dd>${f.threatScore} / 100</dd>
+    <dt>Campaign</dt><dd>${escapeHtml(f.campaign)}</dd>
+    <dt>Commands</dt><dd>${f.commands.length}</dd>
+  </dl>
 
-      ${flaggedCommands.length > 0 ? `
-        <h2 class="doc-section-heading">2.0 CRITICAL SECURITY FINDINGS (&ge; 70 THREAT SCORE)</h2>
-        <p>
-          &#9733; The following high-risk commands triggered critical threat heuristics and required targeted honeypot deception or containment:
-        </p>
-        ${flaggedTableHtml}
-      ` : ''}
+  <h2>High-risk commands (score ${HIGH_RISK_SCORE}+)</h2>
+  ${flagged.length ? commandTable(flagged, true) : `<p class="empty">No command scored ${HIGH_RISK_SCORE} or more.</p>`}
 
-      <h2 class="doc-section-heading">3.0 MITRE ATT&amp;CK &amp; INCIDENT ANALYSIS</h2>
-      ${mdBodyHtml}
+  <h2>Analysis</h2>
+  ${analysisHtml}
 
-      ${unflaggedCommands.length > 0 ? `
-        <h2 class="doc-section-heading">4.0 COMMAND EXECUTION TIMELINE</h2>
-        <p>Telemetry record of baseline shell interactions observed during this intrusion session:</p>
-        ${timelineTableHtml}
-      ` : ''}
-    </div>
-  </div>
+  ${others.length ? `<h2>Other commands</h2>${commandTable(others, false)}` : ''}
 </body>
-</html>
-    `;
+</html>`;
 
-    // Open clean, isolated print iframe to ensure ZERO web dashboard styles or headers leak
-    let printFrame = document.getElementById('doppel-pdf-print-frame');
+    let printFrame = document.getElementById('report-print-frame');
     if (!printFrame) {
       printFrame = document.createElement('iframe');
-      printFrame.id = 'doppel-pdf-print-frame';
-      printFrame.style.position = 'fixed';
-      printFrame.style.right = '0';
-      printFrame.style.bottom = '0';
-      printFrame.style.width = '0';
-      printFrame.style.height = '0';
-      printFrame.style.border = 'none';
+      printFrame.id = 'report-print-frame';
+      printFrame.setAttribute('aria-hidden', 'true');
+      printFrame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
       document.body.appendChild(printFrame);
     }
-
     const frameDoc = printFrame.contentWindow.document;
     frameDoc.open();
     frameDoc.write(documentHtml);
     frameDoc.close();
-
     setTimeout(() => {
       printFrame.contentWindow.focus();
       printFrame.contentWindow.print();
-    }, 400);
+    }, 300);
   }
 
   // --- AI Assistant & Benchmark Console Logic ---

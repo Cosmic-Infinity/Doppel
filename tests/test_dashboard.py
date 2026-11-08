@@ -454,8 +454,8 @@ def test_reasoning_capability_from_ollama_metadata():
     assert c.calls == 3  # cached per model
 
 
-def test_pdf_export_ui_and_print_styles(client):
-    # Verify index.html contains the Export PDF button and document containers
+def test_pdf_export_ui(client):
+    # The report tab has the export button and the session-facts containers
     res = client.get("/")
     assert res.status_code == 200
     html = res.text
@@ -465,29 +465,17 @@ def test_pdf_export_ui_and_print_styles(client):
     assert 'id="report-flagged-section"' in html
     assert 'id="report-timeline-section"' in html
 
-    # Verify style.css contains @media print rules
-    res_css = client.get("/static/style.css")
-    assert res_css.status_code == 200
-    css = res_css.text
-    assert "@media print" in css
-    assert ".top-nav" in css
-    assert ".sidebar" in css
-    assert ".tabs-bar" in css
-    assert ".report-toolbar" in css
-    assert ".report-regen-card" in css
-    assert ".report-thought-wrapper" in css
-    assert "#btn-open-assistant" in css
-    assert ".modal-backdrop" in css
-    assert "overflow: visible !important" in css
-    assert "height: auto !important" in css
-
-    # Verify app.js contains window.print() and score >= 70 threshold
+    # Export prints a standalone document from a hidden frame, so the dashboard
+    # needs no print stylesheet of its own
     res_js = client.get("/static/app.js")
     assert res_js.status_code == 200
     js = res_js.text
-    assert "window.print()" in js
     assert "btnExportPdf" in js
-    assert ">= 70" in js
+    assert "function exportReportPdf" in js
+    assert "printFrame.contentWindow.print()" in js
+    assert "const HIGH_RISK_SCORE = 70" in js
+    # The PDF states when the session started, not only when it was exported
+    assert "<dt>Started</dt>" in js
 
 
 @pytest.mark.asyncio

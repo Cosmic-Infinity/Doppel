@@ -20,6 +20,7 @@ aliases:
 presets:
   ubuntu_web_server:
     name: "Ubuntu 22.04 LTS Web Server"
+    summary: "Nginx, PHP 8.1, MySQL and a Laravel app"
     server_banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
     hostname: "prod-api-node-01"
     default_user: "ubuntu"
@@ -61,6 +62,7 @@ presets:
 
   fintech_api:
     name: "Debian 12 Payments Staging Server"
+    summary: "FastAPI, PostgreSQL 15, Redis, Stripe and JWT keys"
     server_banner: "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
     hostname: "staging-payments-gw01"
     default_user: "api-runner"
@@ -89,6 +91,7 @@ presets:
 
   cloud_worker:
     name: "Amazon Linux 2023 Kubernetes Node"
+    summary: "EKS worker, containerd, instance metadata credentials"
     server_banner: "SSH-2.0-OpenSSH_8.7"
     hostname: "ip-10-0-2-44.ec2.internal"
     default_user: "ec2-user"

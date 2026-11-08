@@ -341,7 +341,7 @@ curl -X PATCH http://localhost:8000/api/settings -H "Content-Type: application/j
      -d '{"llm": {"timeout_seconds": 60}, "analytics": {"auto_reports": false}}'
 ```
 
-Values are validated against the configuration types and applied together, or not at all (`422` with the reason). Most apply immediately; the response lists under `applies_on_next_start` those that take effect after a Stop and Start (listening ports, SSH banner, sandbox memory limit, report concurrency, canary URL). Changes last until the dashboard restarts; `config.yaml` is not rewritten. API keys, SMTP credentials, file paths, bind addresses, the dashboard allowlist and sandbox network isolation cannot be changed through the API.
+Values are validated against the configuration types and applied together, or not at all (`422` with the reason). Most apply immediately; the response lists under `applies_on_next_start` those that take effect after a Stop and Start (listening ports, SSH banner, sandbox memory limit, report concurrency, canary URL, email alerts). Most of these settings are also on the dashboard's setup screen. Changes last until the dashboard restarts; `config.yaml` is not rewritten. API keys, SMTP credentials, file paths, bind addresses, the dashboard allowlist and sandbox network isolation cannot be changed through the API.
 
 ---
 

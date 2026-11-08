@@ -56,7 +56,7 @@
       </div>
 
       <div class="nav-actions">
-        <button id="btn-open-assistant" class="btn btn-secondary" title="Test model speed and query system intelligence">
+        <button id="btn-open-assistant" class="btn btn-secondary" title="Ask about sessions or test model speed">
           <svg class="btn-svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
           </svg>
@@ -83,40 +83,43 @@
         </div>
         <div class="warning-banner-actions">
           <button type="button" class="btn-banner btn-banner-secondary" id="btn-banner-recheck">Recheck</button>
-          <button type="button" class="btn-banner btn-banner-primary hidden" id="btn-banner-mock">Switch to Mock Mode</button>
-          <button type="button" class="btn-banner-close" id="btn-banner-dismiss" title="Dismiss banner" aria-label="Dismiss">×</button>
+          <button type="button" class="btn-banner btn-banner-primary hidden" id="btn-banner-mock">Use mock mode</button>
+          <button type="button" class="btn-banner-close" id="btn-banner-dismiss" title="Dismiss" aria-label="Dismiss">×</button>
         </div>
       </div>
     </aside>
 
-    <!-- VIEW 1: Pre-Flight Launch & Setup Screen (Shown when Stopped) -->
+    <!-- VIEW 1: Setup (shown when stopped) -->
     <section class="launch-view" id="view-launch">
       <div class="launch-container">
         <div class="launch-header">
-          <h1>System Setup & Diagnostics</h1>
-          <p class="subtitle">Review environment readiness and configure deception parameters before launching.</p>
+          <div class="launch-heading">
+            <h1>Setup</h1>
+            <div class="launch-summary">
+              <span class="summary-dot ready" id="launch-summary-dot"></span>
+              <span class="summary-text" id="launch-summary-text">Checking...</span>
+            </div>
+          </div>
+          <button id="btn-launch-primary" class="btn btn-primary">
+            <span id="btn-launch-primary-label">Start honeypot</span>
+          </button>
         </div>
 
         <div class="diag-grid">
-          <!-- Card 1: LLM Inference & Model -->
+          <!-- Model -->
           <div class="diag-card" id="card-llm">
             <div class="card-header">
               <div class="card-title-wrap">
-                <span class="card-title">AI Deception Model</span>
-                <button class="info-btn" data-info="llm" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
+                <span class="card-title">Model</span>
+                <button class="info-btn" data-info="llm" title="About the model" aria-label="About the model"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
-              <span class="diag-pill" id="pill-llm">Checking...</span>
+              <span class="diag-pill" id="pill-llm">Checking</span>
             </div>
-            <p class="card-desc" id="desc-llm">Probing local Ollama / vLLM endpoint...</p>
-
+            <p class="card-desc" id="desc-llm">Contacting the model server...</p>
             <div class="card-controls">
-              <div class="control-row">
-                <label for="select-llm-model">Active Model</label>
-                <div class="control-inline">
-                  <select id="select-llm-model" class="select-input"></select>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btn-test-model-speed">Test speed</button>
-                </div>
-                <span class="control-hint">Changes apply to new commands immediately.</span>
+              <div class="control-inline">
+                <select id="select-llm-model" class="select-input" aria-label="Model"></select>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-test-model-speed">Test speed</button>
               </div>
               <label class="switch-row" id="row-terminal-reasoning">
                 <input type="checkbox" class="switch-input" id="toggle-terminal-reasoning">
@@ -126,103 +129,66 @@
                   <span class="control-hint" id="hint-terminal-reasoning"></span>
                 </span>
               </label>
-              <div class="card-action-bar" id="action-bar-llm">
-                <!-- 1-Click Fixes dynamically inserted -->
-              </div>
+              <div class="card-action-bar" id="action-bar-llm"></div>
             </div>
           </div>
 
-          <!-- Card 2: Execution Sandbox (Docker) -->
+          <!-- Sandbox -->
           <div class="diag-card" id="card-docker">
             <div class="card-header">
               <div class="card-title-wrap">
-                <span class="card-title">Execution Sandbox</span>
-                <button class="info-btn" data-info="docker" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
+                <span class="card-title">Sandbox</span>
+                <button class="info-btn" data-info="docker" title="About the sandbox" aria-label="About the sandbox"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
-              <span class="diag-pill" id="pill-docker">Checking...</span>
+              <span class="diag-pill" id="pill-docker">Checking</span>
             </div>
-            <p class="card-desc" id="desc-docker">Checking Docker Engine named pipe...</p>
-
+            <p class="card-desc" id="desc-docker">Checking Docker...</p>
             <div class="card-controls">
-              <div class="card-action-bar" id="action-bar-docker">
-                <!-- Docker switch buttons -->
-              </div>
+              <div class="card-action-bar" id="action-bar-docker"></div>
             </div>
           </div>
 
-          <!-- Card 3: SSH Port & Network -->
+          <!-- Host: SSH port and persona -->
           <div class="diag-card" id="card-port">
             <div class="card-header">
               <div class="card-title-wrap">
-                <span class="card-title">SSH Listener Port</span>
-                <button class="info-btn" data-info="port" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
+                <span class="card-title">Host</span>
+                <button class="info-btn" data-info="host" title="About the port and persona" aria-label="About the port and persona"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
               </div>
               <span class="diag-pill" id="pill-port">Port 2222</span>
             </div>
-            <p class="card-desc" id="desc-port">Testing port availability...</p>
-
-            <div class="card-controls card-controls-top">
+            <p class="card-desc" id="desc-port">Checking the port...</p>
+            <div class="card-controls">
               <div class="control-row">
-                <label for="input-custom-port">Port</label>
+                <label for="input-custom-port">SSH port</label>
                 <div class="control-inline">
                   <input type="number" id="input-custom-port" class="text-input-sm" value="2222" min="1" max="65535">
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-custom-port">Apply</button>
                 </div>
                 <span class="control-hint" id="hint-port"></span>
               </div>
-              <div class="card-action-bar" id="action-bar-port">
-                <!-- Quick port alternatives if conflict -->
+              <div class="card-action-bar" id="action-bar-port"></div>
+              <div class="control-row">
+                <label for="select-persona">Persona</label>
+                <select id="select-persona" class="select-input"></select>
+                <span class="control-hint" id="hint-persona"></span>
               </div>
-            </div>
-          </div>
-
-          <!-- Card 4: Deception Persona -->
-          <div class="diag-card" id="card-persona">
-            <div class="card-header">
-              <div class="card-title-wrap">
-                <span class="card-title">Deception Persona</span>
-                <button class="info-btn" data-info="persona" title="What is this?" aria-label="What is this?"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></button>
-              </div>
-              <span class="diag-pill neutral" id="pill-persona">Ubuntu Web Server</span>
-            </div>
-            <p class="card-desc">Defines system files, bash history, services, and bait credentials.</p>
-
-            <div class="persona-selector">
-              <label class="persona-option">
-                <input type="radio" name="persona-select" value="ubuntu_web_server" checked>
-                <div class="persona-box">
-                  <span class="persona-name">Ubuntu 22.04 LTS Web Server</span>
-                  <span class="persona-detail">Nginx, PHP 8.1, MySQL, .env honeytoken keys</span>
-                </div>
-              </label>
-              <label class="persona-option">
-                <input type="radio" name="persona-select" value="fintech_api">
-                <div class="persona-box">
-                  <span class="persona-name">Debian 12 Payments Server</span>
-                  <span class="persona-detail">FastAPI, PostgreSQL 15, Redis, Stripe and JWT keys</span>
-                </div>
-              </label>
-              <label class="persona-option">
-                <input type="radio" name="persona-select" value="cloud_worker">
-                <div class="persona-box">
-                  <span class="persona-name">Amazon Linux 2023 Kubernetes Node</span>
-                  <span class="persona-detail">EKS worker, containerd, instance metadata credentials</span>
-                </div>
-              </label>
             </div>
           </div>
         </div>
 
-        <!-- Launch Action Strip -->
-        <div class="launch-footer">
-          <div class="launch-summary">
-            <span class="summary-dot ready" id="launch-summary-dot"></span>
-            <span class="summary-text" id="launch-summary-text">Ready to launch honeypot.</span>
+        <!-- Settings adjustable at runtime (GET/PATCH /api/settings) -->
+        <form class="settings-panel" id="settings-panel" novalidate>
+          <div class="settings-head">
+            <h2>Settings</h2>
+            <div class="settings-actions">
+              <span class="settings-status" id="settings-status" role="status" aria-live="polite"></span>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-settings-reset" disabled>Discard</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="btn-settings-save" disabled>Save</button>
+            </div>
           </div>
-          <button id="btn-launch-primary" class="btn btn-primary btn-large">
-            <span id="btn-launch-primary-label">Start Honeypot</span>
-          </button>
-        </div>
+          <div class="settings-grid" id="settings-grid"></div>
+        </form>
       </div>
     </section>
 
@@ -375,13 +341,13 @@
 
           <!-- Tab Bar -->
           <div class="tabs-bar">
-            <button class="tab-btn active" data-tab="terminal">Terminal Feed</button>
-            <button class="tab-btn" data-tab="telemetry">MITRE Telemetry</button>
+            <button class="tab-btn active" data-tab="terminal">Terminal</button>
+            <button class="tab-btn" data-tab="telemetry">ATT&amp;CK</button>
             <button class="tab-btn" data-tab="iocs" id="tab-btn-iocs">
               IOCs <span class="badge-count" id="badge-ioc-count">0</span>
             </button>
             <button class="tab-btn" data-tab="replay">Replay</button>
-            <button class="tab-btn" data-tab="report">Incident Report</button>
+            <button class="tab-btn" data-tab="report">Report</button>
           </div>
 
           <!-- Tab 1: Terminal View -->
@@ -418,20 +384,20 @@
           <div class="tab-content" id="tab-iocs">
             <div class="iocs-view" id="iocs-view">
               <div class="iocs-empty-card" id="iocs-empty-card">
-                <p class="iocs-empty-title">No Indicators Detected</p>
-                <p class="iocs-empty-hint">No external URLs, download targets, IP addresses, or foreign domains were referenced in this session's commands.</p>
+                <p class="iocs-empty-title">No indicators</p>
+                <p class="iocs-empty-hint">No URLs, IP addresses or domains appear in this session's commands.</p>
               </div>
 
               <div class="iocs-container hidden" id="iocs-container">
                 <div class="iocs-header-bar">
                   <span class="iocs-summary-text" id="iocs-summary-text">0 Indicators observed</span>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-all-iocs">Copy All IOCs</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-all-iocs">Copy all</button>
                 </div>
 
                 <!-- URLs section -->
                 <div class="ioc-group hidden" id="ioc-group-urls">
                   <div class="ioc-group-header">
-                    <span class="ioc-group-title">Target URLs</span>
+                    <span class="ioc-group-title">URLs</span>
                     <span class="ioc-group-count" id="ioc-count-urls">0</span>
                   </div>
                   <div class="ioc-list" id="ioc-list-urls"></div>
@@ -440,7 +406,7 @@
                 <!-- IPs section -->
                 <div class="ioc-group hidden" id="ioc-group-ips">
                   <div class="ioc-group-header">
-                    <span class="ioc-group-title">External IP Addresses</span>
+                    <span class="ioc-group-title">IP addresses</span>
                     <span class="ioc-group-count" id="ioc-count-ips">0</span>
                   </div>
                   <div class="ioc-list" id="ioc-list-ips"></div>
@@ -449,7 +415,7 @@
                 <!-- Domains section -->
                 <div class="ioc-group hidden" id="ioc-group-domains">
                   <div class="ioc-group-header">
-                    <span class="ioc-group-title">Domains & Hostnames</span>
+                    <span class="ioc-group-title">Domains</span>
                     <span class="ioc-group-count" id="ioc-count-domains">0</span>
                   </div>
                   <div class="ioc-list" id="ioc-list-domains"></div>
@@ -544,14 +510,14 @@
                     </svg>
                     <span>Regenerate</span>
                   </button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-report" title="Copy report markdown">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-report" title="Copy the report text">
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                     </svg>
                     <span>Copy</span>
                   </button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btn-export-pdf" title="Export incident report as PDF">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-export-pdf" title="Save the report as a PDF">
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
                       <polyline points="6 9 6 2 18 2 18 9"></polyline>
                       <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -564,10 +530,10 @@
 
               <!-- Inline Re-generation Prompt Card (Hidden by default) -->
               <div class="report-regen-card hidden" id="report-regen-card">
-                <label for="report-custom-instructions" class="regen-label">Analyst Directives & Focus Areas (Optional)</label>
-                <textarea id="report-custom-instructions" class="regen-textarea" rows="2" placeholder="e.g. Highlight persistence attempts, focus on credential harvesting, format as executive brief..."></textarea>
+                <label for="report-custom-instructions" class="regen-label">Instructions (optional)</label>
+                <textarea id="report-custom-instructions" class="regen-textarea" rows="2" placeholder="For example: focus on persistence and credential theft"></textarea>
                 <div class="regen-actions">
-                  <button type="button" class="btn btn-primary btn-sm" id="btn-submit-regen">Generate Report</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="btn-submit-regen">Write report</button>
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-regen">Cancel</button>
                 </div>
               </div>
@@ -575,13 +541,13 @@
               <!-- Thought process container for reasoning models -->
               <div class="report-thought-wrapper hidden" id="report-thought-wrapper">
                 <details class="thought-process" id="report-thought-details" open>
-                  <summary id="report-thought-summary">Model Reasoning</summary>
+                  <summary id="report-thought-summary">Model reasoning</summary>
                   <div class="thought-body" id="report-thought-body"></div>
                 </details>
               </div>
 
               <div class="report-empty" id="report-empty">
-                Report will be compiled automatically when the session terminates.
+                The report is written when the session ends.
               </div>
 
               <div class="report-print-header hidden" id="report-print-header"></div>
@@ -612,7 +578,7 @@
             <div class="assistant-model-select-wrap">
               <label for="assistant-model-select">Model:</label>
               <select id="assistant-model-select" class="assistant-select">
-                <option value="">Default Configured Model</option>
+                <option value="">Default model</option>
                 <option value="qwen3:14b">qwen3:14b</option>
                 <option value="qwen3.6:27b">qwen3.6:27b</option>
                 <option value="qwen3.6:35b-a3b">qwen3.6:35b-a3b</option>
@@ -675,15 +641,15 @@
       </div>
     </div>
 
-    <!-- Info Explanation Modal (Plain English for all technical terms) -->
+    <!-- Info pop-up -->
     <div class="modal-backdrop hidden" id="info-modal">
       <div class="info-card">
         <div class="info-card-header">
-          <h3 id="info-modal-title">Explanation</h3>
-          <button class="btn-close" id="btn-close-info">&times;</button>
+          <h3 id="info-modal-title">About</h3>
+          <button class="btn-close" id="btn-close-info" aria-label="Close">&times;</button>
         </div>
         <div class="info-card-body">
-          <p id="info-modal-body"></p>
+          <div id="info-modal-body"></div>
         </div>
       </div>
     </div>
