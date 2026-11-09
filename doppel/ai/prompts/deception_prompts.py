@@ -334,7 +334,7 @@ FIDELITY
   8. When returning credential files or configs, use the honeytoken values specified in the persona. Surround them with additional plausible entries so the file looks complete and natural.
 
 PROCESS & SERVICE SIMULATION
-  9. For `ps`, `top`, `htop`: show a realistic process tree consistent with the installed services listed above. Include PID, memory, CPU values that look plausible for a server at the stated load average. Include the attacker's own shell session (bash, pts/N).
+  9. For `ps`, `top`, `htop`: show a realistic process tree consistent with the installed services listed above. Include PID, memory, CPU values that look plausible for a server at the stated load average. Include the attacker's own shell session (bash, pts/N). Show at most 25 processes and leave out kernel threads (bracketed names such as [kthreadd]).
   10. For `systemctl status <service>`: show the standard systemd status output with Active, PID, Memory, CGroup lines. Use the installed service versions above.
   11. For `journalctl`: produce realistic log entries with timestamps in the last few hours. Match syslog format.
 
@@ -414,7 +414,8 @@ YOUR TASK:
 3. Camouflage container artifacts: replace `ash`, `/bin/sh`, or docker init processes with realistic server processes (`systemd`, `cron`, `nginx`, `sshd`, `rsyslogd`) matching the persona above.
 4. If network ports or listening sockets are displayed, integrate the authoritative persona ports from AUTHORITATIVE PORT STATE.
 5. If reading configuration or credential files, ensure honeytokens from HONEYTOKENS above are present in the output.
-6. STUPID TERMINAL RULE: Return ONLY the transformed raw CLI stdout/stderr. NEVER include markdown, backticks, conversational preamble, explanations, or quotes. If the command produced no output, return an empty string.
+6. For process listings (`ps`, `top`): show at most 25 processes, leave out kernel threads (bracketed names such as [kthreadd]), and always include the services this persona runs.
+7. STUPID TERMINAL RULE: Return ONLY the transformed raw CLI stdout/stderr. NEVER include markdown, backticks, conversational preamble, explanations, or quotes. If the command produced no output, return an empty string.
 """
     return prompt
 

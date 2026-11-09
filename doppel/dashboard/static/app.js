@@ -1452,11 +1452,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Update card in DOM if present without wiping the list
       const card = document.querySelector(`.session-card[data-session-id="${data.session_id}"]`);
-      if (sessionsCache[data.session_id]) {
-        const cached = sessionsCache[data.session_id];
-        cached.command_count = (cached.command_count || 0) + 1;
-        cached.last_command = data.command;
-      }
       if (card) {
         const countEl = card.querySelector('.card-cmds');
         if (countEl) countEl.textContent = plural(sessionsCache[data.session_id]?.command_count || 0, 'cmd', 'cmds');
@@ -1625,10 +1620,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Session List & Inspector Logic ---
 
+  function sessionStartMs(sess) {
+    const start = parseServerTime(sessionsCache[sess.session_id]?.start_time);
+    // A session whose start time hasn't arrived yet has only just begun
+    return start ? start.getTime() : Number.MAX_SAFE_INTEGER;
+  }
+
   function renderSessionsList(sessions) {
     sessions.forEach(s => {
       sessionsCache[s.session_id] = Object.assign(sessionsCache[s.session_id] || {}, s);
     });
+
+    // Newest attack first. Live updates arrive in cache order, so sort here.
+    sessions = [...sessions].sort((a, b) => sessionStartMs(b) - sessionStartMs(a));
 
     sessionListCount = sessions.length;
     updateCountPill();

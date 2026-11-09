@@ -210,3 +210,20 @@ async def test_llm_client_streaming_sse_with_reasoning():
         assert chunks[-1]["done"] is True
 
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason, truncated", [("length", True), ("stop", False)])
+async def test_llm_client_reports_token_limit_stops(finish_reason, truncated):
+    from unittest.mock import patch, MagicMock
+
+    client = LLMClient(mock_mode=False)
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "partial"}, "finish_reason": finish_reason}],
+    }
+
+    with patch("httpx.AsyncClient.post", return_value=fake_resp):
+        res = await client.chat_completion_with_metrics([{"role": "user", "content": "ps aux"}])
+    assert res["truncated"] is truncated

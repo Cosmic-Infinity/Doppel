@@ -58,6 +58,12 @@ def _trim_blank_edges(text: str) -> str:
     return re.sub(r"\A(?:[ \t]*\r?\n)+", "", text).rstrip()
 
 
+def _drop_cut_off_line(text: str) -> str:
+    """Remove the unfinished last line of a reply stopped by the token limit."""
+    head, newline, _ = text.rstrip("\n").rpartition("\n")
+    return head if newline else text
+
+
 _CONVERSATIONAL_NON_BINARIES = {
     "what", "why", "how", "when", "where", "tell", "say", "describe",
     "explain", "repeat", "hello", "hi", "hey", "are", "is", "can",
@@ -541,6 +547,8 @@ class DeceptionEngine:
             raw_response = metrics["content"]
             is_fallback = metrics.get("fallback", False) or getattr(self.llm_client, "mock_mode", False)
             stripped_text, reasoning = self.extract_reasoning(raw_response)
+            if metrics.get("truncated"):
+                stripped_text = _drop_cut_off_line(stripped_text)
             cleaned = self._clean_output(stripped_text, command=command, user=user)
 
             if is_fallback:
@@ -651,6 +659,8 @@ class DeceptionEngine:
             stripped_text, reasoning = self.extract_reasoning(raw_response)
             # Models sometimes copy the prompt's section markers into the reply
             stripped_text = _GROUNDED_SCAFFOLD_RE.sub("", stripped_text)
+            if metrics.get("truncated"):
+                stripped_text = _drop_cut_off_line(stripped_text)
             cleaned = self._clean_output(stripped_text, command=command, user=user)
             # If model produced nothing or broke, fall back to real stdout/stderr
             if not cleaned.strip() and (real_stdout or real_stderr):

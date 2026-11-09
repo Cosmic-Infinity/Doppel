@@ -75,6 +75,42 @@ def test_grounded_scaffold_markers_are_removed():
     assert "/sbin/init" in out
 
 
+class _FixedReply(LLMClient):
+    def __init__(self, reply, truncated):
+        super().__init__(mock_mode=False)
+        self.reply, self.truncated = reply, truncated
+
+    async def chat_completion_with_metrics(self, messages, **kwargs):
+        self.system_prompt = messages[0]["content"]
+        return {"content": self.reply, "truncated": self.truncated}
+
+
+CUT_OFF = "USER PID COMMAND\nroot 1 /sbin/init\nroot 945  0.1  0.2"
+
+
+def test_reply_stopped_by_token_limit_loses_its_unfinished_line():
+    grounded = DeceptionEngine(_FixedReply(CUT_OFF, truncated=True))
+    out = asyncio.run(grounded.transform_grounded_output("ps aux", "root 1 /bin/sh\n", "", 0))
+    assert out == "USER PID COMMAND\nroot 1 /sbin/init"
+
+    generated = DeceptionEngine(_FixedReply(CUT_OFF, truncated=True))
+    out = asyncio.run(generated.generate_command_output("nmap -sV 10.0.0.1", "/tmp", "ubuntu"))
+    assert out == "USER PID COMMAND\nroot 1 /sbin/init"
+
+
+def test_complete_reply_keeps_its_last_line():
+    engine = DeceptionEngine(_FixedReply(CUT_OFF, truncated=False))
+    out = asyncio.run(engine.transform_grounded_output("ps aux", "root 1 /bin/sh\n", "", 0))
+    assert out.endswith("root 945  0.1  0.2")
+
+
+def test_process_listings_are_kept_short_in_the_prompt():
+    client = _FixedReply("root 1 /sbin/init", truncated=False)
+    asyncio.run(DeceptionEngine(client).transform_grounded_output("ps aux", "root 1 /bin/sh\n", "", 0))
+    assert "at most 25 processes" in client.system_prompt
+    assert "kernel threads" in client.system_prompt
+
+
 def test_container_artifacts_are_scrubbed():
     engine = _engine()
     df = engine.scrub_container_artifacts(

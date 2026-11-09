@@ -149,6 +149,7 @@ class LLMClient:
                     "latency_seconds": round(elapsed, 3),
                     "tokens_per_second": round(tokens / elapsed, 1),
                     "model": data.get("model", self.model),
+                    "truncated": choice.get("finish_reason") == "length",
                 }
         except Exception as e:
             logger.warning(f"LLM request to {url} failed: {e}. Falling back to mock generator.")
