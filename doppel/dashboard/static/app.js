@@ -992,14 +992,14 @@ document.addEventListener('DOMContentLoaded', () => {
     ] },
     { title: 'Email alerts', column: 1, fields: [
       { key: 'alerts.email.enabled', label: 'Send alerts', type: 'bool',
-        hint: 'Emails the recipient when a session reaches the score below, and again if it rises 25 more. Mail server settings are in config.yaml.' },
+        hint: 'Emails the recipient when a session reaches the score below, and again if it rises 25 more. Saved to .env. Mail server settings are in .env or config.yaml.' },
       { key: 'alerts.email.min_threat_score', label: 'From threat score', type: 'number', min: 0, max: 100, step: 1 },
       { key: 'alerts.email.receiver_email', label: 'Recipient', type: 'text', stack: true, inputType: 'email' },
     ] },
   ];
   // Read when the honeypot starts (mirrors SETTINGS_APPLIED_ON_START in controller.py)
   const SETTINGS_ON_START = new Set(['http_sensor_port', 'sandbox.memory_limit', 'analytics.max_concurrent_reports',
-    'deception.canary_base_url', 'alerts.email.enabled', 'alerts.email.min_threat_score', 'alerts.email.receiver_email']);
+    'deception.canary_base_url']);
 
   const settingsPanel = document.getElementById('settings-panel');
   const settingsGrid = document.getElementById('settings-grid');

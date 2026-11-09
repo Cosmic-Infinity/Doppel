@@ -77,26 +77,8 @@ class SessionManager:
         if alerter is not None:
             self.alerter = alerter
         else:
-            email_cfg = getattr(getattr(config, "alerts", None), "email", None)
-            if email_cfg and getattr(email_cfg, "enabled", False):
-                self.alerter = EmailAlerter(
-                    enabled=email_cfg.enabled,
-                    smtp_server=email_cfg.smtp_server,
-                    smtp_port=email_cfg.smtp_port,
-                    smtp_user=email_cfg.smtp_user,
-                    smtp_password=email_cfg.smtp_password,
-                    use_tls=email_cfg.use_tls,
-                    sender_email=email_cfg.sender_email,
-                    receiver_email=email_cfg.receiver_email,
-                    min_threat_score=email_cfg.min_threat_score,
-                )
-                logger.info(
-                    f"Email alerts on: sending to {email_cfg.receiver_email} via {email_cfg.smtp_server}:{email_cfg.smtp_port} "
-                    f"from threat score {email_cfg.min_threat_score}"
-                )
-            else:
-                self.alerter = None
-                logger.info("Email alerts off")
+            self.alerter = self._email_alerter_from_config()
+            self._log_email_state()
         self.sessions: Dict[str, SessionState] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self.event_callbacks: List[Any] = []
@@ -259,6 +241,42 @@ class SessionManager:
         return head_decision, (res.stdout or "") + (res.stderr or ""), reasoning
 
     _IDENTITY_BINARIES = {"whoami", "id", "uname", "hostname"}
+
+    def _email_alerter_from_config(self) -> Optional[EmailAlerter]:
+        email_cfg = getattr(getattr(self.config, "alerts", None), "email", None)
+        if not email_cfg or not getattr(email_cfg, "enabled", False):
+            return None
+        return EmailAlerter(
+            enabled=email_cfg.enabled,
+            smtp_server=email_cfg.smtp_server,
+            smtp_port=email_cfg.smtp_port,
+            smtp_user=email_cfg.smtp_user,
+            smtp_password=email_cfg.smtp_password,
+            use_tls=email_cfg.use_tls,
+            sender_email=email_cfg.sender_email,
+            receiver_email=email_cfg.receiver_email,
+            min_threat_score=email_cfg.min_threat_score,
+        )
+
+    def _log_email_state(self) -> None:
+        if self.alerter:
+            logger.info(
+                f"Email alerts on: sending to {self.alerter.receiver_email} via {self.alerter.smtp_server}:{self.alerter.smtp_port} "
+                f"from threat score {self.alerter.min_threat_score}"
+            )
+        else:
+            logger.info("Email alerts off")
+
+    def apply_email_settings(self) -> None:
+        """Apply changed email settings to the running honeypot, without alerting sessions twice."""
+        previous, current = self.alerter, self._email_alerter_from_config()
+        key = lambda a: a and (a.receiver_email, a.min_threat_score)
+        if key(previous) == key(current):
+            return
+        if previous and current:
+            current._alerted_sessions = previous._alerted_sessions
+        self.alerter = current
+        self._log_email_state()
 
     def _persona_identity_answer(self, session: "SessionState", command: str) -> Optional[str]:
         """Persona answer for a plain whoami/id/uname/hostname or cat /proc/version, or None to route normally."""

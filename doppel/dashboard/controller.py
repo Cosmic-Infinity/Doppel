@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import WebSocket
 import httpx
 
-from doppel.config import DoppelConfig, get_config, get_active_preset, get_presets_dict, resolve_persona_key
+from doppel.config import DoppelConfig, get_config, get_active_preset, get_presets_dict, resolve_persona_key, write_env_settings
 from doppel.deception.honeytokens import derive_canary_base_url, get_honeytoken_manager
 from doppel.ai.llm_client import LLMClient, clients_from_config
 from doppel.ai.deception_engine import DeceptionEngine
@@ -44,9 +44,9 @@ API_SETTINGS: Dict[str, Set[str]] = {
 }
 # These are read when the honeypot starts; the rest apply immediately
 SETTINGS_APPLIED_ON_START = {"honeypot.port", "honeypot.server_banner", "http_sensor_port", "sandbox.memory_limit",
-                             "analytics.max_concurrent_reports", "deception.canary_base_url",
-                             # The email alerter is built when the honeypot starts
-                             "alerts.email.enabled", "alerts.email.min_threat_score", "alerts.email.receiver_email"}
+                             "analytics.max_concurrent_reports", "deception.canary_base_url"}
+# Saved to .env when changed in the dashboard, so they survive a restart
+SETTINGS_SAVED_TO_ENV = {"alerts.email.enabled", "alerts.email.min_threat_score", "alerts.email.receiver_email"}
 
 
 class HoneypotController:
@@ -722,6 +722,7 @@ class HoneypotController:
             return
 
         preset = get_active_preset(self.config)
+        self.session_manager.apply_email_settings()
 
         if hasattr(self.session_manager, "deception_engine") and self.session_manager.deception_engine:
             target_persona = preset.get("persona_context", self.config.deception.persona) if preset else self.config.deception.persona
@@ -887,6 +888,13 @@ class HoneypotController:
             if getattr(obj, name) != parsed:
                 setattr(obj, name, parsed)
                 changed.append(key)
+        # Submitted values, not only changed ones: .env may have been edited since it was loaded
+        to_save = {key: parsed for key, (_, _, parsed) in staged.items() if key in SETTINGS_SAVED_TO_ENV}
+        if to_save:
+            try:
+                write_env_settings(to_save)
+            except OSError as e:
+                logger.warning(f"Could not save settings to .env; they last until the next restart: {e}")
         self._sync_runtime_components()
         if {"llm.model", "llm.base_url", "llm.mock_mode"} & set(changed):
             self._request_model_load(force=True)

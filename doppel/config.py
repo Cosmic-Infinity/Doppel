@@ -1,5 +1,8 @@
+import os
+import re
+import shutil
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -155,6 +158,49 @@ class DoppelConfig(BaseSettings):
         if Path(yaml_file).exists():
             sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_file))
         return tuple(sources)
+
+
+def _env_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    if text and not re.search(r"""[\s#"'$\\]""", text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def write_env_settings(settings: Dict[str, Any], path: Union[str, Path] = ".env") -> None:
+    """Save settings (dotted names, such as alerts.email.enabled) to a .env file.
+
+    Only those settings' lines change. Comments, other settings, line endings
+    and any hand edits are kept, and settings not yet in the file are appended.
+    """
+    path = Path(path)
+    raw = path.read_bytes().decode("utf-8") if path.exists() else ""
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    lines = raw.replace("\r\n", "\n").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+
+    for name, value in settings.items():
+        key = "DOPPEL_" + name.replace(".", "__").upper()
+        pattern = re.compile(
+            rf"""^(\s*(?:export\s+)?{key}\s*=\s*)(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^#]*?)(\s+#.*)?\s*$""", re.I
+        )
+        found = False
+        for i, line in enumerate(lines):
+            match = pattern.match(line)
+            if match:
+                lines[i] = f"{match.group(1)}{_env_value(value)}{match.group(2) or ''}"
+                found = True
+        if not found:
+            lines.append(f"{key}={_env_value(value)}")
+
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_bytes((newline.join(lines) + newline).encode("utf-8"))
+    if path.exists():
+        shutil.copymode(path, temp)
+    os.replace(temp, path)
 
 
 _CONFIG_INSTANCE: Optional[DoppelConfig] = None

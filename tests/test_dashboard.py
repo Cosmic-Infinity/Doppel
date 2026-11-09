@@ -392,6 +392,47 @@ def test_settings_api_reads_validates_and_applies(client):
         assert "api_key" not in settings["llm"] and "access" not in settings
         assert "email" in settings["alerts"] and "smtp_password" not in settings["alerts"]["email"]
 
+        # Email settings reach a running honeypot at once, without re-alerting a session
+        from doppel.config import DoppelConfig
+        from doppel.core.session_manager import SessionManager
+        running = SessionManager.__new__(SessionManager)
+        running.config, running.alerter = DoppelConfig(), None
+        email = running.config.alerts.email
+        email.enabled, email.receiver_email = True, "first@example.com"
+        running.apply_email_settings()
+        assert running.alerter.receiver_email == "first@example.com"
+        running.alerter._alerted_sessions["s1"] = 70
+        email.receiver_email, email.min_threat_score = "second@example.com", 40
+        running.apply_email_settings()
+        assert (running.alerter.receiver_email, running.alerter.min_threat_score) == ("second@example.com", 40)
+        assert running.alerter._alerted_sessions == {"s1": 70}
+        email.enabled = False
+        running.apply_email_settings()
+        assert running.alerter is None
+
+        # Saving to .env changes only those settings and keeps hand edits
+        import tempfile
+        from pathlib import Path
+        from dotenv import dotenv_values
+        from doppel.config import write_env_settings
+        with tempfile.TemporaryDirectory() as folder:
+            env = Path(folder) / ".env"
+            env.write_bytes(
+                b"# my notes\r\nDOPPEL_LLM__MODEL=qwen3:14b\r\n"
+                b"export DOPPEL_ALERTS__EMAIL__ENABLED=true  # keep this\r\n"
+                b'DOPPEL_ALERTS__EMAIL__RECEIVER_EMAIL="old@example.com"\r\n'
+            )
+            write_env_settings({"alerts.email.enabled": False, "alerts.email.receiver_email": "new@example.com",
+                                "alerts.email.min_threat_score": 40}, env)
+            assert env.read_bytes() == (
+                b"# my notes\r\nDOPPEL_LLM__MODEL=qwen3:14b\r\n"
+                b"export DOPPEL_ALERTS__EMAIL__ENABLED=false  # keep this\r\n"
+                b"DOPPEL_ALERTS__EMAIL__RECEIVER_EMAIL=new@example.com\r\n"
+                b"DOPPEL_ALERTS__EMAIL__MIN_THREAT_SCORE=40\r\n"
+            )
+            values = dotenv_values(env)
+            assert values["DOPPEL_ALERTS__EMAIL__ENABLED"] == "false" and values["DOPPEL_LLM__MODEL"] == "qwen3:14b"
+
         res = client.patch("/api/settings", json={"llm": {"timeout_seconds": 75},
                                                   "analytics": {"auto_reports": False, "background_idle_seconds": 5}})
         assert res.status_code == 200
