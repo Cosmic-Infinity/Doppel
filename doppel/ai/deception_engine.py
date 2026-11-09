@@ -1,6 +1,10 @@
+import hashlib
+import ipaddress
+import random
 import re
 import shlex
 import logging
+import statistics
 from datetime import timedelta
 from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple, Union
 from doppel.ai.llm_client import LLMClient
@@ -56,6 +60,17 @@ _CONTAINER_PATH_RE = re.compile(r"lowerdir=|upperdir=|/var/lib/(?:docker|contain
 def _trim_blank_edges(text: str) -> str:
     """Drop leading blank lines and trailing whitespace, keeping first-line indentation."""
     return re.sub(r"\A(?:[ \t]*\r?\n)+", "", text).rstrip()
+
+
+_PING_DEFAULT_REPLIES = 4
+_PING_MAX_REPLIES = 20
+
+
+def _ping_ms(value: float) -> str:
+    """Round-trip time with the precision iputils prints."""
+    if value < 1:
+        return f"{value:.3f}"
+    return f"{value:.2f}" if value < 10 else f"{value:.1f}"
 
 
 def _drop_cut_off_line(text: str) -> str:
@@ -266,6 +281,89 @@ class DeceptionEngine:
             return name if names else str(gid)
         return " ".join(n if names else str(g) for g, n in groups)
 
+    def _ping_response(self, args: List[str]) -> Optional[str]:
+        """Complete iputils ping output, or None for options left to the model."""
+        count, size, quiet, numeric, target = None, 56, False, False, None
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            option = re.fullmatch(r"-([cisWw])(.*)", arg)
+            if option:
+                flag, value = option.groups()
+                if not value:
+                    i += 1
+                    if i >= len(args):
+                        return None
+                    value = args[i]
+                if flag in "cs":
+                    if not value.isdigit():
+                        return None
+                    if flag == "c":
+                        count = int(value)
+                    else:
+                        size = int(value)
+                elif not re.fullmatch(r"\d+(\.\d+)?", value):
+                    return None
+            elif arg in ("-q", "-n", "-4"):
+                quiet = quiet or arg == "-q"
+                numeric = numeric or arg == "-n"
+            elif arg.startswith("-") or target is not None:
+                return None
+            else:
+                target = arg
+            i += 1
+
+        if target is None:
+            return "ping: usage error: Destination address required"
+        if count == 0 or not 16 <= size <= 65507:
+            return None
+
+        # Resolve the way this host would, and keep each target's address and latency stable
+        lowered = target.lower()
+        name: Optional[str] = None
+        try:
+            address = str(ipaddress.IPv4Address(target))
+        except ValueError:
+            digest = hashlib.sha256(lowered.encode()).digest()
+            if lowered == "localhost":
+                address, name = "127.0.0.1", "localhost"
+            elif lowered == self.host_profile["hostname"].lower():
+                address, name = "127.0.1.1", target
+            elif "." in target:
+                first = (34, 52, 104, 142, 151)[digest[0] % 5]
+                address = f"{first}.{digest[1]}.{digest[2]}.{max(digest[3], 1)}"
+                name = address
+            else:
+                return f"ping: {target}: Name or service not known"
+
+        digest = hashlib.sha256(address.encode()).digest()
+        ip = ipaddress.IPv4Address(address)
+        if ip.is_loopback:
+            ttl, base_ms = 64, 0.04
+        elif ip.is_private:
+            ttl, base_ms = 64, 0.4
+        else:
+            ttl, base_ms = 110 + digest[0] % 12, 6.0 + digest[1] % 40
+
+        # A real ping without -c runs until interrupted, and a long one takes minutes
+        interrupted = count is None or count > _PING_MAX_REPLIES
+        replies = _PING_DEFAULT_REPLIES if count is None else min(count, _PING_MAX_REPLIES)
+        times = [base_ms * random.uniform(0.92, 1.12) for _ in range(replies)]
+
+        source = address if numeric or name is None else f"{name} ({address})"
+        lines = [f"PING {target} ({address}) {size}({size + 28}) bytes of data."]
+        if not quiet:
+            lines += [f"{size + 8} bytes from {source}: icmp_seq={n} ttl={ttl} time={_ping_ms(ms)} ms" for n, ms in enumerate(times, 1)]
+        lines.append("^C" if interrupted else "")
+
+        elapsed = 0 if replies == 1 else (replies - 1) * 1000 + random.randint(1, 12)
+        lines += [
+            f"--- {target} ping statistics ---",
+            f"{replies} packets transmitted, {replies} received, 0% packet loss, time {elapsed}ms",
+            f"rtt min/avg/max/mdev = {min(times):.3f}/{statistics.fmean(times):.3f}/{max(times):.3f}/{statistics.pstdev(times):.3f} ms",
+        ]
+        return "\n".join(lines)
+
     def _uname_response(self, args: List[str]) -> Optional[str]:
         wanted = set()
         for arg in args:
@@ -383,6 +481,9 @@ class DeceptionEngine:
 
         if binary == "cat" and args == ["/proc/version"]:
             return self._proc_version_line()
+
+        if binary in ("ping", "/bin/ping", "/usr/bin/ping"):
+            return self._ping_response(args)
 
         if binary in ("true", ":"):
             return ""

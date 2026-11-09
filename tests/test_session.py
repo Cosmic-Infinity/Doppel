@@ -475,6 +475,21 @@ def test_deterministic_posix_response():
     assert "ubuntu" in who_am_i
     assert "pts/0" in who_am_i
 
+    # ping -> complete output without the model, stable address per target
+    one = engine.deterministic_posix_response("ping -c 1 8.8.8.8", user="ubuntu")
+    assert one.startswith("PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.\n64 bytes from 8.8.8.8: icmp_seq=1 ")
+    assert "\n\n--- 8.8.8.8 ping statistics ---\n1 packets transmitted, 1 received, 0% packet loss, time 0ms\nrtt min/avg/max/mdev = " in one
+    named = engine.deterministic_posix_response("ping -c 3 google.com", user="ubuntu")
+    assert "icmp_seq=3" in named and "icmp_seq=4" not in named
+    assert named.splitlines()[0] == engine.deterministic_posix_response("ping -c3 google.com", user="ubuntu").splitlines()[0]
+    endless = engine.deterministic_posix_response("ping 8.8.8.8", user="ubuntu")
+    assert "icmp_seq=4" in endless and "icmp_seq=5" not in endless and "\n^C\n---" in endless
+    assert "icmp_seq=" not in engine.deterministic_posix_response("ping -q -c 2 8.8.8.8", user="ubuntu")
+    assert engine.deterministic_posix_response("ping nosuchhost", user="ubuntu") == "ping: nosuchhost: Name or service not known"
+    assert engine.deterministic_posix_response("ping", user="ubuntu") == "ping: usage error: Destination address required"
+    assert engine.deterministic_posix_response("ping -f 8.8.8.8", user="ubuntu") is None
+    assert engine.deterministic_posix_response("ping -c 1 8.8.8.8 | tail -1", user="ubuntu") is None
+
     # whoami -> username
     whoami = engine.deterministic_posix_response("whoami", user="ubuntu")
     assert whoami == "ubuntu"
