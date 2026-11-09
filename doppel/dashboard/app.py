@@ -22,6 +22,10 @@ async def lifespan(_app: FastAPI):
     # Open the telemetry database so history is readable before the honeypot starts
     await controller.initialize()
     yield
+    try:
+        await asyncio.wait_for(controller.release_model(), timeout=10)
+    except asyncio.TimeoutError:
+        logger.warning("Timed out unloading the model during shutdown")
 
 
 app = FastAPI(title="Doppel Control Center", version="0.1.0", lifespan=lifespan)
@@ -58,6 +62,15 @@ class ConfigUpdateRequest(BaseModel):
 class QuickFixRequest(BaseModel):
     action: str
     value: Any = None
+    confirm: bool = False  # proceed even if work on the current model would be interrupted
+
+
+def _needs_confirmation(message: str, stopping: bool = False) -> Optional[JSONResponse]:
+    """409 listing what the action would interrupt, or None when nothing would be."""
+    busy = controller.model_busy_work(stopping=stopping)
+    if not busy:
+        return None
+    return JSONResponse(status_code=409, content={"confirm_required": True, "message": message, "interrupted": busy})
 
 
 class AssistantChatRequest(BaseModel):
@@ -79,6 +92,10 @@ async def get_diagnostics():
 
 @app.post("/api/quick-fix")
 async def apply_quick_fix(req: QuickFixRequest):
+    if req.action == "set_model" and not req.confirm and str(req.value) != controller.config.llm.model:
+        blocked = _needs_confirmation("Switching models will interrupt:")
+        if blocked:
+            return blocked
     res = await controller.apply_quick_fix(req.action, req.value)
     diag = await controller.diagnose_environment()
     return {"result": res, "diagnostics": diag}
@@ -143,7 +160,11 @@ async def start_honeypot():
 
 
 @app.post("/api/stop")
-async def stop_honeypot():
+async def stop_honeypot(confirm: bool = False):
+    if not confirm and controller.status == "RUNNING":
+        blocked = _needs_confirmation("Stopping the honeypot will interrupt:", stopping=True)
+        if blocked:
+            return blocked
     res = await controller.stop()
     return res
 
@@ -176,11 +197,16 @@ async def get_settings_endpoint():
 
 
 @app.patch("/api/settings")
-async def update_settings_endpoint(patch: Dict[str, Any]):
+async def update_settings_endpoint(patch: Dict[str, Any], confirm: bool = False):
     """Change any subset of the settings returned by GET /api/settings, for example
     {"llm": {"timeout_seconds": 60}, "analytics": {"auto_reports": false}}.
     Values are validated and applied together, or not at all. Changes last until the
     dashboard restarts; `applies_on_next_start` lists those that need a Stop and Start."""
+    new_model = (patch.get("llm") or {}).get("model")
+    if new_model and new_model != controller.config.llm.model and not confirm:
+        blocked = _needs_confirmation("Switching models will interrupt:")
+        if blocked:
+            return blocked
     try:
         return controller.update_settings(patch)
     except ValueError as e:

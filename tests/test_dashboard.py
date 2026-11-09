@@ -114,6 +114,40 @@ def test_dashboard_quick_fix_endpoint(client):
                 time.sleep(0.02)
             assert state["state"] == "ready" and state["model"] == "demo-model:1b"
             load.assert_awaited_once_with("demo-model:1b")
+
+        # Stopping or exiting frees the model's memory
+        with mock_patch.object(controller, "_unload_model", AsyncMock()) as unload:
+            asyncio.run(controller.release_model())
+            unload.assert_awaited_once_with("demo-model:1b")
+            assert controller.model_load["state"] == "unloaded"
+            asyncio.run(controller.release_model())
+            unload.assert_awaited_once()
+
+        # Interrupting work needs confirming, in the dashboard and at the terminal
+        import signal
+        import uvicorn
+        from doppel.dashboard.exit_guard import ConfirmingServer
+        busy = MagicMock(sessions={"s1": object()})
+        busy.background.status.return_value = {"running": "report", "reports": 1, "tagging": 2}
+        saved = controller.session_manager, controller.status
+        try:
+            controller.session_manager, controller.status = busy, "RUNNING"
+            res = client.post("/api/quick-fix", json={"action": "set_model", "value": "other:1b"})
+            assert res.status_code == 409 and "an incident report being written" in res.json()["interrupted"]
+            assert controller.config.llm.model == "demo-model:1b"
+            res = client.patch("/api/settings", json={"llm": {"model": "other:1b"}})
+            assert res.status_code == 409
+            res = client.post("/api/stop")
+            assert res.status_code == 409 and "ATT&CK tagging for 2 commands" in res.json()["interrupted"]
+            assert controller.status == "RUNNING"
+
+            server = ConfirmingServer(uvicorn.Config(app), controller)
+            server.handle_exit(signal.SIGINT, None)
+            assert not server.should_exit
+            server.handle_exit(signal.SIGINT, None)
+            assert server.should_exit
+        finally:
+            controller.session_manager, controller.status = saved
     finally:
         controller.config.llm.model, controller.config.llm.mock_mode = orig_model, orig_mock
 

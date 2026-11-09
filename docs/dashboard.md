@@ -3,7 +3,7 @@
 `python -m doppel.cli dashboard` serves the dashboard on port 8000.
 
 - **Setup screen**: diagnostics (Docker, model endpoint and model, reasoning support, port conflicts) with one-click fixes, the persona list, and the settings exposed by the control API. Settings that apply only after a restart are marked.
-- **Header**: honeypot state and port, model and sandbox health, and the analysis queue. Switching models or starting the honeypot loads the model at once, and the header shows the swap as it happens (`Swapping out <old>`, `Loading <new>`) until the model is ready. With Ollama, the model is kept loaded while the honeypot runs, and for 30 minutes after a switch.
+- **Header**: honeypot state and port, model and sandbox health, and the analysis queue. Switching models or starting the honeypot loads the model at once, and the header shows the swap as it happens (`Swapping out <old>`, `Loading <new>`) until the model is ready. With Ollama, the model is kept loaded while the honeypot runs, and for 30 minutes after a switch made while it is stopped. Stopping the honeypot or exiting Doppel unloads it at once. If that, or a model switch, would interrupt analysis, a report, an assistant reply or a live session, the dashboard asks first, and in the terminal a second Ctrl+C within 10 seconds confirms.
 - **Sessions**: search by IP, user or campaign; filter by threat level, attacker type, campaign and date, or show live sessions only.
 - **Session views**: Terminal (commands, routes, timing and model reasoning), ATT&CK, IOCs, Replay (original pacing, speed control, stepping) and Report (streamed while it is written; copy or export as PDF).
 - **Campaigns**: linked sessions and the reasons they were linked.
@@ -49,7 +49,7 @@ Everything the dashboard does goes through a REST API, so Doppel can be scripted
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/status`, `GET /api/diagnostics` | State, active settings, analysis queue, environment checks |
-| `POST /api/start`, `POST /api/stop` | Start or stop the honeypot |
+| `POST /api/start`, `POST /api/stop` | Start or stop the honeypot. Returns `409` listing what would be interrupted unless `?confirm=true` is given (model switches likewise: `"confirm": true` in quick-fix, `?confirm=true` on settings) |
 | `GET /api/settings`, `PATCH /api/settings` | Read or change settings |
 | `POST /api/quick-fix` | `set_model`, `set_terminal_reasoning`, `set_auto_reports`, `toggle_sandbox`, `recheck` |
 | `POST /api/background/run-now` | Run queued analysis now |

@@ -485,13 +485,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Runs an action; if the server says it would interrupt work, asks first. Null when declined.
+  async function withInterruptConfirm(send) {
+    const res = await send(false);
+    if (res.status !== 409) return res;
+    const info = await res.json();
+    const list = (info.interrupted || []).map(item => `- ${item}`).join('\n');
+    if (!confirm(`${info.message}\n\n${list}\n\nContinue?`)) return null;
+    return send(true);
+  }
+
   async function applyQuickFix(action, value) {
     try {
-      const res = await fetch('/api/quick-fix', {
+      const res = await withInterruptConfirm(confirmed => fetch('/api/quick-fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, value })
-      });
+        body: JSON.stringify({ action, value, confirm: confirmed })
+      }));
+      if (!res) {
+        if (action === 'set_model') selectLlmModel.value = currentModel;
+        return;
+      }
       const data = await res.json();
       if (data.diagnostics) {
         renderDiagnosticsUI(data.diagnostics);
@@ -904,7 +918,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function stopHoneypot() {
     btnToggle.disabled = true;
     try {
-      await fetch('/api/stop', { method: 'POST' });
+      await withInterruptConfirm(confirmed => fetch(`/api/stop${confirmed ? '?confirm=true' : ''}`, { method: 'POST' }));
     } catch (e) {
       console.error('Error stopping honeypot:', e);
     } finally {
@@ -1286,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `Unloading ${modelLoad.model} to make room for ${modelLoad.target}.`
         : `Unloading ${modelLoad.model} from memory.`;
     } else if (modelLoad.state === 'unloaded') {
-      descLlm.textContent = `${modelLoad.model} is not loaded. It loads again when the honeypot starts.`;
+      descLlm.textContent = `${modelLoad.model} is not loaded. It loads when the honeypot starts.`;
     } else if (modelLoad.state === 'failed') {
       descLlm.textContent = `Could not load ${modelLoad.model}: ${modelLoad.error || 'unknown error'}`;
     }

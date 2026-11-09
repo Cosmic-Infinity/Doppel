@@ -261,7 +261,14 @@ def dashboard(
         border_style="cyan"
     ))
 
-    uvicorn.run(fastapi_app, host=host, port=port, log_level="debug" if verbose else "info")
+    from doppel.dashboard.exit_guard import ConfirmingServer
+
+    server = ConfirmingServer(
+        uvicorn.Config(fastapi_app, host=host, port=port, log_level="debug" if verbose else "info"), controller
+    )
+    server.run()
+    if not server.started:
+        sys.exit(3)
 
 
 if __name__ == "__main__":

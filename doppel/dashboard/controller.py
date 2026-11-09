@@ -293,6 +293,7 @@ class HoneypotController:
                 "status": self.status,
                 "start_time": None,
             })
+            await self.release_model()
             return {"status": self.status, "message": "Honeypot stopped"}
         except Exception as e:
             logger.error(f"Error stopping honeypot: {e}")
@@ -643,7 +644,7 @@ class HoneypotController:
         while renewable:
             await asyncio.sleep(MODEL_KEEP_WARM_INTERVAL_SECONDS)
             within_grace = time.monotonic() - self._model_load_requested_at < MODEL_KEEP_WARM_AFTER_SWITCH_SECONDS
-            if self.status != "RUNNING" and not within_grace:
+            if self.status != "RUNNING" and not within_grace and not self.model_busy_work():
                 self._set_model_load("unloading", model)
                 await self._unload_model(model)
                 self._set_model_load("unloaded", model)
@@ -657,6 +658,50 @@ class HoneypotController:
             except Exception as e:
                 logger.warning(f"Could not keep {model} loaded: {e}")
                 self._set_model_load("failed", model, error=str(e)[:200] or type(e).__name__)
+
+    def model_busy_work(self, stopping: bool = False) -> List[str]:
+        """What unloading the model would interrupt, in words for a confirmation.
+
+        Stopping cancels queued analysis as well; a model switch leaves it for the new model.
+        """
+        def count(n: int, noun: str) -> str:
+            return f"{n} {noun}{'' if n == 1 else 's'}"
+
+        busy: List[str] = []
+        manager = self.session_manager
+        if manager:
+            bg = manager.background.status()
+            if stopping:
+                if bg["reports"]:
+                    busy.append(count(bg["reports"], "incident report"))
+                if bg["tagging"]:
+                    busy.append(f"ATT&CK tagging for {count(bg['tagging'], 'command')}")
+            elif bg["running"] == "report":
+                busy.append("an incident report being written")
+            elif bg["running"]:
+                busy.append("ATT&CK tagging in progress")
+            if manager.sessions:
+                busy.append(count(len(manager.sessions), "live session"))
+        reports = sum(not t.done() for t in self.active_report_tasks.values())
+        if reports:
+            busy.append(count(reports, "report") + " being generated from the dashboard")
+        chats = sum(not t.done() for t in self.active_assistant_tasks.values())
+        if chats:
+            busy.append(f"{chats} assistant {'reply' if chats == 1 else 'replies'}")
+        return busy
+
+    async def release_model(self) -> None:
+        """Stop keeping the model warm and free its memory (shared machines need it back)."""
+        if self._model_load_task and not self._model_load_task.done():
+            self._model_load_task.cancel()
+        model = self.model_load.get("model")
+        if self.config.llm.mock_mode or not model or self.model_load["state"] in ("idle", "unloaded"):
+            return
+        self._set_model_load("unloading", model)
+        for name in {model, self.config.llm.analysis_model} - {"", None}:
+            await self._unload_model(name)
+        self._set_model_load("unloaded", model)
+        logger.info(f"Model {model} unloaded")
 
     def _model_server_root(self) -> str:
         base = self.config.llm.base_url.rstrip("/")
