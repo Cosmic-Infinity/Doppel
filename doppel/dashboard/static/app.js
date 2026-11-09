@@ -1281,6 +1281,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!descLlm || !modelLoad) return;
     if (modelLoad.state === 'loading') {
       descLlm.textContent = `Loading ${modelLoad.model} into memory.`;
+    } else if (modelLoad.state === 'unloading') {
+      descLlm.textContent = modelLoad.target
+        ? `Unloading ${modelLoad.model} to make room for ${modelLoad.target}.`
+        : `Unloading ${modelLoad.model} from memory.`;
+    } else if (modelLoad.state === 'unloaded') {
+      descLlm.textContent = `${modelLoad.model} is not loaded. It loads again when the honeypot starts.`;
     } else if (modelLoad.state === 'failed') {
       descLlm.textContent = `Could not load ${modelLoad.model}: ${modelLoad.error || 'unknown error'}`;
     }
@@ -1295,6 +1301,16 @@ document.addEventListener('DOMContentLoaded', () => {
       dotNavLlm.className = 'subsystem-dot checking';
       textNavLlm.textContent = `Loading ${modelLoad.model}`;
       navBadgeLlm.title = `Loading ${modelLoad.model} into memory`;
+    } else if (modelLoad && modelLoad.state === 'unloading') {
+      dotNavLlm.className = 'subsystem-dot checking';
+      textNavLlm.textContent = `${modelLoad.target ? 'Swapping out' : 'Unloading'} ${modelLoad.model}`;
+      navBadgeLlm.title = modelLoad.target
+        ? `Replacing ${modelLoad.model} with ${modelLoad.target}`
+        : `Unloading ${modelLoad.model} from memory`;
+    } else if (modelLoad && modelLoad.state === 'unloaded') {
+      dotNavLlm.className = 'subsystem-dot neutral';
+      textNavLlm.textContent = `${modelLoad.model} unloaded`;
+      navBadgeLlm.title = `${modelLoad.model} is not in memory`;
     } else if (modelLoad && modelLoad.state === 'failed') {
       dotNavLlm.className = 'subsystem-dot warning';
       navBadgeLlm.title = `Could not load ${modelLoad.model}: ${modelLoad.error || 'unknown error'}`;
@@ -1303,7 +1319,8 @@ document.addEventListener('DOMContentLoaded', () => {
       navBadgeLlm.title = `Model: ${model}`;
     } else if (llm.status === 'ready') {
       dotNavLlm.className = 'subsystem-dot ready';
-      navBadgeLlm.title = `Model ready (${llm.latency_ms || 0} ms): ${model}`;
+      const loadedIn = modelLoad && modelLoad.state === 'ready' && modelLoad.seconds != null ? `, loaded in ${modelLoad.seconds} s` : '';
+      navBadgeLlm.title = `Model ready (${llm.latency_ms || 0} ms${loadedIn}): ${model}`;
     } else if (llm.status === 'mock_mode') {
       dotNavLlm.className = 'subsystem-dot neutral';
       textNavLlm.textContent = 'Mock mode';

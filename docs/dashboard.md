@@ -3,7 +3,7 @@
 `python -m doppel.cli dashboard` serves the dashboard on port 8000.
 
 - **Setup screen**: diagnostics (Docker, model endpoint and model, reasoning support, port conflicts) with one-click fixes, the persona list, and the settings exposed by the control API. Settings that apply only after a restart are marked.
-- **Header**: honeypot state and port, model and sandbox health, and the analysis queue. Switching models or starting the honeypot loads the model at once, and the header shows `Loading <model>` until it is ready. With Ollama, the model is kept loaded while the honeypot runs, and for 30 minutes after a switch.
+- **Header**: honeypot state and port, model and sandbox health, and the analysis queue. Switching models or starting the honeypot loads the model at once, and the header shows the swap as it happens (`Swapping out <old>`, `Loading <new>`) until the model is ready. With Ollama, the model is kept loaded while the honeypot runs, and for 30 minutes after a switch.
 - **Sessions**: search by IP, user or campaign; filter by threat level, attacker type, campaign and date, or show live sessions only.
 - **Session views**: Terminal (commands, routes, timing and model reasoning), ATT&CK, IOCs, Replay (original pacing, speed control, stepping) and Report (streamed while it is written; copy or export as PDF).
 - **Campaigns**: linked sessions and the reasons they were linked.
@@ -37,7 +37,7 @@ Events arrive over `WS /ws/stream`, with `GET /api/stream` (SSE) as a fallback.
 | `threat_analyzed` | ATT&CK tagging done | `threat`, `threat_score` |
 | `web_probe` | HTTP decoy request | `probe_label`, `method`, `path`, `status_code` |
 | `honeytoken_activated` | Canary token presented | `token_type`, `session_id`, `web_session_id`, `remote_ip` |
-| `model_load` | Model load starts or ends | `state`, `model`, `seconds`, `error` |
+| `model_load` | Model loading, unloading or swapping | `state`, `model`, `target`, `seconds`, `error` |
 | `report_progress` | Report being written | `stage`, `delta` |
 | `background_queue` | Analysis queue changes | queued and running jobs |
 | `session_closed` | Session ended | `report_path` |

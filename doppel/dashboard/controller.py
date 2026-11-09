@@ -74,7 +74,7 @@ class HoneypotController:
         # Telemetry DB instance for dashboard queries even when honeypot is stopped
         self.db = TelemetryDB(db_path=self.config.analytics.db_path)
         self.active_report_tasks: Dict[str, asyncio.Task] = {}
-        self.model_load: Dict[str, Any] = {"state": "idle", "model": None, "seconds": None, "error": None}
+        self.model_load: Dict[str, Any] = {"state": "idle", "model": None, "target": None, "seconds": None, "error": None}
         self._model_load_task: Optional[asyncio.Task] = None
         self._model_load_requested_at: float = 0.0
         self.active_assistant_tasks: Dict[str, asyncio.Task] = {}
@@ -600,8 +600,10 @@ class HoneypotController:
     # -- Keeping the model loaded --------------------------------------------
 
     def _set_model_load(self, state: str, model: Optional[str] = None,
-                        seconds: Optional[float] = None, error: Optional[str] = None) -> None:
-        self.model_load = {"state": state, "model": model, "seconds": seconds, "error": error}
+                        seconds: Optional[float] = None, error: Optional[str] = None,
+                        target: Optional[str] = None) -> None:
+        """States: idle, unloading, loading, ready, failed, unloaded. `target` is the model replacing `model`."""
+        self.model_load = {"state": state, "model": model, "target": target, "seconds": seconds, "error": error}
         self._on_session_event("model_load", dict(self.model_load))
 
     def _request_model_load(self, force: bool = False) -> None:
@@ -624,6 +626,7 @@ class HoneypotController:
         self._model_load_task = asyncio.create_task(self._load_and_keep_warm(model))
 
     async def _load_and_keep_warm(self, model: str) -> None:
+        await self._unload_other_models(model)
         started = time.monotonic()
         self._set_model_load("loading", model)
         try:
@@ -641,13 +644,44 @@ class HoneypotController:
             await asyncio.sleep(MODEL_KEEP_WARM_INTERVAL_SECONDS)
             within_grace = time.monotonic() - self._model_load_requested_at < MODEL_KEEP_WARM_AFTER_SWITCH_SECONDS
             if self.status != "RUNNING" and not within_grace:
+                self._set_model_load("unloading", model)
+                await self._unload_model(model)
+                self._set_model_load("unloaded", model)
                 return
             try:
                 await self._load_model(model)
+                if self.model_load["state"] == "failed":
+                    self._set_model_load("ready", model)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug(f"Keep-warm request for {model} failed: {e}")
+                logger.warning(f"Could not keep {model} loaded: {e}")
+                self._set_model_load("failed", model, error=str(e)[:200] or type(e).__name__)
+
+    def _model_server_root(self) -> str:
+        base = self.config.llm.base_url.rstrip("/")
+        return base[:-3] if base.endswith("/v1") else base
+
+    async def _unload_model(self, model: str) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                await client.post(f"{self._model_server_root()}/api/generate", json={"model": model, "keep_alive": 0})
+        except httpx.HTTPError as e:
+            logger.debug(f"Could not unload {model}: {e}")
+
+    async def _unload_other_models(self, model: str) -> None:
+        """Free memory held by previously loaded models before loading `model` (Ollama only)."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{self._model_server_root()}/api/ps")
+            loaded = [m.get("name") for m in resp.json().get("models", [])] if resp.status_code == 200 else []
+        except (httpx.HTTPError, ValueError):
+            return
+        keep = {model, self.config.llm.analysis_model}
+        for old in loaded:
+            if old and old not in keep:
+                self._set_model_load("unloading", old, target=model)
+                await self._unload_model(old)
 
     async def _load_model(self, model: str) -> bool:
         """Load `model`. True when the server supports renewing how long it stays loaded (Ollama)."""

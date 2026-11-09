@@ -3634,3 +3634,17 @@ input[type="number"]::-webkit-outer-spin-button {
 .canary-link:hover {
   text-decoration: underline;
 }
+
+.subsystem-dot.checking {
+  background-color: var(--accent-amber);
+  animation: model-load-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes model-load-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subsystem-dot.checking { animation: none; }
+}

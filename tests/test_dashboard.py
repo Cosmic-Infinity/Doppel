@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import pytest
@@ -87,13 +88,25 @@ def test_dashboard_quick_fix_endpoint(client):
     assert "endpoint" in recheck_data["diagnostics"]["llm"]
 
     # Switching models loads the new one straight away and reports progress
-    from unittest.mock import AsyncMock, patch as mock_patch
+    from unittest.mock import AsyncMock, MagicMock, patch as mock_patch
     orig_model, orig_mock = controller.config.llm.model, controller.config.llm.mock_mode
     try:
         controller.config.llm.mock_mode = False
-        with mock_patch.object(controller, "_load_model", AsyncMock(return_value=False)) as load:
-            res = client.post("/api/quick-fix", json={"action": "set_model", "value": "demo-model:1b"})
-            assert res.json()["result"]["config"]["llm_load"]["model"] in (None, "demo-model:1b")
+        ps = MagicMock(status_code=200)
+        ps.json.return_value = {"models": [{"name": "old-model:1b"}, {"name": "demo-model:1b"}]}
+        states = []
+        real_set = controller._set_model_load
+        with mock_patch("httpx.AsyncClient.get", AsyncMock(return_value=ps)), \
+             mock_patch("httpx.AsyncClient.post", AsyncMock()) as post:
+            with mock_patch.object(controller, "_set_model_load",
+                                   lambda state, model=None, **kw: (states.append((state, model, kw.get("target"))), real_set(state, model, **kw))):
+                asyncio.run(controller._unload_other_models("demo-model:1b"))
+            assert states == [("unloading", "old-model:1b", "demo-model:1b")]
+            assert [c.kwargs["json"] for c in post.await_args_list] == [{"model": "old-model:1b", "keep_alive": 0}]
+
+        with mock_patch.object(controller, "_unload_other_models", AsyncMock()), \
+             mock_patch.object(controller, "_load_model", AsyncMock(return_value=False)) as load:
+            client.post("/api/quick-fix", json={"action": "set_model", "value": "demo-model:1b"})
             for _ in range(100):
                 state = client.get("/api/status").json()["config"]["llm_load"]
                 if state["state"] == "ready":
