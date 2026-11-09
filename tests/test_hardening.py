@@ -7,6 +7,7 @@ import asyncio
 import os
 import sqlite3
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -274,6 +275,41 @@ def test_canary_tripwire_on_decoy_port(sensor_client):
     assert activation["session_id"] == "ssh-session-1"
     labels = _rows(sensor_client.path, "SELECT probe_label FROM web_probes")
     assert ("honeytoken_activated:aws",) in labels
+
+    # The use is stored with both sessions, and an unknown token records nothing
+    sensor_client.client.get("/auth/v1/verify?token=AKIAFAKEFAKEFAKEFAKE")
+    rows = _rows(sensor_client.path, "SELECT source_session_id, web_session_id, token_type FROM honeytoken_activations")
+    assert len(rows) == 1
+    source, web, token_type = rows[0]
+    assert (source, token_type) == ("ssh-session-1", "aws") and web.startswith("http_")
+    assert activation["web_session_id"] == web
+
+    # Reports and campaigns reference the other session
+    from doppel.analytics.reporter import ACTIVATIONS_HEADING, IncidentReporter, with_activations
+    from doppel.ai.llm_client import LLMClient
+    db = sensor_client.db
+
+    async def linked():
+        await db.log_session_start("ssh-session-1", "198.51.100.7", 22, "ubuntu", "ubuntu")
+        await db.correlate_campaigns()
+        return await db.get_session_details("ssh-session-1"), await db.get_session_details(web)
+
+    ssh, web_row = sensor_client.client.portal.call(linked)
+    assert ssh["campaign_id"] == web_row["campaign_id"] and "honeytoken_use" in ssh["campaign_reasons"]
+    assert web_row["honeytoken_activations"][0]["source_session_id"] == "ssh-session-1"
+
+    hits = ssh["honeytoken_activations"]
+    once = with_activations("# Report\n\nBody", "ssh-session-1", hits)
+    assert f"web session `{web}`" in once and once.count(ACTIVATIONS_HEADING) == 1
+    assert with_activations(once, "ssh-session-1", hits) == once
+    assert "SSH session `ssh-session-1`" in with_activations("# Report", web, hits)
+
+    reports = Path(sensor_client.path).parent / "reports"
+    reporter = IncidentReporter(LLMClient(mock_mode=True), db, str(reports))
+    written = reports / "incident_ssh-sess_20261109_120000.md"
+    written.write_text("# Report", encoding="utf-8")
+    sensor_client.client.portal.call(reporter.refresh_activations, "ssh-session-1")
+    assert ACTIVATIONS_HEADING in written.read_text(encoding="utf-8")
 
 
 def test_canary_recognised_after_restart(sensor_client):

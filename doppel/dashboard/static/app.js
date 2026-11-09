@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Model badge: name from /api/status, health from /api/diagnostics
   let currentModel = '';
   let lastLlmDiag = null;
+  let modelLoad = null;
 
   // DOM Elements - Global Warning Banner
   const systemWarningBanner = document.getElementById('system-warning-banner');
@@ -468,6 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       currentDiagnostics = data;
       renderDiagnosticsUI(data);
+      renderModelLoad();
     } catch (e) {
       console.error('Error fetching diagnostics:', e);
     }
@@ -1274,12 +1276,29 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // One badge for the model: its name, with health as the dot colour
+  function renderModelLoad() {
+    renderModelBadge();
+    if (!descLlm || !modelLoad) return;
+    if (modelLoad.state === 'loading') {
+      descLlm.textContent = `Loading ${modelLoad.model} into memory.`;
+    } else if (modelLoad.state === 'failed') {
+      descLlm.textContent = `Could not load ${modelLoad.model}: ${modelLoad.error || 'unknown error'}`;
+    }
+  }
+
   function renderModelBadge() {
     if (!navBadgeLlm || !dotNavLlm || !textNavLlm) return;
     const llm = lastLlmDiag || {};
     const model = llm.configured_model || currentModel || 'Model';
     textNavLlm.textContent = model;
-    if (!lastLlmDiag) {
+    if (modelLoad && modelLoad.state === 'loading') {
+      dotNavLlm.className = 'subsystem-dot checking';
+      textNavLlm.textContent = `Loading ${modelLoad.model}`;
+      navBadgeLlm.title = `Loading ${modelLoad.model} into memory`;
+    } else if (modelLoad && modelLoad.state === 'failed') {
+      dotNavLlm.className = 'subsystem-dot warning';
+      navBadgeLlm.title = `Could not load ${modelLoad.model}: ${modelLoad.error || 'unknown error'}`;
+    } else if (!lastLlmDiag) {
       dotNavLlm.className = 'subsystem-dot checking';
       navBadgeLlm.title = `Model: ${model}`;
     } else if (llm.status === 'ready') {
@@ -1309,7 +1328,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (config) {
       metaPort.textContent = `:${config.honeypot_port}`;
       currentModel = config.llm_model || '';
-      renderModelBadge();
+      if (config.llm_load) modelLoad = config.llm_load;
+      renderModelLoad();
       if (config.prompt) {
         promptConfig = Object.assign({}, promptConfig, config.prompt);
       }
@@ -1416,7 +1436,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function handleStreamMessage(msg) {
-    if (msg.type === 'background_queue') {
+    if (msg.type === 'model_load') {
+      modelLoad = msg.data;
+      renderModelLoad();
+      if (modelLoad.state === 'ready') fetchDiagnostics();
+    } else if (msg.type === 'background_queue') {
       renderBackgroundQueue(msg.data);
     } else if (msg.type === 'status_update') {
       updateStatusUI(msg.status, msg.config);
@@ -1593,6 +1617,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = msg.data;
       console.warn('[CANARY TRIPWIRE ACTIVATION]', data);
       showHoneytokenNotice(data);
+      if (data.matched_honeytoken && [data.session_id, data.web_session_id].includes(activeSessionId)) {
+        fetchSessionDetails(activeSessionId);
+        fetchSessionReport(activeSessionId);
+      }
     } else if (msg.type === 'phase_transition') {
       const data = msg.data;
       if (sessionsCache[data.session_id]) {
@@ -1992,6 +2020,7 @@ document.addEventListener('DOMContentLoaded', () => {
     shared_ip: 'Shared IP',
     shared_credentials: 'Shared credentials',
     command_sequence: 'Same command sequence',
+    honeytoken_use: 'Stolen credential used',
   };
 
   function setCommandCount(n) {
@@ -2792,11 +2821,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Where this session's decoy credentials were used, or where the ones it presented came from
+  function renderCanaryLinks(session) {
+    const strip = document.getElementById('detail-canary');
+    if (!strip) return;
+    const hits = session.honeytoken_activations || [];
+    strip.classList.toggle('hidden', hits.length === 0);
+    strip.replaceChildren(...hits.map(hit => {
+      const leakedHere = hit.source_session_id === session.session_id;
+      const row = document.createElement('div');
+      row.className = 'canary-row';
+      const text = document.createElement('span');
+      const when = formatRelativeTime(hit.timestamp);
+      text.textContent = `Decoy ${hit.token_type} credential used from ${hit.remote_ip}${when ? `, ${when}` : ''}`;
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'canary-link';
+      link.textContent = leakedHere ? 'Open web session' : 'Open source session';
+      link.addEventListener('click', () => selectSession(leakedHere ? hit.web_session_id : hit.source_session_id));
+      row.append(text, link);
+      return row;
+    }));
+  }
+
   function renderSessionDetail(session) {
     if (activeSessionId && session.session_id !== activeSessionId) return;
     currentSessionDetails = session;
     emptyInspector.classList.add('hidden');
     sessionDetail.classList.remove('hidden');
+    renderCanaryLinks(session);
 
     const isLive = Boolean(session.is_active);
     detailLivePill.textContent = isLive ? 'LIVE' : 'ENDED';

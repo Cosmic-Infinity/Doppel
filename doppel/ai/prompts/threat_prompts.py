@@ -76,6 +76,14 @@ def build_incident_report_prompt(
     attacker_type = session_data.get("attacker_type") or "unknown"
     if isinstance(confidence, (int, float)) and confidence:
         attacker_type += f" ({confidence:.0%} confidence)"
+    activations = session_data.get("honeytoken_activations") or []
+    activation_section = ""
+    if activations:
+        used = "; ".join(f"{a.get('token_type')} token used from {a.get('remote_ip')}" for a in activations)
+        activation_section = (
+            f"\nDecoy Credentials Used: {used}. State this in the executive summary as confirmed credential theft. "
+            "A detailed list is appended to the report automatically, so do not add your own list.\n"
+        )
     return f"""Generate an incident report for the following honeypot session:
 Session ID: {session_data.get('session_id')}
 Attacker IP: {session_data.get('remote_ip')} (port {session_data.get('remote_port')})
@@ -88,7 +96,7 @@ Attacker Type: {attacker_type}
 Furthest Kill-Chain Phase: {session_data.get('current_phase') or 'Reconnaissance'}
 Max Threat Score: {session_data.get('max_threat_score')}
 Total Commands: {len(session_data.get('commands', []))}
-{analyst_section}
+{activation_section}{analyst_section}
 Commands & Telemetry:
 {session_data.get('commands_summary') or 'No commands recorded'}
 

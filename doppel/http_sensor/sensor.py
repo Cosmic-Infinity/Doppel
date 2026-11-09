@@ -333,6 +333,13 @@ async def _handle_canary(
         timestamp=ts,
     )
 
+    if activation["matched_honeytoken"]:
+        activation["web_session_id"] = _http_session_id(remote_ip, ts)
+        try:
+            await db.log_honeytoken_activation(activation, activation["web_session_id"])
+        except Exception as exc:
+            logger.error(f"Failed to record honeytoken activation: {exc}")
+
     if event_callback:
         try:
             await event_callback("honeytoken_activated", activation)

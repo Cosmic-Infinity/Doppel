@@ -43,7 +43,7 @@ Real execution returns in milliseconds while the model takes seconds, so every r
 
 ## Honeytokens
 
-Each session gets one set of decoy credentials (an AWS-style key pair, an API key and a webhook token), each with a canary URL on the decoy's `/auth/v1/verify` endpoint. For the Ubuntu persona the set is planted in the container's `.env` and `~/.aws/credentials` at login; generated credential files leak the same set. Presenting a token at the endpoint logs a `honeytoken_activated` probe linked to the original session and raises a dashboard alert. Tokens are stored in the database, so they are still recognised after a restart. Set `deception.canary_base_url` to the decoy's public address so leaked URLs are reachable.
+Each session gets one set of decoy credentials (an AWS-style key pair, an API key and a webhook token), each with a canary URL on the decoy's `/auth/v1/verify` endpoint. For the Ubuntu persona the set is planted in the container's `.env` and `~/.aws/credentials` at login; generated credential files leak the same set. Presenting a token at the endpoint logs a `honeytoken_activated` probe linked to the original session and raises a dashboard alert. The use is added to the incident reports of the session that leaked the token, even ones already written; both sessions link to each other in the dashboard and join the same campaign. Tokens are stored in the database, so they are still recognised after a restart. Set `deception.canary_base_url` to the decoy's public address so leaked URLs are reachable.
 
 ![Honeytoken lifecycle: one token set per session, leaked in credential files, verified at the decoy and linked back to the session](images/honeytokens.png)
 

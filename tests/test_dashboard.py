@@ -1,4 +1,5 @@
 import json
+import time
 import pytest
 from fastapi.testclient import TestClient
 from doppel.dashboard.app import app, controller
@@ -84,6 +85,24 @@ def test_dashboard_quick_fix_endpoint(client):
     assert "llm" in recheck_data["diagnostics"]
     assert "enabled" in recheck_data["diagnostics"]["docker"]
     assert "endpoint" in recheck_data["diagnostics"]["llm"]
+
+    # Switching models loads the new one straight away and reports progress
+    from unittest.mock import AsyncMock, patch as mock_patch
+    orig_model, orig_mock = controller.config.llm.model, controller.config.llm.mock_mode
+    try:
+        controller.config.llm.mock_mode = False
+        with mock_patch.object(controller, "_load_model", AsyncMock(return_value=False)) as load:
+            res = client.post("/api/quick-fix", json={"action": "set_model", "value": "demo-model:1b"})
+            assert res.json()["result"]["config"]["llm_load"]["model"] in (None, "demo-model:1b")
+            for _ in range(100):
+                state = client.get("/api/status").json()["config"]["llm_load"]
+                if state["state"] == "ready":
+                    break
+                time.sleep(0.02)
+            assert state["state"] == "ready" and state["model"] == "demo-model:1b"
+            load.assert_awaited_once_with("demo-model:1b")
+    finally:
+        controller.config.llm.model, controller.config.llm.mock_mode = orig_model, orig_mock
 
     # Test toggle_mock action
     mock_res = client.post("/api/quick-fix", json={"action": "toggle_mock", "value": True})

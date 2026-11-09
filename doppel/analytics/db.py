@@ -129,6 +129,20 @@ class TelemetryDB:
                     created_at TEXT
                 )
             """)
+            # Uses of those credentials, tying the SSH session that leaked a
+            # token to the web session that presented it
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS honeytoken_activations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    token_type TEXT,
+                    source_session_id TEXT,
+                    web_session_id TEXT,
+                    remote_ip TEXT,
+                    user_agent TEXT,
+                    method TEXT
+                )
+            """)
 
             # Schema migration: dynamically add any newly introduced columns to existing database tables
             try:
@@ -445,6 +459,32 @@ class TelemetryDB:
         except Exception as e:
             logger.error(f"Failed to persist honeytoken {token.identifier[:12]}: {e}")
 
+    async def log_honeytoken_activation(self, activation: Dict[str, Any], web_session_id: str):
+        """Record the use of an issued decoy credential."""
+        await self._ensure_initialized()
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT INTO honeytoken_activations
+                (timestamp, token_type, source_session_id, web_session_id, remote_ip, user_agent, method)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (activation.get("timestamp"), activation.get("token_type"), activation.get("session_id"), web_session_id,
+                 activation.get("remote_ip"), (activation.get("user_agent") or "")[:512], activation.get("method")),
+            )
+            await db.commit()
+
+    async def get_honeytoken_activations(self, session_id: str) -> List[Dict[str, Any]]:
+        """Activations of tokens this session leaked, or that this web session presented."""
+        await self._ensure_initialized()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM honeytoken_activations WHERE source_session_id = ? OR web_session_id = ? ORDER BY id ASC",
+                (session_id, session_id),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
     async def get_honeytoken(self, identifier: str) -> Optional[Dict[str, Any]]:
         await self._ensure_initialized()
         async with self._connect() as db:
@@ -468,6 +508,12 @@ class TelemetryDB:
             ) as cur:
                 cmd_rows = await cur.fetchall()
                 session_dict["commands"] = [dict(r) for r in cmd_rows]
+
+            async with db.execute(
+                "SELECT * FROM honeytoken_activations WHERE source_session_id = ? OR web_session_id = ? ORDER BY id ASC",
+                (session_id, session_id),
+            ) as cur:
+                session_dict["honeytoken_activations"] = [dict(r) for r in await cur.fetchall()]
 
             return session_dict
 
@@ -534,7 +580,8 @@ class TelemetryDB:
     LINK_SHARED_IP = "shared_ip"
     LINK_SHARED_CREDENTIALS = "shared_credentials"
     LINK_COMMAND_SEQUENCE = "command_sequence"
-    _LINK_ORDER = (LINK_SHARED_IP, LINK_SHARED_CREDENTIALS, LINK_COMMAND_SEQUENCE)
+    LINK_HONEYTOKEN_USE = "honeytoken_use"
+    _LINK_ORDER = (LINK_SHARED_IP, LINK_SHARED_CREDENTIALS, LINK_COMMAND_SEQUENCE, LINK_HONEYTOKEN_USE)
 
     # A session's opening playbook is its first PLAYBOOK_LENGTH commands, in order.
     # It only counts as a fingerprint when it is distinctive enough: at least
@@ -637,6 +684,14 @@ class TelemetryDB:
             link_by(lambda s: s.get("remote_ip") or None, self.LINK_SHARED_IP)
             link_by(credential_key, self.LINK_SHARED_CREDENTIALS)
             link_by(playbook_key, self.LINK_COMMAND_SEQUENCE)
+
+            # A leaked credential used elsewhere ties the two sessions together,
+            # however different their addresses are
+            async with db.execute("SELECT source_session_id, web_session_id FROM honeytoken_activations") as cur:
+                async for source, web in cur:
+                    if source in order and web in order:
+                        union(source, web)
+                        links.append((source, self.LINK_HONEYTOKEN_USE))
 
             reasons_by_root: Dict[str, set] = {}
             for sid, reason in links:
@@ -741,6 +796,10 @@ class TelemetryDB:
             await db.execute("DELETE FROM commands WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM phase_transitions WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM honeytokens WHERE session_id = ?", (session_id,))
+            await db.execute(
+                "DELETE FROM honeytoken_activations WHERE source_session_id = ? OR web_session_id = ?",
+                (session_id, session_id),
+            )
             cur = await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             await db.commit()
             return cur.rowcount > 0

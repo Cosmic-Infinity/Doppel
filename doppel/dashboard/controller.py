@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any, Optional, Set, Tuple, List, AsyncGenerator
 from datetime import datetime, timezone
 from fastapi import WebSocket
+import httpx
 
 from doppel.config import DoppelConfig, get_config, get_active_preset, get_presets_dict, resolve_persona_key
 from doppel.deception.honeytokens import derive_canary_base_url, get_honeytoken_manager
@@ -18,6 +19,12 @@ from doppel.analytics.reporter import IncidentReporter
 from doppel.core.session_manager import SessionManager
 from doppel.core.ssh_server import start_ssh_server
 from doppel.http_sensor.sensor import create_http_sensor
+
+MODEL_LOAD_TIMEOUT_SECONDS = 300.0
+MODEL_KEEP_ALIVE = "10m"
+MODEL_KEEP_WARM_INTERVAL_SECONDS = 120.0
+# After a switch the model stays loaded this long even if the honeypot isn't started
+MODEL_KEEP_WARM_AFTER_SWITCH_SECONDS = 1800.0
 
 logger = logging.getLogger("doppel.dashboard.controller")
 
@@ -67,6 +74,9 @@ class HoneypotController:
         # Telemetry DB instance for dashboard queries even when honeypot is stopped
         self.db = TelemetryDB(db_path=self.config.analytics.db_path)
         self.active_report_tasks: Dict[str, asyncio.Task] = {}
+        self.model_load: Dict[str, Any] = {"state": "idle", "model": None, "seconds": None, "error": None}
+        self._model_load_task: Optional[asyncio.Task] = None
+        self._model_load_requested_at: float = 0.0
         self.active_assistant_tasks: Dict[str, asyncio.Task] = {}
 
     async def initialize(self):
@@ -217,6 +227,7 @@ class HoneypotController:
                 "start_time": self.start_time,
                 "config": self.get_config_dict(),
             })
+            self._request_model_load()
             return {"status": self.status, "message": "Honeypot started"}
         except Exception as e:
             logger.error(f"Failed to start honeypot daemon: {e}", exc_info=True)
@@ -522,6 +533,8 @@ class HoneypotController:
         self._http_sock = sock
 
         async def _event_cb(event_type: str, data: dict) -> None:
+            if event_type == "honeytoken_activated":
+                await self._record_canary_use(data)
             self._on_session_event(event_type, data)
 
         preset = get_active_preset(self.config) or {}
@@ -581,7 +594,93 @@ class HoneypotController:
             "sandbox_enabled": self.config.sandbox.enabled,
             "sandbox_image": self.config.sandbox.image,
             "auto_reports": self.config.analytics.auto_reports,
+            "llm_load": dict(self.model_load),
         }
+
+    # -- Keeping the model loaded --------------------------------------------
+
+    def _set_model_load(self, state: str, model: Optional[str] = None,
+                        seconds: Optional[float] = None, error: Optional[str] = None) -> None:
+        self.model_load = {"state": state, "model": model, "seconds": seconds, "error": error}
+        self._on_session_event("model_load", dict(self.model_load))
+
+    def _request_model_load(self, force: bool = False) -> None:
+        """Load the configured model now, so the first attacker command doesn't wait for it."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        model = self.config.llm.model
+        running = self._model_load_task is not None and not self._model_load_task.done()
+        if running and not force and not self.config.llm.mock_mode and self.model_load.get("model") == model:
+            return
+        if running:
+            self._model_load_task.cancel()
+        if self.config.llm.mock_mode:
+            if self.model_load["state"] != "idle":
+                self._set_model_load("idle")
+            return
+        self._model_load_requested_at = time.monotonic()
+        self._model_load_task = asyncio.create_task(self._load_and_keep_warm(model))
+
+    async def _load_and_keep_warm(self, model: str) -> None:
+        started = time.monotonic()
+        self._set_model_load("loading", model)
+        try:
+            renewable = await self._load_model(model)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not load model {model}: {e}")
+            self._set_model_load("failed", model, error=str(e)[:200] or type(e).__name__)
+            return
+        self._set_model_load("ready", model, seconds=round(time.monotonic() - started, 1))
+
+        # Terminal requests reset the server's unload timer to its short default
+        while renewable:
+            await asyncio.sleep(MODEL_KEEP_WARM_INTERVAL_SECONDS)
+            within_grace = time.monotonic() - self._model_load_requested_at < MODEL_KEEP_WARM_AFTER_SWITCH_SECONDS
+            if self.status != "RUNNING" and not within_grace:
+                return
+            try:
+                await self._load_model(model)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug(f"Keep-warm request for {model} failed: {e}")
+
+    async def _load_model(self, model: str) -> bool:
+        """Load `model`. True when the server supports renewing how long it stays loaded (Ollama)."""
+        base = self.config.llm.base_url.rstrip("/")
+        root = base[:-3] if base.endswith("/v1") else base
+        async with httpx.AsyncClient(timeout=MODEL_LOAD_TIMEOUT_SECONDS) as client:
+            resp = await client.post(f"{root}/api/generate", json={"model": model, "keep_alive": MODEL_KEEP_ALIVE})
+            if resp.status_code == 200:
+                return True
+            # Other OpenAI-compatible servers load a model on its first request
+            headers = {"Authorization": f"Bearer {self.config.llm.api_key}"} if getattr(self.config.llm, "api_key", "") else {}
+            resp = await client.post(
+                f"{base}/chat/completions",
+                headers=headers,
+                json={"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            )
+        if resp.status_code != 200:
+            try:
+                error = resp.json().get("error")
+                error = error.get("message") if isinstance(error, dict) else error
+            except ValueError:
+                error = None
+            raise RuntimeError(error or f"model server returned {resp.status_code}")
+        return False
+
+    async def _record_canary_use(self, activation: Dict[str, Any]) -> None:
+        source = activation.get("session_id")
+        if not activation.get("matched_honeytoken") or not source or not self.session_manager:
+            return
+        try:
+            await self.session_manager.reporter.refresh_activations(source)
+        except Exception as e:
+            logger.error(f"Failed to add canary use to reports of {source[:8]}: {e}")
 
     def _sync_runtime_components(self):
         """Propagate updated config parameters to active session components without restart."""
@@ -664,6 +763,7 @@ class HoneypotController:
             self.config.llm.base_url = str(updates["llm_base_url"])
         if "llm_model" in updates:
             self.config.llm.model = str(updates["llm_model"])
+            self._request_model_load()
         if "llm_mock_mode" in updates:
             self.config.llm.mock_mode = bool(updates["llm_mock_mode"])
         if "sandbox_enabled" in updates:
@@ -754,6 +854,8 @@ class HoneypotController:
                 setattr(obj, name, parsed)
                 changed.append(key)
         self._sync_runtime_components()
+        if {"llm.model", "llm.base_url", "llm.mock_mode"} & set(changed):
+            self._request_model_load(force=True)
         restart = [k for k in changed if k in SETTINGS_APPLIED_ON_START]
         if restart and self.status == "RUNNING":
             logger.info(f"Settings applied on next start: {', '.join(restart)}")
@@ -996,10 +1098,12 @@ class HoneypotController:
         elif action == "set_model":
             self.config.llm.model = str(value)
             self._sync_runtime_components()
+            self._request_model_load()
             return {"message": f"Model changed to {value}", "config": self.get_config_dict()}
         elif action == "toggle_mock":
             self.config.llm.mock_mode = bool(value)
             self._sync_runtime_components()
+            self._request_model_load()
             return {"message": f"Mock mode set to {value}", "config": self.get_config_dict()}
         elif action == "set_terminal_reasoning":
             # Reasoning for attacker-facing replies; analysis settings are unaffected

@@ -4,7 +4,7 @@ import json
 import logging
 import asyncio
 from pathlib import Path
-from typing import Dict, Any, Optional, AsyncGenerator
+from typing import Dict, Any, List, Optional, AsyncGenerator
 from datetime import datetime, timezone
 from doppel.ai.llm_client import LLMClient
 from doppel.ai.prompts.threat_prompts import (
@@ -16,6 +16,25 @@ from doppel.analytics.db import TelemetryDB
 logger = logging.getLogger("doppel.analytics.reporter")
 
 
+ACTIVATIONS_HEADING = "## Honeytoken Activations"
+
+
+def with_activations(report: str, session_id: str, activations: List[Dict[str, Any]]) -> str:
+    """The report with an up-to-date activations section at its end (replacing any earlier one)."""
+    marker = f"\n{ACTIVATIONS_HEADING}"
+    body = report.split(marker, 1)[0].rstrip() if marker in report else report
+    if not activations:
+        return body
+
+    lines = [ACTIVATIONS_HEADING, "", "Decoy credentials from this investigation were presented to the HTTP decoy:", ""]
+    for a in activations:
+        when = str(a.get("timestamp") or "unknown time").replace("T", " ")[:19]
+        source, web = a.get("source_session_id"), a.get("web_session_id")
+        reference = f"Seen in web session `{web}`." if session_id == source else f"Issued in SSH session `{source}`."
+        lines.append(f"- **{when} UTC**: {a.get('token_type')} token used from `{a.get('remote_ip')}` ({a.get('method')}). {reference}")
+    return f"{body}\n\n" + "\n".join(lines) + "\n"
+
+
 class IncidentReporter:
     """Compiles and exports comprehensive cybersecurity incident reports from honeypot sessions."""
 
@@ -24,6 +43,15 @@ class IncidentReporter:
         self.db = db
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _with_current_activations(self, report: str, session_id: str) -> str:
+        return with_activations(report, session_id, await self.db.get_honeytoken_activations(session_id))
+
+    async def refresh_activations(self, session_id: str) -> None:
+        """Add a credential use to reports already written for the session that leaked it."""
+        activations = await self.db.get_honeytoken_activations(session_id)
+        for path in self.reports_dir.glob(f"incident_{session_id[:8]}_*.md"):
+            path.write_text(with_activations(path.read_text(encoding="utf-8"), session_id, activations), encoding="utf-8")
 
     async def generate_session_report(
         self, session_id: str, custom_instructions: Optional[str] = None
@@ -116,6 +144,7 @@ class IncidentReporter:
             await asyncio.sleep(0.1)
 
             report_content = self._generate_mock_report(session_data, tactics_count)
+            report_content = await self._with_current_activations(report_content, session_id)
             chunks = re.split(r'(\n\n)', report_content)
             for ch in chunks:
                 if not ch:
@@ -205,6 +234,7 @@ class IncidentReporter:
             clean_report = re.sub(r'<think>[\s\S]*?</think>', '', full_content, flags=re.IGNORECASE).strip()
             if not clean_report:
                 clean_report = self._generate_mock_report(session_data, tactics_count)
+            clean_report = await self._with_current_activations(clean_report, session_id)
 
             report_file = self.reports_dir / f"incident_{session_id[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             with open(report_file, "w", encoding="utf-8") as f:
@@ -240,6 +270,7 @@ class IncidentReporter:
         except Exception as e:
             logger.error(f"Failed to generate streaming LLM report: {e}. Generating structured template.")
             fallback_report = self._generate_mock_report(session_data, tactics_count)
+            fallback_report = await self._with_current_activations(fallback_report, session_id)
             report_file = self.reports_dir / f"incident_{session_id[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             with open(report_file, "w", encoding="utf-8") as f:
                 f.write(fallback_report)
