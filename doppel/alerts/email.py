@@ -87,11 +87,13 @@ class EmailAlerter:
                 self._send_sync_email, session_id, remote_ip, threat_score, details
             )
             logger.info(
-                f"Dispatched high-threat email alert for session {session_id[:8]} (IP: {remote_ip}, Score: {threat_score})"
+                f"Email alert sent to {self.receiver_email} via {self.smtp_server}:{self.smtp_port} "
+                f"for session {session_id[:8]} (IP: {remote_ip}, score: {threat_score})"
             )
         except Exception as err:
             logger.error(
-                f"Failed to dispatch email alert for session {session_id[:8]} to {self.receiver_email}: {err}",
+                f"Email alert to {self.receiver_email} via {self.smtp_server}:{self.smtp_port} failed "
+                f"for session {session_id[:8]}: {err}",
                 exc_info=False,
             )
 

@@ -90,8 +90,13 @@ class SessionManager:
                     receiver_email=email_cfg.receiver_email,
                     min_threat_score=email_cfg.min_threat_score,
                 )
+                logger.info(
+                    f"Email alerts on: sending to {email_cfg.receiver_email} via {email_cfg.smtp_server}:{email_cfg.smtp_port} "
+                    f"from threat score {email_cfg.min_threat_score}"
+                )
             else:
                 self.alerter = None
+                logger.info("Email alerts off")
         self.sessions: Dict[str, SessionState] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self.event_callbacks: List[Any] = []
